@@ -1,0 +1,25 @@
+# Local WhatsApp gateway (WAHA). Run Jeli itself with `uvicorn app.main:app --reload`.
+# Reads WAHA_API_KEY, WAHA_WEBHOOK_HMAC_KEY and WAHA_DASHBOARD_PASSWORD from .env.
+services:
+  waha:
+    image: devlikeapro/waha:gows
+    ports:
+      - "3000:3000"
+    environment:
+      WHATSAPP_DEFAULT_ENGINE: GOWS
+      WHATSAPP_START_SESSION: default
+      WAHA_API_KEY: ${WAHA_API_KEY:?set WAHA_API_KEY in .env}
+      WAHA_DASHBOARD_USERNAME: admin
+      WAHA_DASHBOARD_PASSWORD: ${WAHA_DASHBOARD_PASSWORD:?set WAHA_DASHBOARD_PASSWORD in .env}
+      WHATSAPP_SWAGGER_USERNAME: admin
+      WHATSAPP_SWAGGER_PASSWORD: ${WAHA_DASHBOARD_PASSWORD}
+      # Every event is signed and sent to Jeli running on the host.
+      WHATSAPP_HOOK_URL: http://host.docker.internal:8000/waha/webhook
+      WHATSAPP_HOOK_EVENTS: message,session.status
+      WHATSAPP_HOOK_HMAC_KEY: ${WAHA_WEBHOOK_HMAC_KEY:?set WAHA_WEBHOOK_HMAC_KEY in .env}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      # The linked WhatsApp session survives restarts: no need to scan the QR code again.
+      - ./data/waha/sessions:/app/.sessions
+    restart: unless-stopped

@@ -6,9 +6,9 @@
 Built for the **UniPods METI AI Innovation Programme — Cohort 1 Chatbot Hackathon** (18–24 September 2026).
 
 **The problem:** the group has grown large. Messages get missed, the same questions get re-asked, and nobody rewatches call recordings.
-**What Jeli does:** it ingests the group's messages and call recordings, then answers questions like *"What was decided about the bootcamp dates?"* or *"What did I miss this week?"* on WhatsApp, with a grounded answer and its source. If it doesn't know, it says so.
+**What Jeli does:** Jeli is a member of the WhatsApp group. It follows the conversation and the call recordings, and when someone asks — *"@Jeli what was decided about the bootcamp dates?"*, *"/catchup since Monday"* — it answers right there, with its sources. If it doesn't know, it says so.
 
-📄 Reference: [`Docs/hackathon_brief.md`](Docs/hackathon_brief.md) (supersedes the channel choice in [`Docs/hackathon_spec.md`](Docs/hackathon_spec.md))
+📄 Challenge: [`Docs/UniPods Hackathon Guidlines.pdf`](Docs/UniPods%20Hackathon%20Guidlines.pdf) · Technical spec: [`Docs/hackathon_spec.md`](Docs/hackathon_spec.md)
 
 ---
 
@@ -16,42 +16,49 @@ Built for the **UniPods METI AI Innovation Programme — Cohort 1 Chatbot Hackat
 
 | | Feature | State |
 |---|---|---|
-| — | FastAPI app, WhatsApp Cloud API webhook (echo) | ✅ Day 1 |
-| R1 | Chat ingestion (WhatsApp export + live messages) | ⏳ |
+| — | FastAPI app + WhatsApp gateway (WAHA), echo replies | ✅ Day 1 |
+| R1 | Chat ingestion (live group messages + WhatsApp export for the history) | ⏳ |
 | R2 | Call ingestion (transcription) | ⏳ |
 | R3 | Knowledge base (pgvector) | ⏳ |
 | R4 | Grounded answers with sources | ⏳ |
-| R5 | Replies on WhatsApp (DM) | ✅ |
+| R5 | Replies in the group (mention, reply, name, `/command`) and in DM | ✅ |
 | R6 | "I don't know" behaviour | ⏳ |
 | R7–R10 | Duplicate detection, `/catchup`, meeting recaps, daily digest | ⏳ |
 
 ---
 
-## How it works — and the WhatsApp constraint
-
-**The official WhatsApp Cloud API cannot read group conversations** — it only handles direct messages. So Jeli separates *ingesting* from *answering*:
-
-| | Path | Official? |
-|---|---|---|
-| **Ingest** the history | WhatsApp "Export chat" `.txt` → parser | ✅ |
-| **Answer** members | Direct message to Jeli via the Cloud API | ✅ |
-| Live group reading / replies (optional) | Baileys bridge on a dedicated number | ⚠️ unofficial |
-
-The fully official path already covers every requirement. The unofficial bridge is an extra: if it breaks, Jeli keeps working.
+## How it works
 
 ```
-WhatsApp group ─┐                   ┌─ Call recordings → transcription
- (export .txt)  ▼                   ▼
-        Ingestion: normalise → chunk (author, date, source, link)
-                           ▼
-        Knowledge base: Postgres + pgvector (Supabase)
-                           ▼
-        Retrieval → Gemini answer, grounded and cited
-                           ▼
-        Adapter: WhatsApp Cloud API (DM) · Telegram (fallback)
+WhatsApp group ──► WAHA gateway ──► webhook ──┐          ┌── Call recordings → transcription
+ (Jeli's number)   (self-hosted)              ▼          ▼
+                             Ingestion: normalise → chunk (author, date, source)
+                                              ▼
+                             Knowledge base: Postgres + pgvector (Supabase)
+                                              ▼
+                             Retrieval → Gemini answer, grounded and cited
+                                              ▼
+WhatsApp group ◄── WAHA gateway ◄──────── reply
 ```
 
-Adapters are thin and swappable: the core never depends on a chat platform. Each adapter is enabled as soon as its environment variables are set.
+### Why an unofficial gateway
+
+The challenge asks for a bot that follows the group and **responds to people directly**. The official WhatsApp Cloud API cannot do that: it only handles one-to-one business messaging and cannot read or post in groups.
+
+Jeli therefore connects through [**WAHA**](https://waha.devlike.pro) (open source, Apache 2.0, self-hosted), which links a WhatsApp number the way WhatsApp Web does. This is not an official Meta API, so:
+- Jeli uses a **dedicated number** — never a member's personal number. If WhatsApp restricts it, nobody loses their account.
+- Jeli only speaks when addressed; it never messages people unsolicited.
+- The chat adapter is a thin, swappable layer: moving to another gateway or channel changes one module, not the core. A Telegram adapter is included as a fallback.
+
+### When does Jeli answer?
+
+In the group, Jeli reads everything but only replies when a message:
+- **mentions** it (`@Jeli …`),
+- **replies** to one of its messages,
+- **starts with its name** (`Jeli, …`),
+- or is a **command** (`/catchup`, `/search …`).
+
+In a direct message, it answers everything.
 
 ---
 
@@ -59,7 +66,8 @@ Adapters are thin and swappable: the core never depends on a chat platform. Each
 
 ### Prerequisites
 - Python 3.11+
-- A Meta developer account ([developers.facebook.com](https://developers.facebook.com))
+- Docker (to run WAHA locally) — or deploy WAHA directly on Railway (see [Deploy](#deploy-railway))
+- A **dedicated phone number** with WhatsApp installed, for Jeli
 
 ### 1. Install
 ```bash
@@ -70,32 +78,29 @@ python -m venv .venv
 pip install -r requirements-dev.txt
 cp .env.example .env
 ```
+In `.env`, set `WAHA_API_KEY`, `WAHA_WEBHOOK_HMAC_KEY` and `WAHA_DASHBOARD_PASSWORD` to random strings:
+```bash
+python -c "import secrets; print(secrets.token_urlsafe(32))"
+```
 
-### 2. Create the WhatsApp app (Meta)
-1. **My Apps → Create app** → use case *Connect with customers through WhatsApp* (type **Business**).
-2. **WhatsApp → API Setup**: Meta provides a free **test number**. Copy its **Phone number ID** → `WHATSAPP_PHONE_NUMBER_ID`.
-3. Still in API Setup, **add the recipient numbers** allowed to talk to the bot. ⚠️ A test number only works with **up to 5 registered numbers** — register the judges' numbers in advance.
-4. **App settings → Basic → App secret** → `WHATSAPP_APP_SECRET`.
-5. **Permanent access token** (the one shown in API Setup expires after 24 h):
-   [Business settings](https://business.facebook.com/settings) → **Users → System users** → add an admin system user → **Assign assets** (the app and the WhatsApp account) → **Generate token** with `whatsapp_business_messaging` and `whatsapp_business_management`, expiry *Never* → `WHATSAPP_ACCESS_TOKEN`.
-6. Choose any random string → `WHATSAPP_VERIFY_TOKEN`:
-   `python -c "import secrets; print(secrets.token_urlsafe(32))"`
+### 2. Start WAHA and link Jeli's number
+```bash
+docker compose up -d
+```
+1. Open <http://localhost:3000/dashboard> (user `admin`, password `WAHA_DASHBOARD_PASSWORD`). The dashboard asks for the API key: use `WAHA_API_KEY`.
+2. Session `default` shows a QR code. On Jeli's phone: **WhatsApp → Linked devices → Link a device**, and scan it.
+3. The session turns **WORKING**. The link survives restarts (stored in `data/waha/`).
 
-### 3. Run
+### 3. Start Jeli
 ```bash
 uvicorn app.main:app --reload
 ```
-Health check: <http://127.0.0.1:8000/health> shows which channels are enabled.
+<http://127.0.0.1:8000/health> must show `"whatsapp": true`.
 
-Meta can only call a **public HTTPS** URL. To test locally, expose the app with a tunnel, e.g. `cloudflared tunnel --url http://localhost:8000`, and use that URL in the next step.
+Send Jeli's number a direct message, or add it to a group and mention it: it replies.
 
-### 4. Connect the webhook
-**WhatsApp → Configuration → Webhook → Edit**:
-- Callback URL: `https://<your-domain>/whatsapp/webhook`
-- Verify token: the value of `WHATSAPP_VERIFY_TOKEN`
-- **Verify and save**, then subscribe to the **`messages`** field.
-
-Send a WhatsApp message to the test number from a registered phone: Jeli replies.
+### 4. Restrict Jeli to the cohort group
+Jeli logs the id of each group that talks to it (`…@g.us`). Put the cohort group's id in `WHATSAPP_GROUP_IDS` so Jeli ignores any other group its number is added to.
 
 ### Tests
 ```bash
@@ -106,12 +111,37 @@ pytest
 
 ## Deploy (Railway)
 
-1. On [railway.com](https://railway.com): **New project → Deploy from GitHub repo** → select this repository.
-2. Add the environment variables (see below).
-3. **Settings → Networking → Generate domain** — this is the public URL for the Meta webhook.
-4. Set the webhook in Meta as in step 4 above.
+Two services in one Railway project:
 
-The start command comes from the `Procfile`: `uvicorn app.main:app --host 0.0.0.0 --port $PORT`.
+**1. `waha`** — *New → Docker Image* → `devlikeapro/waha:gows`
+- Add a **volume** mounted at `/app/.sessions` (keeps the WhatsApp link across redeploys).
+- Variables:
+  ```
+  WHATSAPP_DEFAULT_ENGINE=GOWS
+  WHATSAPP_START_SESSION=default
+  WAHA_API_KEY=<same as Jeli>
+  WAHA_DASHBOARD_USERNAME=admin
+  WAHA_DASHBOARD_PASSWORD=<strong password>
+  WHATSAPP_SWAGGER_USERNAME=admin
+  WHATSAPP_SWAGGER_PASSWORD=<strong password>
+  WHATSAPP_HOOK_URL=http://jeli.railway.internal:8000/waha/webhook
+  WHATSAPP_HOOK_EVENTS=message,session.status
+  WHATSAPP_HOOK_HMAC_KEY=<same as Jeli's WAHA_WEBHOOK_HMAC_KEY>
+  ```
+- *Settings → Networking → Generate domain* (target port `3000`) to reach the dashboard and scan the QR code.
+
+**2. `jeli`** — *New → GitHub repo* → this repository
+- Variables:
+  ```
+  PORT=8000
+  WAHA_URL=http://waha.railway.internal:3000
+  WAHA_API_KEY=<same as WAHA>
+  WAHA_WEBHOOK_HMAC_KEY=<same as WAHA's WHATSAPP_HOOK_HMAC_KEY>
+  WHATSAPP_GROUP_IDS=<cohort group id>
+  ```
+- The start command comes from the `Procfile`. The two services talk over Railway's private network; Jeli needs no public domain.
+
+Then link the number from the WAHA dashboard, as in step 2 above.
 
 ---
 
@@ -119,11 +149,12 @@ The start command comes from the `Procfile`: `uvicorn app.main:app --host 0.0.0.
 
 | Variable | Required | Description |
 |---|---|---|
-| `WHATSAPP_ACCESS_TOKEN` | WhatsApp | Permanent system-user token |
-| `WHATSAPP_PHONE_NUMBER_ID` | WhatsApp | Phone number ID from API Setup |
-| `WHATSAPP_APP_SECRET` | WhatsApp | Checks the `X-Hub-Signature-256` of every webhook call |
-| `WHATSAPP_VERIFY_TOKEN` | WhatsApp | Shared secret for the webhook verification handshake |
-| `WHATSAPP_API_VERSION` | no | Graph API version, default `v25.0` |
+| `WAHA_URL` | WhatsApp | Where Jeli reaches WAHA, e.g. `http://localhost:3000` |
+| `WAHA_API_KEY` | with `WAHA_URL` | WAHA API key (`X-Api-Key`) |
+| `WAHA_WEBHOOK_HMAC_KEY` | with `WAHA_URL` | Verifies the HMAC-SHA512 signature of every webhook call; forged calls are rejected |
+| `WAHA_SESSION` | no | WAHA session name, default `default` |
+| `WHATSAPP_GROUP_IDS` | recommended | Comma-separated group ids Jeli may listen to; empty = all its groups |
+| `BOT_NAME` | no | A message starting with this name is addressed to Jeli. Default `Jeli` |
 | `GEMINI_API_KEY` | from Day 3 | Google AI Studio key (LLM + embeddings) |
 | `DATABASE_URL` | from Day 2 | Supabase Postgres connection string |
 | `LOG_LEVEL` | no | Default `INFO` |
@@ -133,11 +164,9 @@ The start command comes from the `Procfile`: `uvicorn app.main:app --host 0.0.0.
 
 | Variable | Description |
 |---|---|
-| `TELEGRAM_BOT_TOKEN` | Token from [@BotFather](https://t.me/BotFather). In BotFather, also run `/setprivacy` → **Disable** so the bot can read the group |
-| `PUBLIC_URL` | Public HTTPS URL of the app. Set → webhook mode; empty → polling mode (no public URL needed locally) |
-| `TELEGRAM_WEBHOOK_SECRET` | Required with `PUBLIC_URL`; random string checked on every Telegram webhook call |
-
-In a Telegram group, Jeli answers when mentioned (`@your_bot …`) or replied to; in DM it answers everything.
+| `TELEGRAM_BOT_TOKEN` | Token from [@BotFather](https://t.me/BotFather). Also run `/setprivacy` → **Disable** so the bot can read the group |
+| `PUBLIC_URL` | Public HTTPS URL of the app. Set → webhook mode; empty → polling mode |
+| `TELEGRAM_WEBHOOK_SECRET` | Required with `PUBLIC_URL`; checked on every Telegram webhook call |
 </details>
 
 ---
@@ -149,20 +178,22 @@ app/
 ├── main.py            # FastAPI app, lifecycle, /health
 ├── config.py          # settings from environment / .env
 ├── models.py          # platform-independent message types
-├── adapters/          # whatsapp_cloud.py, telegram.py — thin, swappable
+├── adapters/          # whatsapp_waha.py, telegram.py — thin, swappable
 ├── answer/            # responder.py → RAG, prompts, citations
 ├── ingest/            # chat export parser, transcription, chunking
 ├── kb/                # embeddings, pgvector store, search
 └── jobs/              # daily digest, duplicate check
 tests/
-Docs/                  # hackathon brief, spec and guidelines
+docker-compose.yml     # local WAHA gateway
+Docs/                  # challenge guidelines and technical spec
 ```
 
 ---
 
 ## Privacy
 
-- Jeli only ingests the group it is authorised to use.
-- Every WhatsApp webhook call is checked against the app secret; forged calls are rejected.
-- Chat exports and recordings stay out of the repository (`data/` is git-ignored).
+- Jeli uses its own dedicated number and only listens to the groups listed in `WHATSAPP_GROUP_IDS`.
+- Group members should be told that Jeli is in the group and what it remembers.
+- Every webhook call from WAHA is signed (HMAC-SHA512) and verified; the WAHA API and dashboard are protected by a key and a password.
+- Chat exports, recordings and the WhatsApp session stay out of the repository (`data/` is git-ignored).
 - What is stored, and how to delete it, will be documented here as ingestion lands.

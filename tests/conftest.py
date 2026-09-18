@@ -3,10 +3,10 @@ import pytest
 from app.config import get_settings
 
 CHANNEL_VARS = (
-    "WHATSAPP_ACCESS_TOKEN",
-    "WHATSAPP_PHONE_NUMBER_ID",
-    "WHATSAPP_APP_SECRET",
-    "WHATSAPP_VERIFY_TOKEN",
+    "WAHA_URL",
+    "WAHA_API_KEY",
+    "WAHA_WEBHOOK_HMAC_KEY",
+    "WHATSAPP_GROUP_IDS",
     "TELEGRAM_BOT_TOKEN",
     "PUBLIC_URL",
     "TELEGRAM_WEBHOOK_SECRET",

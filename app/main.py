@@ -3,7 +3,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 
-from app.adapters import telegram, whatsapp_cloud
+from app.adapters import telegram, whatsapp_waha
 from app.config import get_settings
 
 
@@ -15,17 +15,17 @@ async def lifespan(app: FastAPI):
     logging.getLogger("httpx").setLevel(logging.WARNING)
 
     # Each adapter runs when its environment variables are set; WhatsApp is the target channel.
-    app.state.whatsapp = whatsapp_cloud.start(settings)
+    app.state.whatsapp = whatsapp_waha.start(settings)
     app.state.telegram = await telegram.start(settings)
     yield
     if app.state.whatsapp:
-        await whatsapp_cloud.stop(app.state.whatsapp)
+        await whatsapp_waha.stop(app.state.whatsapp)
     if app.state.telegram:
         await telegram.stop(app.state.telegram)
 
 
 app = FastAPI(title="Jeli", description="Group memory bot", lifespan=lifespan)
-app.include_router(whatsapp_cloud.router)
+app.include_router(whatsapp_waha.router)
 app.include_router(telegram.router)
 
 
