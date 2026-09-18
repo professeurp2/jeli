@@ -1,6 +1,6 @@
 import pytest
 
-from app.config import get_settings
+from app.config import Settings, get_settings
 
 CHANNEL_VARS = (
     "WAHA_URL",
@@ -15,9 +15,10 @@ CHANNEL_VARS = (
 
 @pytest.fixture(autouse=True)
 def isolated_settings(monkeypatch):
-    """Override any local .env so the test suite never reaches a real chat platform."""
+    """Ignore the local .env and channel variables, so tests never reach a real chat platform."""
+    monkeypatch.setitem(Settings.model_config, "env_file", None)
     for var in CHANNEL_VARS:
-        monkeypatch.setenv(var, "")
+        monkeypatch.delenv(var, raising=False)
     get_settings.cache_clear()
     yield
     get_settings.cache_clear()

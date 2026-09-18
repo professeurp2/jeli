@@ -16,3 +16,5 @@ class IncomingMessage:
     # True for a direct message, an @mention of the bot, or a reply to one of its messages.
     addressed_to_bot: bool
     link: str | None = None
+    # Stable platform id of the author (rate limits, and later storage); the display name can change.
+    author_id: str | None = None

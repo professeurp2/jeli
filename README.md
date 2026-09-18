@@ -47,7 +47,7 @@ The challenge asks for a bot that follows the group and **responds to people dir
 
 Jeli therefore connects through [**WAHA**](https://waha.devlike.pro) (open source, Apache 2.0, self-hosted), which links a WhatsApp number the way WhatsApp Web does. This is not an official Meta API, so:
 - Jeli uses a **dedicated number** — never a member's personal number. If WhatsApp restricts it, nobody loses their account.
-- Jeli only speaks when addressed; it never messages people unsolicited.
+- Jeli only speaks when addressed; it never messages people unsolicited (see [Keeping Jeli's number safe](#keeping-jelis-number-safe)).
 - The chat adapter is a thin, swappable layer: moving to another gateway or channel changes one module, not the core. A Telegram adapter is included as a fallback.
 
 ### When does Jeli answer?
@@ -59,6 +59,35 @@ In the group, Jeli reads everything but only replies when a message:
 - or is a **command** (`/catchup`, `/search …`).
 
 In a direct message, it answers everything.
+
+---
+
+## Keeping Jeli's number safe
+
+WhatsApp restricts numbers that behave like machines or get reported as spam. Jeli follows [WAHA's guidance](https://waha.devlike.pro/docs/overview/how-to-avoid-blocking/).
+
+**Built into the code** ([`app/adapters/pacing.py`](app/adapters/pacing.py), [`whatsapp_waha.py`](app/adapters/whatsapp_waha.py)):
+
+| Guard | Behaviour |
+|---|---|
+| Never starts a conversation | Jeli only replies to messages addressed to it |
+| Human rhythm | Short pause, *seen*, *typing…* for a time that grows with the answer's length, then the reply |
+| No bursts | At least `WHATSAPP_MIN_SEND_INTERVAL_SECONDS` (3 s, randomised) between two messages sent |
+| Per-member limit | At most `WHATSAPP_USER_LIMIT` answers per member per `WHATSAPP_USER_WINDOW_SECONDS` (5 per 10 min) |
+| Hourly ceiling | At most `WHATSAPP_HOURLY_LIMIT` answers per hour in total (120): a bot-to-bot loop stops there |
+| No backlog bursts | Messages older than 10 minutes (delivered after a reconnection) are not answered |
+| Pauses on trouble | Silent while the WAHA session is not `WORKING` |
+| Ordinary device | Appears as *Google Chrome (Windows)* in Linked devices; no link previews |
+| Restriction alerts | WhatsApp errors 463/475 are logged with the right reaction: wait, do not re-link |
+
+**Operating rules for the team:**
+1. **Warm the number up before linking it** (24–48 h): profile photo, name *Jeli*, an *About* line saying it is the cohort's AI assistant. Team members save the number as a contact and exchange a few normal messages with it from the phone.
+2. **Get Jeli introduced.** An organiser adds the number to the group and announces it, asking members to save the contact. Numbers that are saved and talked to are not flagged as spam; being reported by a few people is what gets a number banned.
+3. **Link once, by QR code**, on one WAHA instance, on a stable host. Do not re-scan repeatedly or run two instances of the same session.
+4. **Keep the phone alive**: charged and online at least every few days, or WhatsApp logs linked devices out (about 14 days).
+5. **Use the number only for Jeli**: no manual mass messages, no joining other groups, no `@all` mentions.
+6. **If WhatsApp restricts the number** (errors 463/475 in the logs): do nothing, it lifts on its own. Restarting or re-linking makes it worse.
+7. **Keep a plan B**: a second SIM warmed up the same way, and the Telegram adapter.
 
 ---
 
@@ -119,6 +148,11 @@ Two services in one Railway project:
   ```
   WHATSAPP_DEFAULT_ENGINE=GOWS
   WHATSAPP_START_SESSION=default
+  WAHA_CLIENT_BROWSER_NAME=Chrome
+  WAHA_CLIENT_DEVICE_NAME=Windows
+  WAHA_SESSION_CONFIG_IGNORE_STATUS=true
+  WAHA_SESSION_CONFIG_IGNORE_CHANNELS=true
+  WAHA_SESSION_CONFIG_IGNORE_BROADCAST=true
   WAHA_API_KEY=<same as Jeli>
   WAHA_DASHBOARD_USERNAME=admin
   WAHA_DASHBOARD_PASSWORD=<strong password>
@@ -155,6 +189,9 @@ Then link the number from the WAHA dashboard, as in step 2 above.
 | `WAHA_SESSION` | no | WAHA session name, default `default` |
 | `WHATSAPP_GROUP_IDS` | recommended | Comma-separated group ids Jeli may listen to; empty = all its groups |
 | `BOT_NAME` | no | A message starting with this name is addressed to Jeli. Default `Jeli` |
+| `WHATSAPP_USER_LIMIT` / `WHATSAPP_USER_WINDOW_SECONDS` | no | Answers per member per window. Default 5 per 600 s |
+| `WHATSAPP_HOURLY_LIMIT` | no | Answers per hour, all chats together. Default 120 |
+| `WHATSAPP_MIN_SEND_INTERVAL_SECONDS` | no | Minimum gap between two messages sent. Default 3 |
 | `GEMINI_API_KEY` | from Day 3 | Google AI Studio key (LLM + embeddings) |
 | `DATABASE_URL` | from Day 2 | Supabase Postgres connection string |
 | `LOG_LEVEL` | no | Default `INFO` |

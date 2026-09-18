@@ -3,13 +3,19 @@
 WAHA keeps a WhatsApp session open for Jeli's dedicated number and forwards every message it
 sees — in the group and in direct messages — to our webhook. Replies go back through WAHA's API.
 The official Cloud API cannot read groups, which the challenge requires.
+
+Because the channel is unofficial, the number can be restricted if it behaves like a machine.
+Jeli therefore never starts a conversation, only answers when addressed, and paces itself
+(see app/adapters/pacing.py).
 """
 
+import asyncio
 import hashlib
 import hmac
 import json
 import logging
 import re
+import time
 from collections import OrderedDict
 from datetime import datetime, timezone
 from typing import Annotated, Any
@@ -17,6 +23,7 @@ from typing import Annotated, Any
 import httpx
 from fastapi import APIRouter, BackgroundTasks, Header, HTTPException, Request
 
+from app.adapters.pacing import SendSpacer, SlidingWindowLimiter, reading_delay, typing_duration
 from app.answer.responder import respond
 from app.config import Settings
 from app.models import IncomingMessage
@@ -25,6 +32,10 @@ log = logging.getLogger(__name__)
 
 WEBHOOK_PATH = "/waha/webhook"
 SEEN_IDS_KEPT = 1000
+# After a reconnection WAHA may deliver a backlog: answering old mentions in a burst looks like a bot.
+MAX_REPLY_AGE_SECONDS = 600
+# WhatsApp errors meaning "too many new contacts": they lift on their own, re-linking makes it worse.
+RESTRICTION_ERRORS = ("463", "475")
 # Status updates and channels are not conversations.
 IGNORED_CHAT_SUFFIXES = ("@broadcast", "@newsletter")
 TEXT_MENTION = re.compile(r"@(\d{5,})")
@@ -106,6 +117,7 @@ def parse_message(event: dict, bot_name: str) -> IncomingMessage | None:
         chat_id=chat_id,
         message_id=payload["id"],
         author=_author(payload),
+        author_id=payload.get("participant") or chat_id,
         text=" ".join(text.split()),
         sent_at=datetime.fromtimestamp(int(float(payload["timestamp"])), tz=timezone.utc),
         is_private=is_private,
@@ -126,6 +138,11 @@ class Waha:
         )
         # WAHA retries webhooks that fail: remember recent message ids to answer only once.
         self._seen: OrderedDict[str, None] = OrderedDict()
+        self.user_limiter = SlidingWindowLimiter(settings.whatsapp_user_limit, settings.whatsapp_user_window_seconds)
+        self.hourly_limiter = SlidingWindowLimiter(settings.whatsapp_hourly_limit, 3600)
+        self.spacer = SendSpacer(settings.whatsapp_min_send_interval_seconds)
+        # Set from WAHA's session.status events: Jeli stays silent while the session is not WORKING.
+        self.paused = False
 
     def accepts(self, message: IncomingMessage) -> bool:
         """Direct messages are always accepted; groups only if listed in WHATSAPP_GROUP_IDS (when set)."""
@@ -142,10 +159,32 @@ class Waha:
             self._seen.popitem(last=False)
         return True
 
+    def may_reply(self, message: IncomingMessage) -> bool:
+        """Anti-ban guards: never answer while the session is unhealthy, late, or too often."""
+        if self.paused:
+            log.warning("Session is not WORKING: not answering message %s", message.message_id)
+            return False
+        age = (datetime.now(timezone.utc) - message.sent_at).total_seconds()
+        if age > MAX_REPLY_AGE_SECONDS:
+            log.info("Not answering message %s: %d s old (backlog after a reconnection)", message.message_id, age)
+            return False
+        if not self.user_limiter.allow(message.author_id or message.chat_id):
+            log.warning("Member rate limit reached: not answering message %s", message.message_id)
+            return False
+        if not self.hourly_limiter.allow("all"):
+            log.error("Hourly answer limit reached: Jeli stays silent until the window frees up")
+            return False
+        return True
+
     async def _post(self, path: str, payload: dict) -> None:
         response = await self._http.post(path, json={"session": self.session, **payload})
         if response.is_error:
             log.error("WAHA %s failed with %s: %s", path, response.status_code, response.text)
+            if any(code in response.text for code in RESTRICTION_ERRORS):
+                log.error(
+                    "WhatsApp is temporarily restricting this number. Do NOT restart, log out or re-link "
+                    "the session: the restriction lifts on its own."
+                )
         response.raise_for_status()
 
     async def _post_quietly(self, path: str, payload: dict) -> None:
@@ -162,18 +201,28 @@ class Waha:
         await self._post("/api/sendText", payload)
 
     async def handle(self, message: IncomingMessage) -> None:
+        """Answer like a person would: read, type for a while, then reply (WAHA's recommended sequence)."""
+        if not message.addressed_to_bot or not self.may_reply(message):
+            return
+        chat = {"chatId": message.chat_id}
         try:
-            if message.addressed_to_bot:
-                await self._post_quietly("/api/sendSeen", {"chatId": message.chat_id, "messageIds": [message.message_id]})
-                await self._post_quietly("/api/startTyping", {"chatId": message.chat_id})
-            reply = await respond(message)
+            await asyncio.sleep(reading_delay())
+            await self._post_quietly("/api/sendSeen", {**chat, "messageIds": [message.message_id]})
+            await self._post_quietly("/api/startTyping", chat)
+            try:
+                typing_since = time.monotonic()
+                reply = await respond(message)
+                if reply:
+                    # Answer generation counts as typing time: only wait for what is left.
+                    await asyncio.sleep(max(0.0, typing_duration(reply) - (time.monotonic() - typing_since)))
+                    # Still "typing…" while other answers go out first.
+                    await self.spacer.wait_turn()
+            finally:
+                await self._post_quietly("/api/stopTyping", chat)
             if reply:
                 await self.send_text(message.chat_id, reply, reply_to=message.message_id)
         except Exception:
             log.exception("Failed to handle WhatsApp message %s", message.message_id)
-        finally:
-            if message.addressed_to_bot:
-                await self._post_quietly("/api/stopTyping", {"chatId": message.chat_id})
 
     async def aclose(self) -> None:
         await self._http.aclose()
@@ -212,8 +261,10 @@ async def receive_webhook(
     if event.get("session") != adapter.session:
         return {"ok": True}
     if event.get("event") == "session.status":
+        status = (event.get("payload") or {}).get("status")
+        adapter.paused = status != "WORKING"
         # FAILED means the number must be linked again (scan the QR code in the WAHA dashboard).
-        log.warning("WhatsApp session %s is now %s", adapter.session, (event.get("payload") or {}).get("status"))
+        log.log(logging.WARNING if adapter.paused else logging.INFO, "WhatsApp session %s is now %s", adapter.session, status)
         return {"ok": True}
 
     message = parse_message(event, adapter.bot_name)

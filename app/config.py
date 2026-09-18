@@ -18,6 +18,11 @@ class Settings(BaseSettings):
     whatsapp_group_ids: str = ""
     # A group message starting with this name is addressed to the bot, like a mention.
     bot_name: str = "Jeli"
+    # Anti-ban limits: WhatsApp restricts accounts that behave like machines.
+    whatsapp_user_limit: int = 5  # answers per member…
+    whatsapp_user_window_seconds: int = 600  # …within this window
+    whatsapp_hourly_limit: int = 120  # answers per hour, all chats together: a runaway loop stops here
+    whatsapp_min_send_interval_seconds: float = 3.0  # minimum gap between two messages sent
 
     # Telegram — fallback channel.
     telegram_bot_token: str = ""

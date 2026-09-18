@@ -40,6 +40,7 @@ def to_incoming(message: Message, bot_id: int, bot_username: str) -> IncomingMes
         chat_id=str(message.chat.id),
         message_id=str(message.message_id),
         author=message.from_user.full_name if message.from_user else "Someone",
+        author_id=str(message.from_user.id) if message.from_user else None,
         text=re.sub(re.escape(mention), "", text, flags=re.IGNORECASE).strip(),
         sent_at=message.date,
         is_private=is_private,

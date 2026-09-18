@@ -8,6 +8,13 @@ services:
     environment:
       WHATSAPP_DEFAULT_ENGINE: GOWS
       WHATSAPP_START_SESSION: default
+      # Shows as an ordinary "Google Chrome (Windows)" in WhatsApp's Linked devices.
+      WAHA_CLIENT_BROWSER_NAME: Chrome
+      WAHA_CLIENT_DEVICE_NAME: Windows
+      # Jeli has no use for statuses, channels or broadcast lists.
+      WAHA_SESSION_CONFIG_IGNORE_STATUS: "true"
+      WAHA_SESSION_CONFIG_IGNORE_CHANNELS: "true"
+      WAHA_SESSION_CONFIG_IGNORE_BROADCAST: "true"
       WAHA_API_KEY: ${WAHA_API_KEY:?set WAHA_API_KEY in .env}
       WAHA_DASHBOARD_USERNAME: admin
       WAHA_DASHBOARD_PASSWORD: ${WAHA_DASHBOARD_PASSWORD:?set WAHA_DASHBOARD_PASSWORD in .env}
