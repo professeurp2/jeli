@@ -140,43 +140,67 @@ pytest
 
 ## Deploy (Railway)
 
-Two services in one Railway project:
+Two services in one Railway project, talking over Railway's private network. Only WAHA gets a public domain (for its dashboard); every webhook call it makes to Jeli is signed.
 
-**1. `waha`** — *New → Docker Image* → `devlikeapro/waha:gows`
-- Add a **volume** mounted at `/app/.sessions` (keeps the WhatsApp link across redeploys).
-- Variables:
-  ```
-  WHATSAPP_DEFAULT_ENGINE=GOWS
-  WHATSAPP_START_SESSION=default
-  WAHA_CLIENT_BROWSER_NAME=Chrome
-  WAHA_CLIENT_DEVICE_NAME=Windows
-  WAHA_SESSION_CONFIG_IGNORE_STATUS=true
-  WAHA_SESSION_CONFIG_IGNORE_CHANNELS=true
-  WAHA_SESSION_CONFIG_IGNORE_BROADCAST=true
-  WAHA_API_KEY=<same as Jeli>
-  WAHA_DASHBOARD_USERNAME=admin
-  WAHA_DASHBOARD_PASSWORD=<strong password>
-  WHATSAPP_SWAGGER_USERNAME=admin
-  WHATSAPP_SWAGGER_PASSWORD=<strong password>
-  WHATSAPP_HOOK_URL=http://jeli.railway.internal:8000/waha/webhook
-  WHATSAPP_HOOK_EVENTS=message,session.status
-  WHATSAPP_HOOK_HMAC_KEY=<same as Jeli's WAHA_WEBHOOK_HMAC_KEY>
-  ```
-- *Settings → Networking → Generate domain* (target port `3000`) to reach the dashboard and scan the QR code.
+```
+Railway project "jeli"  (region europe-west4, 1 replica each)
+├── waha  image devlikeapro/waha:gows · volume /app/.sessions · public domain → port 3000
+│         └── webhook ──► http://jeli.railway.internal:8000/waha/webhook
+└── jeli  GitHub repo (railway.json: start command, /health check, restart policy)
+          └── API ──────► http://waha.railway.internal:3000
+```
 
-**2. `jeli`** — *New → GitHub repo* → this repository
-- Variables:
-  ```
-  PORT=8000
-  WAHA_URL=http://waha.railway.internal:3000
-  WAHA_API_KEY=<same as WAHA>
-  WAHA_WEBHOOK_HMAC_KEY=<same as WAHA's WHATSAPP_HOOK_HMAC_KEY>
-  WHATSAPP_GROUP_IDS=<cohort group id>
-  ```
-- Start command, `/health` check and restart policy come from [`railway.json`](railway.json). The two services talk over Railway's private network; Jeli needs no public domain.
-- Run both services in the region closest to the group (`eu-west` for West Africa) with **exactly one replica for WAHA**: two instances of the same WhatsApp session would get the number flagged.
+With the [Railway CLI](https://docs.railway.com/guides/cli) (`npm i -g @railway/cli`, then `railway login`):
 
-Then link the number from the WAHA dashboard, as in step 2 above.
+**1. Project and `waha` service**
+```bash
+railway init --name jeli
+railway add --service waha --image devlikeapro/waha:gows \
+  --variables "PORT=3000" \
+  --variables "WHATSAPP_DEFAULT_ENGINE=GOWS" \
+  --variables "WHATSAPP_START_SESSION=default" \
+  --variables "WAHA_PRINT_QR=false" \
+  --variables "WAHA_CLIENT_BROWSER_NAME=Chrome" \
+  --variables "WAHA_CLIENT_DEVICE_NAME=Windows" \
+  --variables "WAHA_SESSION_CONFIG_IGNORE_STATUS=true" \
+  --variables "WAHA_SESSION_CONFIG_IGNORE_CHANNELS=true" \
+  --variables "WAHA_SESSION_CONFIG_IGNORE_BROADCAST=true" \
+  --variables "WAHA_BASE_URL=http://\${{RAILWAY_PRIVATE_DOMAIN}}:3000" \
+  --variables "WHATSAPP_HOOK_EVENTS=message,session.status" \
+  --variables "WAHA_DASHBOARD_USERNAME=admin" \
+  --variables "WHATSAPP_SWAGGER_USERNAME=admin"
+# Secrets: generate each with python -c "import secrets; print(secrets.token_urlsafe(32))"
+railway variable set WAHA_API_KEY WHATSAPP_HOOK_HMAC_KEY WAHA_DASHBOARD_PASSWORD WHATSAPP_SWAGGER_PASSWORD ...
+```
+- `PORT=3000` matters: Railway injects its own `PORT`, which WAHA follows.
+
+**2. `jeli` service**, with *reference variables* so secrets are defined once, in `waha`:
+```bash
+railway add --service jeli --repo professeurp2/jeli --branch main \
+  --variables "PORT=8000" \
+  --variables "WAHA_URL=http://\${{waha.RAILWAY_PRIVATE_DOMAIN}}:\${{waha.PORT}}" \
+  --variables "WAHA_API_KEY=\${{waha.WAHA_API_KEY}}" \
+  --variables "WAHA_WEBHOOK_HMAC_KEY=\${{waha.WHATSAPP_HOOK_HMAC_KEY}}"
+railway variable set "WHATSAPP_HOOK_URL=http://\${{jeli.RAILWAY_PRIVATE_DOMAIN}}:\${{jeli.PORT}}/waha/webhook" --service waha
+```
+Later: `WHATSAPP_GROUP_IDS=<cohort group id>` on `jeli`, `GEMINI_API_KEY`, `DATABASE_URL`.
+
+**3. Region, volume, domain**
+```bash
+railway scale --service waha europe-west4-drams3a=1 sfo=0   # use the region ids shown by `railway scale`
+railway scale --service jeli europe-west4-drams3a=1 sfo=0
+railway volume --service waha add --mount-path /app/.sessions
+railway domain --service waha --port 3000
+```
+Run **exactly one replica of WAHA**: two instances of the same WhatsApp session would get the number flagged. Move the region *before* adding the volume (a volume lives in one region).
+
+**4. Check**
+- `railway logs --service jeli` shows `WhatsApp adapter enabled through WAHA` then `WhatsApp session default is …`: Jeli reached WAHA with the right key.
+- WAHA's `session.status` events appear in Jeli's logs with `POST /waha/webhook 200`: WAHA reached Jeli with a valid signature.
+
+**5. Link the number** (only after the warm-up, see [Keeping Jeli's number safe](#keeping-jelis-number-safe)): open `https://<waha-domain>/dashboard` (user `admin`, password `WAHA_DASHBOARD_PASSWORD`, API key `WAHA_API_KEY`), restart the `default` session if it shows `FAILED` (an unscanned QR code expires), and scan the QR code from Jeli's phone.
+
+**Deploying new code:** if the repo is linked without Railway's GitHub app, pushes do not trigger a deploy: run `railway redeploy --service jeli --from-source`.
 
 ---
 
