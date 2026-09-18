@@ -18,6 +18,7 @@ import re
 import time
 from collections import OrderedDict
 from datetime import datetime, timezone
+from collections.abc import Awaitable, Callable
 from typing import Annotated, Any
 
 import httpx
@@ -118,7 +119,7 @@ def parse_message(event: dict, bot_name: str) -> IncomingMessage | None:
         message_id=payload["id"],
         author=_author(payload),
         author_id=payload.get("participant") or chat_id,
-        text=" ".join(text.split()),
+        text="\n".join(" ".join(line.split()) for line in text.splitlines()).strip(),
         sent_at=datetime.fromtimestamp(int(float(payload["timestamp"])), tz=timezone.utc),
         is_private=is_private,
         addressed_to_bot=is_private or mentioned or replied_to_bot or bool(named) or command,
@@ -126,8 +127,10 @@ def parse_message(event: dict, bot_name: str) -> IncomingMessage | None:
 
 
 class Waha:
-    def __init__(self, settings: Settings):
+    def __init__(self, settings: Settings, ingest: Callable[[IncomingMessage], Awaitable[None]] | None = None):
         self.session = settings.waha_session
+        # Called with every accepted message, to remember the group's conversation.
+        self.ingest = ingest
         self.hmac_key = settings.waha_webhook_hmac_key
         self.bot_name = settings.bot_name
         self.groups = settings.whatsapp_groups
@@ -244,7 +247,7 @@ class Waha:
         await self._http.aclose()
 
 
-def start(settings: Settings) -> Waha | None:
+def start(settings: Settings, ingest: Callable[[IncomingMessage], Awaitable[None]] | None = None) -> Waha | None:
     if not settings.waha_url:
         log.info("WAHA_URL is not set: WhatsApp adapter disabled")
         return None
@@ -256,7 +259,7 @@ def start(settings: Settings) -> Waha | None:
     if missing:
         raise RuntimeError(f"WAHA_URL is set but {', '.join(missing)} is missing")
     log.info("WhatsApp adapter enabled through WAHA at %s (session %s)", settings.waha_url, settings.waha_session)
-    return Waha(settings)
+    return Waha(settings, ingest)
 
 
 async def stop(adapter: Waha) -> None:
@@ -283,5 +286,7 @@ async def receive_webhook(
     message = parse_message(event, adapter.bot_name)
     # Acknowledge at once and handle in the background, so WAHA never times out and retries.
     if message and adapter.accepts(message) and adapter.first_delivery(message.message_id):
+        if adapter.ingest:
+            background_tasks.add_task(adapter.ingest, message)
         background_tasks.add_task(adapter.handle, message)
     return {"ok": True}

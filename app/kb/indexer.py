@@ -1,0 +1,31 @@
+"""Turn stored messages into embedded chunks."""
+
+import logging
+from datetime import datetime, timedelta, timezone
+
+from app.ingest.chunker import chunk_messages
+from app.kb.embeddings import BATCH_SIZE, MODEL, Embedder
+from app.kb.store import Store
+
+log = logging.getLogger(__name__)
+
+
+async def index_pending(store: Store, embedder: Embedder, settle: timedelta | None = None) -> int:
+    """Chunk and embed every message not indexed yet. Returns the number of chunks created.
+
+    With `settle`, a chat's last chunk is left pending while its conversation may still be
+    going on (last message more recent than `settle`), so it is not cut in the middle.
+    """
+    created = 0
+    for chat_id in await store.pending_chats():
+        chunks = chunk_messages(await store.pending_messages(chat_id))
+        if settle and chunks and chunks[-1].ended_at > datetime.now(timezone.utc) - settle:
+            chunks = chunks[:-1]
+        for start in range(0, len(chunks), BATCH_SIZE):
+            batch = chunks[start : start + BATCH_SIZE]
+            vectors = await embedder.embed_documents([chunk.content for chunk in batch])
+            for chunk, vector in zip(batch, vectors):
+                await store.save_chunk(chunk, vector, MODEL)
+            created += len(batch)
+            log.info("Indexed %d chunks of chat %s", created, chat_id)
+    return created

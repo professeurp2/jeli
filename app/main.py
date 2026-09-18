@@ -1,3 +1,5 @@
+import asyncio
+import contextlib
 import logging
 from contextlib import asynccontextmanager
 
@@ -5,6 +7,10 @@ from fastapi import FastAPI
 
 from app.adapters import telegram, whatsapp_waha
 from app.config import get_settings
+from app.ingest.live import LiveIngestor
+from app.jobs.indexing import index_periodically
+from app.kb.embeddings import Embedder
+from app.kb.store import Store
 
 
 @asynccontextmanager
@@ -14,8 +20,20 @@ async def lifespan(app: FastAPI):
     # httpx logs full request URLs at INFO level, and Telegram API URLs contain the bot token.
     logging.getLogger("httpx").setLevel(logging.WARNING)
 
+    # Knowledge base: messages are stored as they arrive, and indexed in the background.
+    store = Store(settings.database_url) if settings.database_url else None
+    if store:
+        await store.open()
+    embedder = Embedder(settings.gemini_api_key) if settings.gemini_api_key else None
+    indexing = (
+        asyncio.create_task(index_periodically(store, embedder, settings.index_interval_seconds))
+        if store and embedder
+        else None
+    )
+    app.state.store, app.state.embedder, app.state.indexing = store, embedder, indexing
+
     # Each adapter runs when its environment variables are set; WhatsApp is the target channel.
-    app.state.whatsapp = whatsapp_waha.start(settings)
+    app.state.whatsapp = whatsapp_waha.start(settings, ingest=LiveIngestor(store).ingest if store else None)
     if app.state.whatsapp:
         await app.state.whatsapp.sync_status()
     app.state.telegram = await telegram.start(settings)
@@ -24,6 +42,12 @@ async def lifespan(app: FastAPI):
         await whatsapp_waha.stop(app.state.whatsapp)
     if app.state.telegram:
         await telegram.stop(app.state.telegram)
+    if indexing:
+        indexing.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await indexing
+    if store:
+        await store.close()
 
 
 app = FastAPI(title="Jeli", description="Group memory bot", lifespan=lifespan)
@@ -33,8 +57,13 @@ app.include_router(telegram.router)
 
 @app.get("/health")
 async def health() -> dict:
+    def enabled(name: str) -> bool:
+        return getattr(app.state, name, None) is not None
+
     return {
         "status": "ok",
-        "whatsapp": getattr(app.state, "whatsapp", None) is not None,
-        "telegram": getattr(app.state, "telegram", None) is not None,
+        "whatsapp": enabled("whatsapp"),
+        "telegram": enabled("telegram"),
+        "database": enabled("store"),
+        "indexing": enabled("indexing"),
     }

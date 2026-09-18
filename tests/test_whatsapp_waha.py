@@ -195,6 +195,22 @@ def test_webhook_stays_silent_on_ordinary_group_chatter(waha_env, calls):
     assert calls == []
 
 
+def test_group_chatter_is_remembered_once(waha_env, calls):
+    remembered = []
+
+    async def ingest(message):
+        remembered.append(message)
+
+    event = message_event("The pitch deck is due Friday.\nSlides in English please.")
+    with TestClient(app) as client:
+        app.state.whatsapp.ingest = ingest
+        post_event(client, event)
+        post_event(client, event)  # retried delivery
+    [message] = remembered
+    assert message.text == "The pitch deck is due Friday.\nSlides in English please."
+    assert calls == []
+
+
 def test_webhook_ignores_groups_not_allowed(waha_env, calls):
     with TestClient(app) as client:
         response = post_event(client, message_event(f"@{BOT_PHONE} hi", chat_id=OTHER_GROUP))

@@ -18,3 +18,16 @@ class IncomingMessage:
     link: str | None = None
     # Stable platform id of the author (rate limits, and later storage); the display name can change.
     author_id: str | None = None
+
+
+@dataclass(frozen=True)
+class StoredMessage:
+    """A message as kept in the knowledge base, whatever its origin."""
+
+    id: str
+    chat_id: str
+    source: str  # "whatsapp_export", "whatsapp_live" or "telegram"
+    author: str
+    sent_at: datetime
+    text: str
+    author_id: str | None = None

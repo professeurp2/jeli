@@ -31,7 +31,12 @@ class Settings(BaseSettings):
     telegram_webhook_secret: str = ""
 
     gemini_api_key: str = ""
+    # Supabase Postgres, through the pooler: postgresql://jeli_app.<ref>:<password>@<pooler-host>:5432/postgres
     database_url: str = ""
+    # WhatsApp exports carry local times without a timezone: the exporting phone's zone.
+    export_timezone: str = "UTC"
+    # How often live messages are chunked and embedded.
+    index_interval_seconds: int = 300
     log_level: str = "INFO"
 
     @property

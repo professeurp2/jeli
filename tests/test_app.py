@@ -8,7 +8,13 @@ def test_health_without_any_channel_configured():
     with TestClient(app) as client:
         response = client.get("/health")
     assert response.status_code == 200
-    assert response.json() == {"status": "ok", "whatsapp": False, "telegram": False}
+    assert response.json() == {
+        "status": "ok",
+        "whatsapp": False,
+        "telegram": False,
+        "database": False,
+        "indexing": False,
+    }
 
 
 def test_telegram_webhook_rejects_requests_without_the_secret():

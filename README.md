@@ -16,10 +16,10 @@ Built for the **UniPods METI AI Innovation Programme — Cohort 1 Chatbot Hackat
 
 | | Feature | State |
 |---|---|---|
-| — | FastAPI app + WhatsApp gateway (WAHA), echo replies | ✅ Day 1 |
-| R1 | Chat ingestion (live group messages + WhatsApp export for the history) | ⏳ |
+| — | FastAPI app + WhatsApp gateway (WAHA), echo replies, CI/CD | ✅ Day 1 |
+| R1 | Chat ingestion: WhatsApp export import + live group messages | ✅ Day 2 |
 | R2 | Call ingestion (transcription) | ⏳ |
-| R3 | Knowledge base (pgvector) | ⏳ |
+| R3 | Knowledge base: conversation chunks, Gemini embeddings, hybrid search (pgvector + keywords) | ✅ Day 2 |
 | R4 | Grounded answers with sources | ⏳ |
 | R5 | Replies in the group (mention, reply, name, `/command`) and in DM | ✅ |
 | R6 | "I don't know" behaviour | ⏳ |
@@ -131,10 +131,40 @@ Send Jeli's number a direct message, or add it to a group and mention it: it rep
 ### 4. Restrict Jeli to the cohort group
 Jeli logs the id of each group that talks to it (`…@g.us`). Put the cohort group's id in `WHATSAPP_GROUP_IDS` so Jeli ignores any other group its number is added to.
 
+### 5. Knowledge base (Supabase + Gemini)
+1. Create a [Supabase](https://supabase.com) project and run [`db/schema.sql`](db/schema.sql) in its SQL editor. Everything goes into a private `jeli` schema, not exposed by Supabase's Data API, and a least-privilege `jeli_app` role.
+2. Give the role a password: `alter role jeli_app with login password '<random secret>';`
+3. Set `DATABASE_URL` through the **pooler** (IPv4, works from Railway and home networks):
+   `postgresql://jeli_app.<project-ref>:<password>@aws-0-<region>.pooler.supabase.com:5432/postgres?sslmode=require`
+4. Create a Gemini key on [Google AI Studio](https://aistudio.google.com/apikey) → `GEMINI_API_KEY`.
+
+Embeddings: `gemini-embedding-001`, 768 dimensions, normalised. Changing the model or the dimension means re-indexing everything.
+
+### 6. Import the group's history
+On a phone in the group: **WhatsApp → the group → ⋮ → More → Export chat → Without media**. Put the `.txt` or `.zip` in `data/exports/` (git-ignored), then:
+```bash
+# Check the parsing first: nothing is stored or sent anywhere
+python -m scripts.import_whatsapp_export data/exports/chat.zip --dry-run
+# Import: stores the messages, then chunks and embeds them
+python -m scripts.import_whatsapp_export data/exports/chat.zip --chat-id <group id>@g.us --timezone Africa/Bamako
+```
+- Android and iPhone exports, in any language; system notices, media placeholders and deleted messages are skipped.
+- `--timezone`: the exporting phone's timezone (exports carry local times). `--month-first` for US-style dates. `--until YYYY-MM-DD` to stop where live ingestion took over.
+- Importing again, or a newer export, only adds what is not stored yet.
+
+From then on, Jeli stores the group's new messages as they arrive and indexes them every few minutes (a conversation is indexed once it has been quiet for 30 minutes).
+
+### 7. Search the history
+```bash
+python -m scripts.search "When is the bootcamp?"
+```
+Hybrid retrieval: semantic neighbours (pgvector, cosine) and keyword matches (Postgres full-text), merged by reciprocal rank fusion. Consecutive messages are chunked together (a new chunk after 30 minutes of silence or 1,500 characters), so a question finds the conversation, not a lone "yes, Friday".
+
 ### Tests
 ```bash
 pytest
 ```
+Every push to `main` runs the tests on GitHub Actions and, when they pass, deploys to Railway ([`.github/workflows/ci.yml`](.github/workflows/ci.yml); needs a Railway project token in the `RAILWAY_TOKEN` repository secret).
 
 ---
 
@@ -217,8 +247,10 @@ Run **exactly one replica of WAHA**: two instances of the same WhatsApp session 
 | `WHATSAPP_USER_LIMIT` / `WHATSAPP_USER_WINDOW_SECONDS` | no | Answers per member per window. Default 5 per 600 s |
 | `WHATSAPP_HOURLY_LIMIT` | no | Answers per hour, all chats together. Default 120 |
 | `WHATSAPP_MIN_SEND_INTERVAL_SECONDS` | no | Minimum gap between two messages sent. Default 3 |
-| `GEMINI_API_KEY` | from Day 3 | Google AI Studio key (LLM + embeddings) |
-| `DATABASE_URL` | from Day 2 | Supabase Postgres connection string |
+| `DATABASE_URL` | knowledge base | Supabase Postgres through the pooler, as role `jeli_app` (see Setup §5) |
+| `GEMINI_API_KEY` | knowledge base | Google AI Studio key (embeddings; answers from Day 3) |
+| `EXPORT_TIMEZONE` | no | Default timezone of imported exports. Default `UTC` |
+| `INDEX_INTERVAL_SECONDS` | no | How often live messages are indexed. Default 300 |
 | `LOG_LEVEL` | no | Default `INFO` |
 
 <details>
@@ -242,9 +274,11 @@ app/
 ├── models.py          # platform-independent message types
 ├── adapters/          # whatsapp_waha.py, telegram.py — thin, swappable
 ├── answer/            # responder.py → RAG, prompts, citations
-├── ingest/            # chat export parser, transcription, chunking
-├── kb/                # embeddings, pgvector store, search
-└── jobs/              # daily digest, duplicate check
+├── ingest/            # whatsapp_export.py, chunker.py, live.py (transcription next)
+├── kb/                # embeddings.py (Gemini), store.py (pgvector), indexer.py, search.py
+└── jobs/              # indexing.py (digest and duplicate check next)
+scripts/               # import_whatsapp_export, search, forget
+db/schema.sql          # knowledge base schema and least-privilege role
 tests/
 docker-compose.yml     # local WAHA gateway
 Docs/                  # challenge guidelines and technical spec
@@ -258,4 +292,19 @@ Docs/                  # challenge guidelines and technical spec
 - Group members should be told that Jeli is in the group and what it remembers.
 - Every webhook call from WAHA is signed (HMAC-SHA512) and verified; the WAHA API and dashboard are protected by a key and a password.
 - Chat exports, recordings and the WhatsApp session stay out of the repository (`data/` is git-ignored).
-- What is stored, and how to delete it, will be documented here as ingestion lands.
+
+**What Jeli stores** (Supabase, `jeli` schema, EU region):
+
+| Stored | Not stored |
+|---|---|
+| Group messages: author's display name and WhatsApp id, time, text | Direct messages to Jeli (private questions) |
+| Conversation chunks of those messages, and their embeddings | Media, voice notes, deleted messages, system notices |
+| | Anything from groups outside `WHATSAPP_GROUP_IDS` |
+
+Texts leave that database only to Google's Gemini API, to compute embeddings (and, from Day 3, answers). Nothing is sold or shared.
+
+**Delete it:**
+```bash
+python -m scripts.forget --chat-id <group id>@g.us --yes   # one group
+python -m scripts.forget --all --yes                       # everything
+```

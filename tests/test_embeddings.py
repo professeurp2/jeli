@@ -1,0 +1,68 @@
+import asyncio
+import math
+from types import SimpleNamespace
+
+import pytest
+from google.genai import errors
+
+from app.kb import embeddings
+from app.kb.embeddings import DIMENSIONS, MODEL, Embedder
+
+
+class FakeModels:
+    def __init__(self, fail_first=0):
+        self.calls = []
+        self.fail_first = fail_first
+
+    async def embed_content(self, model, contents, config):
+        self.calls.append((model, list(contents), config))
+        if self.fail_first:
+            self.fail_first -= 1
+            raise errors.ClientError(429, {"error": {"code": 429, "message": "quota", "status": "RESOURCE_EXHAUSTED"}})
+        # Not unit length on purpose: the embedder must normalise.
+        return SimpleNamespace(embeddings=[SimpleNamespace(values=[3.0, 4.0] + [0.0] * (DIMENSIONS - 2)) for _ in contents])
+
+
+def make_embedder(models):
+    return Embedder(api_key="unused", client=SimpleNamespace(aio=SimpleNamespace(models=models)))
+
+
+def test_documents_are_embedded_in_batches_and_normalised():
+    models = FakeModels()
+    vectors = asyncio.run(make_embedder(models).embed_documents([f"text {i}" for i in range(250)]))
+    assert [len(contents) for _, contents, _ in models.calls] == [100, 100, 50]
+    model, _, config = models.calls[0]
+    assert model == MODEL
+    assert config.task_type == "RETRIEVAL_DOCUMENT" and config.output_dimensionality == DIMENSIONS
+    assert len(vectors) == 250
+    assert math.isclose(math.sqrt(sum(v * v for v in vectors[0])), 1.0)
+    assert vectors[0][:2] == [0.6, 0.8]
+
+
+def test_queries_use_the_query_task_type():
+    models = FakeModels()
+    vector = asyncio.run(make_embedder(models).embed_query("when is the bootcamp?"))
+    assert models.calls[0][2].task_type == "RETRIEVAL_QUERY"
+    assert len(vector) == DIMENSIONS
+
+
+def test_rate_limits_are_retried(monkeypatch):
+    async def no_wait(seconds):
+        pass
+
+    monkeypatch.setattr(embeddings.asyncio, "sleep", no_wait)
+    models = FakeModels(fail_first=2)
+    assert len(asyncio.run(make_embedder(models).embed_documents(["a"]))) == 1
+    assert len(models.calls) == 3
+
+
+def test_other_errors_are_not_retried():
+    class Broken(FakeModels):
+        async def embed_content(self, model, contents, config):
+            self.calls.append(model)
+            raise errors.ClientError(400, {"error": {"code": 400, "message": "bad", "status": "INVALID_ARGUMENT"}})
+
+    models = Broken()
+    with pytest.raises(errors.ClientError):
+        asyncio.run(make_embedder(models).embed_documents(["a"]))
+    assert len(models.calls) == 1
