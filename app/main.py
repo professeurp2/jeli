@@ -11,10 +11,12 @@ from app.ingest.live import LiveIngestor
 from app.jobs.indexing import index_periodically
 from app.kb.embeddings import Embedder
 from app.kb.store import Store
+from app.system_certificates import use_system_certificates
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    use_system_certificates()
     settings = get_settings()
     logging.basicConfig(level=settings.log_level, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
     # httpx logs full request URLs at INFO level, and Telegram API URLs contain the bot token.

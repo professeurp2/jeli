@@ -4,10 +4,12 @@ import sys
 from collections.abc import Coroutine
 
 from app.config import get_settings
+from app.system_certificates import use_system_certificates
 
 
 def run(main: Coroutine) -> None:
     """asyncio.run, on an event loop psycopg supports (not Windows' default Proactor loop)."""
+    use_system_certificates()
     # Chat content is full of accents and emoji; Windows consoles default to a legacy code page.
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
     logging.basicConfig(level=get_settings().log_level, format="%(levelname)s %(name)s: %(message)s")

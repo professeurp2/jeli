@@ -3,7 +3,9 @@
 import asyncio
 import logging
 import math
-from collections.abc import Sequence
+import time
+from collections import deque
+from collections.abc import Callable, Sequence
 
 from google import genai
 from google.genai import errors, types
@@ -13,8 +15,17 @@ log = logging.getLogger(__name__)
 MODEL = "gemini-embedding-001"
 # Must match the jeli.chunks.embedding column, vector(768). Changing it means re-indexing everything.
 DIMENSIONS = 768
-BATCH_SIZE = 100
-RETRY_DELAYS = (2, 5, 10, 20, 40)  # seconds, on rate limits and server errors
+BATCH_SIZE = 100  # texts per request, the API maximum
+# The free tier caps tokens per minute (about 30k): one batch of 100 conversation chunks already
+# reaches it. Requests are kept small and the per-minute budget below that cap.
+BATCH_TOKENS = 8_000
+TOKENS_PER_MINUTE = 25_000
+CHARS_PER_TOKEN = 3  # conservative for mixed French/English chat text
+RETRY_DELAYS = (10, 30, 60, 60, 60)  # seconds, on rate limits and server errors
+
+
+def estimate_tokens(text: str) -> int:
+    return len(text) // CHARS_PER_TOKEN + 1
 
 
 def _normalize(values: Sequence[float]) -> list[float]:
@@ -23,9 +34,47 @@ def _normalize(values: Sequence[float]) -> list[float]:
     return [v / norm for v in values]
 
 
+def _batches(texts: Sequence[str]) -> list[list[str]]:
+    batches: list[list[str]] = []
+    current: list[str] = []
+    tokens = 0
+    for text in texts:
+        cost = estimate_tokens(text)
+        if current and (len(current) == BATCH_SIZE or tokens + cost > BATCH_TOKENS):
+            batches.append(current)
+            current, tokens = [], 0
+        current.append(text)
+        tokens += cost
+    if current:
+        batches.append(current)
+    return batches
+
+
+class TokenBudget:
+    """Sliding one-minute budget: waits before a request that would exceed it."""
+
+    def __init__(self, tokens_per_minute: int, clock: Callable[[], float] = time.monotonic, sleep=asyncio.sleep):
+        self.limit = tokens_per_minute
+        self._clock = clock
+        self._sleep = sleep
+        self._spent: deque[tuple[float, int]] = deque()
+
+    async def spend(self, tokens: int) -> None:
+        while True:
+            now = self._clock()
+            while self._spent and now - self._spent[0][0] >= 60:
+                self._spent.popleft()
+            used = sum(cost for _, cost in self._spent)
+            if not self._spent or used + tokens <= self.limit:
+                self._spent.append((now, tokens))
+                return
+            await self._sleep(60 - (now - self._spent[0][0]))
+
+
 class Embedder:
-    def __init__(self, api_key: str, client: genai.Client | None = None):
+    def __init__(self, api_key: str, client: genai.Client | None = None, tokens_per_minute: int = TOKENS_PER_MINUTE):
         self._client = client or genai.Client(api_key=api_key)
+        self._budget = TokenBudget(tokens_per_minute)
 
     async def embed_documents(self, texts: Sequence[str]) -> list[list[float]]:
         return await self._embed(texts, "RETRIEVAL_DOCUMENT")
@@ -37,8 +86,8 @@ class Embedder:
     async def _embed(self, texts: Sequence[str], task_type: str) -> list[list[float]]:
         config = types.EmbedContentConfig(task_type=task_type, output_dimensionality=DIMENSIONS)
         vectors: list[list[float]] = []
-        for start in range(0, len(texts), BATCH_SIZE):
-            batch = list(texts[start : start + BATCH_SIZE])
+        for batch in _batches(texts):
+            await self._budget.spend(sum(estimate_tokens(text) for text in batch))
             response = await self._call_with_retry(batch, config)
             vectors.extend(_normalize(embedding.values) for embedding in response.embeddings)
         return vectors

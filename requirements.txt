@@ -7,3 +7,5 @@ psycopg[binary,pool]>=3.2
 google-genai>=1.0
 # Timezone database for exports (Windows has none built in)
 tzdata
+# System certificate store on Windows/macOS (HTTPS-inspecting antivirus, corporate proxies)
+truststore

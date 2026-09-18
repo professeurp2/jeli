@@ -39,6 +39,35 @@ def test_documents_are_embedded_in_batches_and_normalised():
     assert vectors[0][:2] == [0.6, 0.8]
 
 
+def test_long_texts_are_split_to_stay_within_the_token_budget_per_request():
+    models = FakeModels()
+    chunk = "x" * 1500  # ~500 tokens: a full conversation chunk
+    asyncio.run(make_embedder(models).embed_documents([chunk] * 40))
+    sizes = [len(contents) for _, contents, _ in models.calls]
+    assert sum(sizes) == 40
+    assert all(size * embeddings.estimate_tokens(chunk) <= embeddings.BATCH_TOKENS for size in sizes)
+
+
+def test_token_budget_waits_for_the_minute_to_free_up():
+    clock = SimpleNamespace(now=0.0)
+    waits = []
+
+    async def sleep(seconds):
+        waits.append(seconds)
+        clock.now += seconds
+
+    budget = embeddings.TokenBudget(1000, clock=lambda: clock.now, sleep=sleep)
+
+    async def scenario():
+        await budget.spend(600)
+        await budget.spend(300)  # 900: fits
+        assert waits == []
+        await budget.spend(300)  # 1200 would exceed: wait until the first spend is a minute old
+        assert waits == [60.0]
+
+    asyncio.run(scenario())
+
+
 def test_queries_use_the_query_task_type():
     models = FakeModels()
     vector = asyncio.run(make_embedder(models).embed_query("when is the bootcamp?"))
