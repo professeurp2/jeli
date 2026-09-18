@@ -1,14 +1,14 @@
 # Jeli — the group memory bot
 
 > In West Africa, the *jeli* (griot) is the keeper of the community's memory.
-> Jeli does the same for a chat group: it remembers what was said in the chats and calls, and answers members directly — with sources.
+> Jeli does the same for a WhatsApp group: it remembers what was said in the chats and calls, and answers members directly — with sources.
 
 Built for the **UniPods METI AI Innovation Programme — Cohort 1 Chatbot Hackathon** (18–24 September 2026).
 
 **The problem:** the group has grown large. Messages get missed, the same questions get re-asked, and nobody rewatches call recordings.
-**What Jeli does:** it ingests the group's messages and call recordings, then answers questions like *"What was decided about the bootcamp dates?"* or *"What did I miss this week?"* with a grounded answer and a link to the source. If it doesn't know, it says so.
+**What Jeli does:** it ingests the group's messages and call recordings, then answers questions like *"What was decided about the bootcamp dates?"* or *"What did I miss this week?"* on WhatsApp, with a grounded answer and its source. If it doesn't know, it says so.
 
-📄 Full specification: [`Docs/hackathon_spec.md`](Docs/hackathon_spec.md)
+📄 Reference: [`Docs/hackathon_brief.md`](Docs/hackathon_brief.md) (supersedes the channel choice in [`Docs/hackathon_spec.md`](Docs/hackathon_spec.md))
 
 ---
 
@@ -16,63 +16,86 @@ Built for the **UniPods METI AI Innovation Programme — Cohort 1 Chatbot Hackat
 
 | | Feature | State |
 |---|---|---|
-| — | FastAPI app + Telegram bot (echo) | ✅ Day 1 |
+| — | FastAPI app, WhatsApp Cloud API webhook (echo) | ✅ Day 1 |
 | R1 | Chat ingestion (WhatsApp export + live messages) | ⏳ |
 | R2 | Call ingestion (transcription) | ⏳ |
 | R3 | Knowledge base (pgvector) | ⏳ |
 | R4 | Grounded answers with sources | ⏳ |
-| R5 | Replies in the group (mention) and in DM | ✅ |
+| R5 | Replies on WhatsApp (DM) | ✅ |
 | R6 | "I don't know" behaviour | ⏳ |
 | R7–R10 | Duplicate detection, `/catchup`, meeting recaps, daily digest | ⏳ |
 
 ---
 
-## How it works
+## How it works — and the WhatsApp constraint
+
+**The official WhatsApp Cloud API cannot read group conversations** — it only handles direct messages. So Jeli separates *ingesting* from *answering*:
+
+| | Path | Official? |
+|---|---|---|
+| **Ingest** the history | WhatsApp "Export chat" `.txt` → parser | ✅ |
+| **Answer** members | Direct message to Jeli via the Cloud API | ✅ |
+| Live group reading / replies (optional) | Baileys bridge on a dedicated number | ⚠️ unofficial |
+
+The fully official path already covers every requirement. The unofficial bridge is an extra: if it breaks, Jeli keeps working.
 
 ```
-Group chat ─┐                 ┌─ Call recordings → transcription
-            ▼                 ▼
+WhatsApp group ─┐                   ┌─ Call recordings → transcription
+ (export .txt)  ▼                   ▼
         Ingestion: normalise → chunk (author, date, source, link)
-                        ▼
+                           ▼
         Knowledge base: Postgres + pgvector (Supabase)
-                        ▼
+                           ▼
         Retrieval → Gemini answer, grounded and cited
-                        ▼
-        Bot adapter (Telegram today, WhatsApp optional)
+                           ▼
+        Adapter: WhatsApp Cloud API (DM) · Telegram (fallback)
 ```
 
-The chat adapter is a thin, swappable layer: the core never depends on a chat platform.
+Adapters are thin and swappable: the core never depends on a chat platform. Each adapter is enabled as soon as its environment variables are set.
 
 ---
 
-## Run it locally
+## Setup
 
 ### Prerequisites
 - Python 3.11+
-- A Telegram bot token (see below)
+- A Meta developer account ([developers.facebook.com](https://developers.facebook.com))
 
-### 1. Create the Telegram bot
-1. In Telegram, open [@BotFather](https://t.me/BotFather) → `/newbot` → pick a name and a username ending in `bot`. Copy the token.
-2. Still in BotFather: `/setprivacy` → select your bot → **Disable**. Without this, the bot only sees commands and mentions in groups, and cannot build the group's memory.
-3. Add the bot to your group.
-
-### 2. Install and configure
+### 1. Install
 ```bash
 git clone https://github.com/professeurp2/jeli.git
 cd jeli
 python -m venv .venv
 # Windows: .venv\Scripts\activate    macOS/Linux: source .venv/bin/activate
 pip install -r requirements-dev.txt
-cp .env.example .env    # then set TELEGRAM_BOT_TOKEN in .env
+cp .env.example .env
 ```
 
-### 3. Start
+### 2. Create the WhatsApp app (Meta)
+1. **My Apps → Create app** → use case *Connect with customers through WhatsApp* (type **Business**).
+2. **WhatsApp → API Setup**: Meta provides a free **test number**. Copy its **Phone number ID** → `WHATSAPP_PHONE_NUMBER_ID`.
+3. Still in API Setup, **add the recipient numbers** allowed to talk to the bot. ⚠️ A test number only works with **up to 5 registered numbers** — register the judges' numbers in advance.
+4. **App settings → Basic → App secret** → `WHATSAPP_APP_SECRET`.
+5. **Permanent access token** (the one shown in API Setup expires after 24 h):
+   [Business settings](https://business.facebook.com/settings) → **Users → System users** → add an admin system user → **Assign assets** (the app and the WhatsApp account) → **Generate token** with `whatsapp_business_messaging` and `whatsapp_business_management`, expiry *Never* → `WHATSAPP_ACCESS_TOKEN`.
+6. Choose any random string → `WHATSAPP_VERIFY_TOKEN`:
+   `python -c "import secrets; print(secrets.token_urlsafe(32))"`
+
+### 3. Run
 ```bash
 uvicorn app.main:app --reload
 ```
-With `PUBLIC_URL` empty, the bot runs in **polling mode**: no public URL needed. Mention it in the group (`@your_bot hello`) or send it a direct message.
+Health check: <http://127.0.0.1:8000/health> shows which channels are enabled.
 
-Health check: <http://127.0.0.1:8000/health>
+Meta can only call a **public HTTPS** URL. To test locally, expose the app with a tunnel, e.g. `cloudflared tunnel --url http://localhost:8000`, and use that URL in the next step.
+
+### 4. Connect the webhook
+**WhatsApp → Configuration → Webhook → Edit**:
+- Callback URL: `https://<your-domain>/whatsapp/webhook`
+- Verify token: the value of `WHATSAPP_VERIFY_TOKEN`
+- **Verify and save**, then subscribe to the **`messages`** field.
+
+Send a WhatsApp message to the test number from a registered phone: Jeli replies.
 
 ### Tests
 ```bash
@@ -81,29 +104,41 @@ pytest
 
 ---
 
+## Deploy (Railway)
+
+1. On [railway.com](https://railway.com): **New project → Deploy from GitHub repo** → select this repository.
+2. Add the environment variables (see below).
+3. **Settings → Networking → Generate domain** — this is the public URL for the Meta webhook.
+4. Set the webhook in Meta as in step 4 above.
+
+The start command comes from the `Procfile`: `uvicorn app.main:app --host 0.0.0.0 --port $PORT`.
+
+---
+
 ## Environment variables
 
 | Variable | Required | Description |
 |---|---|---|
-| `TELEGRAM_BOT_TOKEN` | yes | Token from @BotFather |
-| `PUBLIC_URL` | in production | Public HTTPS URL of the app. Set → webhook mode; empty → polling mode |
-| `TELEGRAM_WEBHOOK_SECRET` | with `PUBLIC_URL` | Random string checked on every webhook call. Generate: `python -c "import secrets; print(secrets.token_urlsafe(32))"` |
+| `WHATSAPP_ACCESS_TOKEN` | WhatsApp | Permanent system-user token |
+| `WHATSAPP_PHONE_NUMBER_ID` | WhatsApp | Phone number ID from API Setup |
+| `WHATSAPP_APP_SECRET` | WhatsApp | Checks the `X-Hub-Signature-256` of every webhook call |
+| `WHATSAPP_VERIFY_TOKEN` | WhatsApp | Shared secret for the webhook verification handshake |
+| `WHATSAPP_API_VERSION` | no | Graph API version, default `v25.0` |
 | `GEMINI_API_KEY` | from Day 3 | Google AI Studio key (LLM + embeddings) |
 | `DATABASE_URL` | from Day 2 | Supabase Postgres connection string |
 | `LOG_LEVEL` | no | Default `INFO` |
 
----
+<details>
+<summary>Telegram (fallback channel)</summary>
 
-## Deploy (Railway)
+| Variable | Description |
+|---|---|
+| `TELEGRAM_BOT_TOKEN` | Token from [@BotFather](https://t.me/BotFather). In BotFather, also run `/setprivacy` → **Disable** so the bot can read the group |
+| `PUBLIC_URL` | Public HTTPS URL of the app. Set → webhook mode; empty → polling mode (no public URL needed locally) |
+| `TELEGRAM_WEBHOOK_SECRET` | Required with `PUBLIC_URL`; random string checked on every Telegram webhook call |
 
-1. On [railway.com](https://railway.com): **New project → Deploy from GitHub repo** → select this repository.
-2. Set the variables above (`TELEGRAM_BOT_TOKEN`, `TELEGRAM_WEBHOOK_SECRET`, …).
-3. **Settings → Networking → Generate domain**, then set `PUBLIC_URL` to that domain (e.g. `https://jeli-production.up.railway.app`).
-4. Redeploy. On startup the app registers its Telegram webhook automatically.
-
-The start command comes from the `Procfile`: `uvicorn app.main:app --host 0.0.0.0 --port $PORT`.
-
-> Only one instance can receive updates: when the deployed bot is in webhook mode, a local copy in polling mode will switch Telegram back to polling. Use a separate test bot for local development.
+In a Telegram group, Jeli answers when mentioned (`@your_bot …`) or replied to; in DM it answers everything.
+</details>
 
 ---
 
@@ -111,22 +146,23 @@ The start command comes from the `Procfile`: `uvicorn app.main:app --host 0.0.0.
 
 ```
 app/
-├── main.py         # FastAPI app, lifecycle, /health
-├── config.py       # settings from environment / .env
-├── models.py       # platform-independent message types
-├── adapters/       # telegram.py (WhatsApp later) — thin, swappable
-├── answer/         # responder.py → RAG, prompts, citations
-├── ingest/         # chat export parser, transcription, chunking
-├── kb/             # embeddings, pgvector store, search
-└── jobs/           # daily digest, duplicate check
+├── main.py            # FastAPI app, lifecycle, /health
+├── config.py          # settings from environment / .env
+├── models.py          # platform-independent message types
+├── adapters/          # whatsapp_cloud.py, telegram.py — thin, swappable
+├── answer/            # responder.py → RAG, prompts, citations
+├── ingest/            # chat export parser, transcription, chunking
+├── kb/                # embeddings, pgvector store, search
+└── jobs/              # daily digest, duplicate check
 tests/
-Docs/               # hackathon spec and guidelines
+Docs/                  # hackathon brief, spec and guidelines
 ```
 
 ---
 
 ## Privacy
 
-- Jeli only ingests the group it has been added to by its members.
+- Jeli only ingests the group it is authorised to use.
+- Every WhatsApp webhook call is checked against the app secret; forged calls are rejected.
 - Chat exports and recordings stay out of the repository (`data/` is git-ignored).
 - What is stored, and how to delete it, will be documented here as ingestion lands.
