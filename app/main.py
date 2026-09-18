@@ -16,6 +16,8 @@ async def lifespan(app: FastAPI):
 
     # Each adapter runs when its environment variables are set; WhatsApp is the target channel.
     app.state.whatsapp = whatsapp_waha.start(settings)
+    if app.state.whatsapp:
+        await app.state.whatsapp.sync_status()
     app.state.telegram = await telegram.start(settings)
     yield
     if app.state.whatsapp:

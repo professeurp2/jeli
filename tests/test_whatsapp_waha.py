@@ -1,14 +1,16 @@
+import asyncio
 import hashlib
 import hmac
 import json
 import time
 
+import httpx
 import pytest
 from fastapi.testclient import TestClient
 
 from app.adapters import whatsapp_waha
 from app.adapters.whatsapp_waha import WEBHOOK_PATH, Waha, parse_message, verify_signature
-from app.config import get_settings
+from app.config import Settings, get_settings
 from app.main import app
 
 HMAC_KEY = "test-hmac-key"
@@ -139,6 +141,11 @@ def waha_env(monkeypatch):
     monkeypatch.setenv("WHATSAPP_MIN_SEND_INTERVAL_SECONDS", "0")
     monkeypatch.setattr(whatsapp_waha, "reading_delay", lambda: 0)
     monkeypatch.setattr(whatsapp_waha, "typing_duration", lambda text: 0)
+
+    async def no_status_check(self):
+        pass
+
+    monkeypatch.setattr(Waha, "sync_status", no_status_check)
     get_settings.cache_clear()
 
 
@@ -216,6 +223,32 @@ def test_a_member_cannot_make_jeli_flood_the_group(waha_env, calls, monkeypatch)
         other["payload"]["participant"] = "22371111111@c.us"
         post_event(client, other)
     assert len(sent_texts(calls)) == 3
+
+
+def make_waha(handler):
+    settings = Settings(_env_file=None, waha_url="http://waha.test:3000", waha_api_key="key", waha_webhook_hmac_key="h")
+    waha = Waha(settings)
+    waha._http = httpx.AsyncClient(base_url=settings.waha_url, transport=httpx.MockTransport(handler))
+    return waha
+
+
+def test_session_status_is_read_from_waha_at_startup():
+    def handler(request):
+        assert request.url.path == "/api/sessions/default"
+        return httpx.Response(200, json={"name": "default", "status": "SCAN_QR_CODE"})
+
+    waha = make_waha(handler)
+    asyncio.run(waha.sync_status())
+    assert waha.paused
+
+
+def test_unreachable_waha_at_startup_does_not_crash_jeli():
+    def handler(request):
+        raise httpx.ConnectError("no route to host")
+
+    waha = make_waha(handler)
+    asyncio.run(waha.sync_status())
+    assert not waha.paused
 
 
 def test_jeli_stays_silent_while_the_session_is_down(waha_env, calls):

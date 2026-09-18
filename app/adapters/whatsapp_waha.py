@@ -159,6 +159,22 @@ class Waha:
             self._seen.popitem(last=False)
         return True
 
+    def set_status(self, status: str | None) -> None:
+        self.paused = status != "WORKING"
+        # FAILED means the number must be linked again (scan the QR code in the WAHA dashboard).
+        log.log(logging.WARNING if self.paused else logging.INFO, "WhatsApp session %s is %s", self.session, status)
+
+    async def sync_status(self) -> None:
+        """Read the session status from WAHA at startup; this also checks the connection and the API key."""
+        try:
+            response = await self._http.get(f"/api/sessions/{self.session}")
+            response.raise_for_status()
+            status = response.json().get("status")
+        except (httpx.HTTPError, ValueError) as error:
+            log.error("Cannot read the session status from WAHA at %s: %r", self._http.base_url, error)
+            return
+        self.set_status(status)
+
     def may_reply(self, message: IncomingMessage) -> bool:
         """Anti-ban guards: never answer while the session is unhealthy, late, or too often."""
         if self.paused:
@@ -261,10 +277,7 @@ async def receive_webhook(
     if event.get("session") != adapter.session:
         return {"ok": True}
     if event.get("event") == "session.status":
-        status = (event.get("payload") or {}).get("status")
-        adapter.paused = status != "WORKING"
-        # FAILED means the number must be linked again (scan the QR code in the WAHA dashboard).
-        log.log(logging.WARNING if adapter.paused else logging.INFO, "WhatsApp session %s is now %s", adapter.session, status)
+        adapter.set_status((event.get("payload") or {}).get("status"))
         return {"ok": True}
 
     message = parse_message(event, adapter.bot_name)
