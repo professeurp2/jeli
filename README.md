@@ -20,9 +20,10 @@ Built for the **UniPods METI AI Innovation Programme — Cohort 1 Chatbot Hackat
 | R1 | Chat ingestion: WhatsApp export import + live group messages | ✅ Day 2 |
 | R2 | Call ingestion (transcription) | ⏳ |
 | R3 | Knowledge base: conversation chunks, Gemini embeddings, hybrid search (pgvector + keywords) | ✅ Day 2 |
-| R4 | Grounded answers with sources | ⏳ |
+| R4 | Grounded answers with sources (Gemini, with model fallback) | ✅ Day 3 |
 | R5 | Replies in the group (mention, reply, name, `/command`) and in DM | ✅ |
-| R6 | "I don't know" behaviour | ⏳ |
+| R6 | "I don't know" behaviour | ✅ Day 3 |
+| R12 | Answers in the language of the question (French / English) | ✅ Day 3 |
 | R7–R10 | Duplicate detection, `/catchup`, meeting recaps, daily digest | ⏳ |
 
 ---
@@ -160,6 +161,34 @@ python -m scripts.search "When is the bootcamp?"
 ```
 Hybrid retrieval: semantic neighbours (pgvector, cosine) and keyword matches (Postgres full-text), merged by reciprocal rank fusion. Consecutive messages are chunked together (a new chunk after 30 minutes of silence or 1,500 characters), so a question finds the conversation, not a lone "yes, Friday".
 
+### 8. Ask a question
+```bash
+python -m scripts.ask "When is the bootcamp?"
+```
+Illustrative output (names made up):
+```
+The bootcamp was moved to 25 September, same venue.
+
+📌 Sources
+[1] METI cohort · 12 Sep 2026, 14:05 UTC · Awa T., +234 ···55
+```
+
+How an answer is built ([`app/answer/rag.py`](app/answer/rag.py)):
+1. Hybrid search retrieves the 6 closest conversation chunks.
+2. **"I don't know" first:** if even the best chunk is not similar enough (`ANSWER_MIN_SIMILARITY`, 0.60 — measured: group questions score ≥ 0.65, unrelated ones ≤ 0.56), Jeli says so without calling the model.
+3. The chunks are rebuilt from their messages, oldest first: authors from `IGNORED_AUTHORS` (e.g. other bots in the group) are left out, phone numbers are masked (`+234 ···55`).
+4. Gemini answers **only from those excerpts**, in the question's language, and returns which excerpts it used (structured JSON output).
+5. An answer that cites no real excerpt is discarded: Jeli says it doesn't know. The cited excerpts become the sources shown.
+6. **Resilience:** models are tried in order (`GEMINI_MODELS`); one that is out of quota or overloaded is skipped for a few minutes. If every model is down, Jeli still points to where the group discussed the question.
+
+Models: `gemini-3.6-flash` with minimal thinking (≈2 s), then `gemini-3.5-flash-lite` and `gemini-flash-lite-latest` (<1 s). Measured: default thinking took 14 s or was overloaded; minimal is fast *and* correct.
+
+### 9. Evaluate answer quality
+```bash
+python -m scripts.evaluate --show-answers
+```
+Runs the fixed question set in [`evals/questions.json`](evals/questions.json) against the real knowledge base: questions whose answer the group discussed (must be answered, with sources, containing the expected fact) and unrelated ones (must get "I don't know"). Reports latency against the 10-second target. Current result: **9/9**, median ≈3 s, max ≈7 s.
+
 ### Tests
 ```bash
 pytest
@@ -248,7 +277,11 @@ Run **exactly one replica of WAHA**: two instances of the same WhatsApp session 
 | `WHATSAPP_HOURLY_LIMIT` | no | Answers per hour, all chats together. Default 120 |
 | `WHATSAPP_MIN_SEND_INTERVAL_SECONDS` | no | Minimum gap between two messages sent. Default 3 |
 | `DATABASE_URL` | knowledge base | Supabase Postgres through the pooler, as role `jeli_app` (see Setup §5) |
-| `GEMINI_API_KEY` | knowledge base | Google AI Studio key (embeddings; answers from Day 3) |
+| `GEMINI_API_KEY` | knowledge base | Google AI Studio key (embeddings and answers) |
+| `GEMINI_MODELS` | no | Answer models, in fallback order. Default `gemini-3.6-flash,gemini-3.5-flash-lite,gemini-flash-lite-latest` |
+| `ANSWER_MIN_SIMILARITY` | no | Below it, "I don't know" without calling the model. Default 0.60 |
+| `IGNORED_AUTHORS` | no | Comma-separated authors never used in answers (other bots). Names or phone numbers |
+| `CHAT_LABELS` | no | Readable chat names in sources: `chat-id=Name;other-id=Other name` |
 | `EXPORT_TIMEZONE` | no | Default timezone of imported exports. Default `UTC` |
 | `INDEX_INTERVAL_SECONDS` | no | How often live messages are indexed. Default 300 |
 | `LOG_LEVEL` | no | Default `INFO` |
@@ -273,11 +306,12 @@ app/
 ├── config.py          # settings from environment / .env
 ├── models.py          # platform-independent message types
 ├── adapters/          # whatsapp_waha.py, telegram.py — thin, swappable
-├── answer/            # responder.py → RAG, prompts, citations
+├── answer/            # responder.py, rag.py, llm.py (Gemini + fallback), prompts.py, citations.py, language.py
 ├── ingest/            # whatsapp_export.py, chunker.py, live.py (transcription next)
 ├── kb/                # embeddings.py (Gemini), store.py (pgvector), indexer.py, search.py
 └── jobs/              # indexing.py (digest and duplicate check next)
-scripts/               # import_whatsapp_export, search, forget
+scripts/               # import_whatsapp_export, search, ask, evaluate, forget
+evals/questions.json   # fixed question set for answer quality
 db/schema.sql          # knowledge base schema and least-privilege role
 tests/
 docker-compose.yml     # local WAHA gateway

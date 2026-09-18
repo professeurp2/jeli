@@ -10,7 +10,7 @@ from telegram import Message, Update
 from telegram.constants import ChatType
 from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandler, filters
 
-from app.answer.responder import respond
+from app.adapters import Respond
 from app.config import Settings, get_settings
 from app.models import IncomingMessage
 
@@ -55,6 +55,7 @@ async def _on_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 async def _on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     message = update.effective_message
+    respond: Respond = context.bot_data["respond"]
     reply = await respond(to_incoming(message, context.bot.id, context.bot.username))
     if reply:
         await message.reply_text(reply)
@@ -64,8 +65,9 @@ async def _on_error(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
     log.error("Error while handling a Telegram update", exc_info=context.error)
 
 
-def build_application(token: str) -> Application:
+def build_application(token: str, respond: Respond) -> Application:
     application = Application.builder().token(token).build()
+    application.bot_data["respond"] = respond
     application.add_handler(CommandHandler(["start", "help"], _on_help))
     application.add_handler(
         # New messages only: an edited message must not trigger a second reply.
@@ -75,14 +77,14 @@ def build_application(token: str) -> Application:
     return application
 
 
-async def start(settings: Settings) -> Application | None:
+async def start(settings: Settings, respond: Respond) -> Application | None:
     if not settings.telegram_bot_token:
         log.warning("TELEGRAM_BOT_TOKEN is not set: Telegram adapter disabled")
         return None
     if settings.public_url and not settings.telegram_webhook_secret:
         raise RuntimeError("TELEGRAM_WEBHOOK_SECRET is required when PUBLIC_URL is set")
 
-    application = build_application(settings.telegram_bot_token)
+    application = build_application(settings.telegram_bot_token, respond)
     await application.initialize()
     await application.start()
     if settings.public_url:

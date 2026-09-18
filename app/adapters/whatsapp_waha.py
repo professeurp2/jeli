@@ -18,14 +18,13 @@ import re
 import time
 from collections import OrderedDict
 from datetime import datetime, timezone
-from collections.abc import Awaitable, Callable
 from typing import Annotated, Any
 
 import httpx
 from fastapi import APIRouter, BackgroundTasks, Header, HTTPException, Request
 
+from app.adapters import Ingest, Respond
 from app.adapters.pacing import SendSpacer, SlidingWindowLimiter, reading_delay, typing_duration
-from app.answer.responder import respond
 from app.config import Settings
 from app.models import IncomingMessage
 
@@ -127,8 +126,9 @@ def parse_message(event: dict, bot_name: str) -> IncomingMessage | None:
 
 
 class Waha:
-    def __init__(self, settings: Settings, ingest: Callable[[IncomingMessage], Awaitable[None]] | None = None):
+    def __init__(self, settings: Settings, respond: Respond, ingest: Ingest | None = None):
         self.session = settings.waha_session
+        self.respond = respond
         # Called with every accepted message, to remember the group's conversation.
         self.ingest = ingest
         self.hmac_key = settings.waha_webhook_hmac_key
@@ -230,7 +230,7 @@ class Waha:
             await self._post_quietly("/api/startTyping", chat)
             try:
                 typing_since = time.monotonic()
-                reply = await respond(message)
+                reply = await self.respond(message)
                 if reply:
                     # Answer generation counts as typing time: only wait for what is left.
                     await asyncio.sleep(max(0.0, typing_duration(reply) - (time.monotonic() - typing_since)))
@@ -247,7 +247,7 @@ class Waha:
         await self._http.aclose()
 
 
-def start(settings: Settings, ingest: Callable[[IncomingMessage], Awaitable[None]] | None = None) -> Waha | None:
+def start(settings: Settings, respond: Respond, ingest: Ingest | None = None) -> Waha | None:
     if not settings.waha_url:
         log.info("WAHA_URL is not set: WhatsApp adapter disabled")
         return None
@@ -259,7 +259,7 @@ def start(settings: Settings, ingest: Callable[[IncomingMessage], Awaitable[None
     if missing:
         raise RuntimeError(f"WAHA_URL is set but {', '.join(missing)} is missing")
     log.info("WhatsApp adapter enabled through WAHA at %s (session %s)", settings.waha_url, settings.waha_session)
-    return Waha(settings, ingest)
+    return Waha(settings, respond, ingest)
 
 
 async def stop(adapter: Waha) -> None:

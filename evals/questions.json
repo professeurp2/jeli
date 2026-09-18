@@ -1,0 +1,11 @@
+[
+  {"question": "What is the prize for the chatbot hackathon?", "expect_any": ["5,000", "5000", "5 000", "5k"]},
+  {"question": "When does the chatbot hackathon end?", "expect_any": ["24"]},
+  {"question": "How many people can be in a hackathon team?", "expect_any": ["5", "five"]},
+  {"question": "Combien de personnes au maximum dans une équipe pour le hackathon ?", "expect_any": ["5", "cinq"]},
+  {"question": "Does a hackathon team need to include a woman?", "expect_any": ["woman", "women", "female"]},
+  {"question": "What do we have to submit for the hackathon?", "expect_any": ["source code", "repository", "repo", "setup"]},
+  {"question": "What is the capital of Japan?", "expect": "dont_know"},
+  {"question": "Donne-moi une recette de riz au gras", "expect": "dont_know"},
+  {"question": "Who won the 2022 football World Cup?", "expect": "dont_know"}
+]

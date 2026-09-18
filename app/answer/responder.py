@@ -1,14 +1,31 @@
+"""What Jeli replies to a message addressed to it. Every adapter calls Responder.respond."""
+
+import logging
+
+from app.answer.language import TEXTS, detect_language
+from app.answer.rag import Answerer
 from app.models import IncomingMessage
 
+log = logging.getLogger(__name__)
 
-async def respond(message: IncomingMessage) -> str | None:
-    """Return the bot's reply to a message, or None to stay silent.
+HELP_COMMANDS = {"/start", "/help", "/aide", "help", "aide"}
 
-    Every adapter calls this single entry point. Day 1: echo, to prove the bot is live
-    end to end. It will be replaced by the grounded RAG answer.
-    """
-    if not message.addressed_to_bot:
-        return None
-    if not message.text:
-        return f"Hello {message.author}! I'm Jeli, the group's memory. Ask me anything that was discussed here."
-    return f"Hello {message.author}! Jeli is live. You said: {message.text}"
+
+class Responder:
+    def __init__(self, answerer: Answerer | None = None):
+        self.answerer = answerer
+
+    async def respond(self, message: IncomingMessage) -> str | None:
+        """The reply to a message, or None to stay silent."""
+        if not message.addressed_to_bot:
+            return None
+        text = message.text.strip()
+        texts = TEXTS[detect_language(text)]
+        if not text or text.lower() in HELP_COMMANDS:
+            return texts["help"]
+        if text.startswith("/"):
+            # /catchup and /search arrive with the next features; until then, explain what works.
+            return texts["help"]
+        if self.answerer is None:
+            return texts["not_ready"]
+        return await self.answerer.answer(text, asker=message.author)

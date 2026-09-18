@@ -10,6 +10,7 @@ from fastapi.testclient import TestClient
 
 from app.adapters import whatsapp_waha
 from app.adapters.whatsapp_waha import WEBHOOK_PATH, Waha, parse_message, verify_signature
+from app.answer.language import TEXTS
 from app.config import Settings, get_settings
 from app.main import app
 
@@ -186,7 +187,8 @@ def test_webhook_answers_a_mention_once(waha_env, calls):
     _, reply = calls[3]
     assert reply["chatId"] == GROUP
     assert reply["reply_to"] == event["payload"]["id"]
-    assert "Awa Traoré" in reply["text"]
+    # No knowledge base in tests: Jeli says it isn't ready, in the question's language.
+    assert reply["text"] == TEXTS["en"]["not_ready"]
 
 
 def test_webhook_stays_silent_on_ordinary_group_chatter(waha_env, calls):
@@ -243,7 +245,7 @@ def test_a_member_cannot_make_jeli_flood_the_group(waha_env, calls, monkeypatch)
 
 def make_waha(handler):
     settings = Settings(_env_file=None, waha_url="http://waha.test:3000", waha_api_key="key", waha_webhook_hmac_key="h")
-    waha = Waha(settings)
+    waha = Waha(settings, respond=None)
     waha._http = httpx.AsyncClient(base_url=settings.waha_url, transport=httpx.MockTransport(handler))
     return waha
 

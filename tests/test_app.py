@@ -14,6 +14,7 @@ def test_health_without_any_channel_configured():
         "telegram": False,
         "database": False,
         "indexing": False,
+        "answers": False,
     }
 
 

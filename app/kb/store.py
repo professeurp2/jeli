@@ -41,7 +41,7 @@ fused as (
     from (select * from semantic union all select * from keyword) as ranked
     group by id
 )
-select c.id, c.chat_id, c.started_at, c.ended_at, c.authors, c.content, f.score,
+select c.id, c.chat_id, c.started_at, c.ended_at, c.authors, c.message_ids, c.content, f.score,
        1 - (c.embedding <=> %(embedding)s::vector) as similarity
 from fused as f join jeli.chunks as c using (id)
 order by f.score desc
@@ -56,6 +56,7 @@ class SearchHit:
     started_at: datetime
     ended_at: datetime
     authors: list[str]
+    message_ids: list[str]
     content: str
     score: float  # fused rank score, only meaningful for ordering
     similarity: float  # cosine similarity to the question, 0..1
@@ -117,6 +118,18 @@ class Store:
             ).fetchall()
         return [StoredMessage(**row) for row in rows]
 
+    async def messages_by_ids(self, ids: Sequence[str]) -> list[StoredMessage]:
+        """The messages behind retrieved chunks, in time order: who said what, and when."""
+        async with self._pool.connection() as conn:
+            rows = await (
+                await conn.execute(
+                    "select id, chat_id, source, author, author_id, sent_at, text from jeli.messages "
+                    "where id = any(%s) order by sent_at, id",
+                    (list(ids),),
+                )
+            ).fetchall()
+        return [StoredMessage(**row) for row in rows]
+
     async def save_chunk(self, chunk: Chunk, embedding: Sequence[float], model: str) -> int:
         async with self._pool.connection() as conn, conn.transaction():
             row = await (
@@ -155,6 +168,7 @@ class Store:
                 started_at=row["started_at"],
                 ended_at=row["ended_at"],
                 authors=row["authors"],
+                message_ids=row["message_ids"],
                 content=row["content"],
                 score=float(row["score"]),
                 similarity=float(row["similarity"]),

@@ -6,6 +6,9 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 
 from app.adapters import telegram, whatsapp_waha
+from app.answer.llm import LLM
+from app.answer.rag import Answerer
+from app.answer.responder import Responder
 from app.config import get_settings
 from app.ingest.live import LiveIngestor
 from app.jobs.indexing import index_periodically
@@ -34,11 +37,27 @@ async def lifespan(app: FastAPI):
     )
     app.state.store, app.state.embedder, app.state.indexing = store, embedder, indexing
 
+    # Grounded answers need the knowledge base and a Gemini key; without them Jeli says it isn't ready.
+    answerer = (
+        Answerer(
+            store,
+            embedder,
+            LLM(settings.gemini_api_key, settings.answer_models),
+            min_similarity=settings.answer_min_similarity,
+            ignored_authors=settings.ignored_author_list,
+            chat_labels=settings.chat_label_map,
+        )
+        if store and embedder
+        else None
+    )
+    app.state.answerer = answerer
+    respond = Responder(answerer).respond
+
     # Each adapter runs when its environment variables are set; WhatsApp is the target channel.
-    app.state.whatsapp = whatsapp_waha.start(settings, ingest=LiveIngestor(store).ingest if store else None)
+    app.state.whatsapp = whatsapp_waha.start(settings, respond, ingest=LiveIngestor(store).ingest if store else None)
     if app.state.whatsapp:
         await app.state.whatsapp.sync_status()
-    app.state.telegram = await telegram.start(settings)
+    app.state.telegram = await telegram.start(settings, respond)
     yield
     if app.state.whatsapp:
         await whatsapp_waha.stop(app.state.whatsapp)
@@ -68,4 +87,5 @@ async def health() -> dict:
         "telegram": enabled("telegram"),
         "database": enabled("store"),
         "indexing": enabled("indexing"),
+        "answers": enabled("answerer"),
     }
