@@ -173,7 +173,8 @@ Two services in one Railway project:
   WAHA_WEBHOOK_HMAC_KEY=<same as WAHA's WHATSAPP_HOOK_HMAC_KEY>
   WHATSAPP_GROUP_IDS=<cohort group id>
   ```
-- The start command comes from the `Procfile`. The two services talk over Railway's private network; Jeli needs no public domain.
+- Start command, `/health` check and restart policy come from [`railway.json`](railway.json). The two services talk over Railway's private network; Jeli needs no public domain.
+- Run both services in the region closest to the group (`eu-west` for West Africa) with **exactly one replica for WAHA**: two instances of the same WhatsApp session would get the number flagged.
 
 Then link the number from the WAHA dashboard, as in step 2 above.
 
