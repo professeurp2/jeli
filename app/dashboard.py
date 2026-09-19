@@ -106,6 +106,12 @@ def status(state) -> list[tuple[str, str, str]]:
         rows.append((name, "good", running) if alive else (name, "warning" if task else "neutral", "stopped" if task else "off"))
     digest_time = get_settings().daily_digest_time
     rows.append(("Daily digest", "good", f"at {digest_time} UTC") if getattr(state, "daily_digest", None) else ("Daily digest", "neutral", "off"))
+    settings = get_settings()
+    rows.append(
+        ("Team report", "good", f"{settings.team_report_time} UTC to {len(settings.team_number_list)} members, in private")
+        if getattr(state, "team_report", None)
+        else ("Team report", "neutral", "off")
+    )
     llm = getattr(state, "llm", None)
     for model, resting in llm.status() if llm else []:
         rows.append((model, "good", "available") if not resting else (model, "warning", f"resting {resting} s (quota or overload)"))

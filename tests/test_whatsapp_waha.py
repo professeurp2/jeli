@@ -293,3 +293,23 @@ def test_jeli_stays_silent_while_the_session_is_down(waha_env, calls):
         post_event(client, message_event(f"@{BOT_PHONE} hello again", message_id="after-recovery"))
     [reply] = sent_texts(calls)
     assert reply["reply_to"] == "after-recovery"
+
+
+def test_private_messages_go_only_to_numbers_on_whatsapp(monkeypatch):
+    monkeypatch.setattr(whatsapp_waha, "typing_duration", lambda text: 0)
+    sent = []
+
+    def handler(request):
+        if request.url.path == "/api/contacts/check-exists":
+            phone = request.url.params["phone"]
+            found = phone == "2347069310683"
+            return httpx.Response(200, json={"numberExists": found, "chatId": f"{phone}@c.us" if found else None})
+        if request.url.path == "/api/sendText":
+            sent.append(json.loads(request.content))
+        return httpx.Response(200, json={})
+
+    waha = make_waha(handler)
+    waha.spacer = whatsapp_waha.SendSpacer(0)
+    assert asyncio.run(waha.post_private("2347069310683", "Weekly report"))
+    assert not asyncio.run(waha.post_private("2340000000000", "Weekly report"))
+    assert [(m["chatId"], m["text"]) for m in sent] == [("2347069310683@c.us", "Weekly report")]

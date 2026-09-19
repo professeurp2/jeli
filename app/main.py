@@ -19,6 +19,7 @@ from app.ingest.live import LiveIngestor
 from app.jobs.daily_digest import run_daily
 from app.jobs.deadlines import extract_periodically
 from app.jobs.indexing import index_periodically
+from app.jobs.team_report import parse_schedule, run_weekly
 from app.kb.embeddings import Embedder
 from app.kb.store import Store
 from app.system_certificates import use_system_certificates
@@ -99,6 +100,25 @@ async def lifespan(app: FastAPI):
         background.append(app.state.daily_digest)
     elif settings.daily_digest_time:
         logging.getLogger(__name__).warning("DAILY_DIGEST_TIME is set, but it needs WhatsApp, the knowledge base and WHATSAPP_GROUP_IDS")
+
+    # Weekly report to the team, in private, when a schedule and the team's numbers are set.
+    app.state.team_report = None
+    if settings.team_report_time:
+        try:
+            weekday, at = parse_schedule(settings.team_report_time)
+        except ValueError:
+            logging.getLogger(__name__).error("TEAM_REPORT_TIME must look like 'mon 07:00': no team report")
+        else:
+            if store and app.state.whatsapp and settings.team_number_list:
+                dashboard_url = f"https://{settings.railway_public_domain}/dashboard" if settings.railway_public_domain else ""
+                app.state.team_report = asyncio.create_task(
+                    run_weekly(
+                        store, deadlines, app.state.whatsapp.post_private, settings.team_number_list, weekday, at, dashboard_url
+                    )
+                )
+                background.append(app.state.team_report)
+            else:
+                logging.getLogger(__name__).warning("TEAM_REPORT_TIME is set, but it needs WhatsApp, the knowledge base and TEAM_NUMBERS")
     yield
     if app.state.whatsapp:
         await whatsapp_waha.stop(app.state.whatsapp)
@@ -132,4 +152,5 @@ async def health() -> dict:
         "indexing": enabled("indexing"),
         "answers": enabled("answerer"),
         "daily_digest": enabled("daily_digest"),
+        "team_report": enabled("team_report"),
     }

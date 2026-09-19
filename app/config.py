@@ -1,3 +1,4 @@
+import re
 from functools import lru_cache
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -51,6 +52,12 @@ class Settings(BaseSettings):
     # R10: "HH:MM" (UTC) to post a daily digest in each group of WHATSAPP_GROUP_IDS. Empty: off.
     daily_digest_time: str = ""
     daily_digest_language: str = "en"
+    # Weekly report to the team, in private: "mon 07:00" (UTC). Empty: off.
+    team_report_time: str = ""
+    # The team members' WhatsApp numbers, comma-separated. Personal data: set it on the server only.
+    team_numbers: str = ""
+    # Set by Railway when the service has a public domain: the report links to the dashboard.
+    railway_public_domain: str = ""
     # Readable names for chats in citations: "chat-id=Name;other-id=Other name".
     chat_labels: str = ""
     # Supabase Postgres, through the pooler: postgresql://jeli_app.<ref>:<password>@<pooler-host>:5432/postgres
@@ -82,6 +89,12 @@ class Settings(BaseSettings):
         """Account name (lower case) → "salt:hash"."""
         pairs = (item.strip().split(":", 1) for item in self.dashboard_users.split(",") if ":" in item)
         return {name.strip().lower(): secret.strip() for name, secret in pairs if name.strip()}
+
+    @property
+    def team_number_list(self) -> list[str]:
+        """Digits only: "+234 706 931 0683" -> "2347069310683"."""
+        numbers = (re.sub(r"\D", "", number) for number in self.team_numbers.split(","))
+        return list(dict.fromkeys(number for number in numbers if number))
 
     @property
     def chat_label_map(self) -> dict[str, str]:

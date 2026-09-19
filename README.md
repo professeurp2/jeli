@@ -84,7 +84,9 @@ It speaks up only when sure: the question must look like one, be very close to a
 
 **Deadlines (R14):** Jeli scans new messages and call transcripts every hour for deadlines a message states — resolving "Friday" or "tomorrow" from that message's date, skipping guesses, keeping an organiser's announcement over a member's contradicting claim, and merging two wordings of the same deadline. `/deadlines` (or *"what are the upcoming deadlines?"*) lists the next two weeks with who announced each and where; every catch-up and daily digest ends with what is due in the next three days. Reminders never come as extra messages of their own.
 
-**Dashboard (R13):** `https://<jeli-domain>/dashboard`, for the team: one account per member, each with its own password (`python -m scripts.dashboard_users --passwords <file> <names…>` writes the passwords to a file to hand out, and prints `DASHBOARD_USERS`, which keeps only salted scrypt hashes; no accounts = no dashboard). It shows the status of WhatsApp, answers, background jobs and each Gemini model; usage over 7 days (questions, share answered with sources, "I don't know", reply times, catch-ups, recaps…); the questions asked in the groups — those Jeli could not answer (knowledge gaps to fill) and all of them (what the community needs: material for the pitch and the next features); and what Jeli knows (chats, recordings, indexing backlog, deadlines). No member ever appears: usage is counted as anonymous events, group questions are kept without their author, mentions or phone numbers, and private questions are never kept. Jeli never messages the team about them: the dashboard is where they are read, which keeps the number's profile low.
+**Dashboard (R13):** `https://<jeli-domain>/dashboard`, for the team: one account per member, each with its own password (`python -m scripts.dashboard_users --passwords <file> <names…>` writes the passwords to a file to hand out, and prints `DASHBOARD_USERS`, which keeps only salted scrypt hashes; no accounts = no dashboard). It shows the status of WhatsApp, answers, background jobs and each Gemini model; usage over 7 days (questions, share answered with sources, "I don't know", reply times, catch-ups, recaps…); the questions asked in the groups — those Jeli could not answer (knowledge gaps to fill) and all of them (what the community needs: material for the pitch and the next features); and what Jeli knows (chats, recordings, indexing backlog, deadlines). No member ever appears: usage is counted as anonymous events, group questions are kept without their author, mentions or phone numbers, and private questions are never kept. 
+
+**Weekly team report:** once a week (`TEAM_REPORT_TIME`, e.g. `mon 07:00` UTC), each team member (`TEAM_NUMBERS`) gets the dashboard's news in a private message: questions and outcomes, what Jeli could not answer, the latest group questions, what is due in the next 7 days, and a link to the dashboard. Private messages a number starts are what WhatsApp watches most, so: only numbers that are on WhatsApp (checked first), a minute or so apart, never twice in a week (claimed in the database, by a hash of the number), and nothing in a quiet week. **Each member saves Jeli's number and sends it a first message** before the first report, so it is a conversation they started. The numbers are personal data: set them on the server only, never in the repository.
 
 **Catch-up (R8):** `/catchup`, `/catchup 3 days`, *"@Jeli what did I miss since Monday?"*, *"Jeli, qu'est-ce que j'ai raté cette semaine ?"* → highlights, decisions, deadlines and dates, questions still unanswered, and the sessions recorded in that period with their links. Default period: the last 24 hours. The same digest is reused for 10 minutes, so a whole jury asking at once costs one model call.
 
@@ -337,6 +339,8 @@ Run **exactly one replica of WAHA**: two instances of the same WhatsApp session 
 | `DUPLICATE_REPLIES_PER_HOUR` | no | Uninvited replies per group per hour. Default 3 |
 | `DASHBOARD_USERS` | no | Accounts of `/dashboard`, `name:salt:hash,…`, made by `python -m scripts.dashboard_users`. Empty: no dashboard |
 | `DAILY_DIGEST_TIME` | no | `HH:MM` (UTC) to post the daily digest in each group of `WHATSAPP_GROUP_IDS`. Empty: off |
+| `TEAM_REPORT_TIME` | no | Day and time (UTC) of the weekly team report, e.g. `mon 07:00`. Empty: off |
+| `TEAM_NUMBERS` | with `TEAM_REPORT_TIME` | Team members' WhatsApp numbers, comma-separated. Server only |
 | `DAILY_DIGEST_LANGUAGE` | no | `en` or `fr`. Default `en` |
 | `CHAT_LABELS` | no | Readable chat names in sources: `chat-id=Name;other-id=Other name` |
 | `EXPORT_TIMEZONE` | no | Default timezone of imported exports. Default `UTC` |
@@ -367,7 +371,7 @@ app/
 ├── answer/            # responder.py, rag.py, catchup.py, recaps.py, deadlines.py, intents.py, llm.py (Gemini + fallback), prompts.py, citations.py, language.py
 ├── ingest/            # whatsapp_export.py, transcribe.py, chunker.py, live.py
 ├── kb/                # embeddings.py (Gemini), store.py (pgvector), indexer.py, search.py
-└── jobs/              # indexing.py, deadlines.py, daily_digest.py
+└── jobs/              # indexing.py, deadlines.py, daily_digest.py, team_report.py
 scripts/               # import_whatsapp_export, import_recording, recap_recording, extract_deadlines, dashboard_users, search, ask, evaluate, forget
 evals/questions.json   # fixed question set for answer quality
 db/schema.sql          # knowledge base schema and least-privilege role

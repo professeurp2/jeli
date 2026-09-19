@@ -302,6 +302,11 @@ class Store:
             )
         return cursor.rowcount == 1
 
+    async def release_daily_run(self, job: str, day: date) -> None:
+        """Undo a claim whose message could not be sent, so a later run may send it."""
+        async with self._pool.connection() as conn:
+            await conn.execute("delete from jeli.job_runs where job = %s and run_date = %s", (job, day))
+
     async def pending_chats(self) -> list[str]:
         async with self._pool.connection() as conn:
             rows = await (await conn.execute("select distinct chat_id from jeli.messages where chunk_id is null")).fetchall()

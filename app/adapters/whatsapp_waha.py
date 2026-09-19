@@ -268,7 +268,7 @@ class Waha:
         await self.send_text(message.chat_id, reply, reply_to=message.message_id)
 
     async def post(self, chat_id: str, text: str) -> bool:
-        """A message Jeli sends on its own schedule (the daily digest), within the same limits.
+        """A message Jeli sends on its own schedule (daily digest, weekly report), within the same limits.
         Returns False when it was not sent: session not WORKING or hourly limit reached."""
         if self.paused or not self.hourly_limiter.allow("all"):
             return False
@@ -281,6 +281,28 @@ class Waha:
             await self._post_quietly("/api/stopTyping", chat)
         await self.send_text(chat_id, text)
         return True
+
+    async def private_chat(self, number: str) -> str | None:
+        """The chat id of a number, if it is on WhatsApp. Writing to numbers that are not is a
+        classic spam signal, so Jeli checks first."""
+        try:
+            response = await self._http.get("/api/contacts/check-exists", params={"phone": number, "session": self.session})
+            response.raise_for_status()
+            found = response.json()
+        except (httpx.HTTPError, ValueError) as error:
+            log.warning("Cannot check the number ending in %s on WhatsApp: %r", number[-2:], error)
+            return None
+        return found.get("chatId") if found.get("numberExists") else None
+
+    async def post_private(self, number: str, text: str) -> bool:
+        """A private message to a team member (the weekly report), within the same limits."""
+        if self.paused:
+            return False
+        chat_id = await self.private_chat(number)
+        if chat_id is None:
+            log.warning("The number ending in %s is not on WhatsApp: no report sent", number[-2:])
+            return False
+        return await self.post(chat_id, text)
 
     async def aclose(self) -> None:
         await self._http.aclose()
