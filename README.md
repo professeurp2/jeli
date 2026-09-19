@@ -24,7 +24,9 @@ Built for the **UniPods METI AI Innovation Programme — Cohort 1 Chatbot Hackat
 | R5 | Replies in the group (mention, reply, name, `/command`) and in DM | ✅ |
 | R6 | "I don't know" behaviour | ✅ Day 3 |
 | R12 | Answers in the language of the question (French / English) | ✅ Day 3 |
-| R7–R10 | Duplicate detection, `/catchup`, meeting recaps, daily digest | ⏳ |
+| R7 | Duplicate detection: a question the group already answered gets a pointer to that answer | ✅ Day 5 |
+| R8 | Catch-up digest: `/catchup`, "what did I miss since Monday?" | ✅ Day 5 |
+| R9–R10 | Meeting recaps, daily digest | ⏳ |
 
 ---
 
@@ -61,6 +63,17 @@ In the group, Jeli reads everything but only replies when a message:
 
 In a direct message, it answers everything.
 
+**One exception (R7):** when a member asks *the group* a question that the group already answered — a reply to someone who asked before, or an announcement that states it — Jeli points to that answer, uninvited. Illustrative output (name made up):
+```
+💡 This was already answered in the group: submissions close on Thursday 24 September.
+
+📌 Sources
+[1] METI cohort · 17 Sep 2026, 20:53 UTC · Awa T.
+```
+It speaks up only when sure: the question must look like one, be very close to an indexed conversation (`DUPLICATE_MIN_SIMILARITY`, 0.70), and the model must confirm that an excerpt answers *this* question — same topic is not enough, and a question left unanswered stays unanswered. At most `DUPLICATE_REPLIES_PER_HOUR` (3) such replies per group; `DUPLICATE_DETECTION=false` turns it off.
+
+**Catch-up (R8):** `/catchup`, `/catchup 3 days`, *"@Jeli what did I miss since Monday?"*, *"Jeli, qu'est-ce que j'ai raté cette semaine ?"* → highlights, decisions, deadlines and dates, questions still unanswered, and the sessions recorded in that period with their links. Default period: the last 24 hours. The same digest is reused for 10 minutes, so a whole jury asking at once costs one model call.
+
 ---
 
 ## Keeping Jeli's number safe
@@ -71,7 +84,7 @@ WhatsApp restricts numbers that behave like machines or get reported as spam. Je
 
 | Guard | Behaviour |
 |---|---|
-| Never starts a conversation | Jeli only replies to messages addressed to it |
+| Never starts a conversation | Jeli only replies to messages addressed to it — and, rarely, to a question the group already answered (R7, capped at 3 per hour per group, can be switched off) |
 | Human rhythm | Short pause, *seen*, *typing…* for a time that grows with the answer's length, then the reply |
 | No bursts | At least `WHATSAPP_MIN_SEND_INTERVAL_SECONDS` (3 s, randomised) between two messages sent |
 | Per-member limit | At most `WHATSAPP_USER_LIMIT` answers per member per `WHATSAPP_USER_WINDOW_SECONDS` (5 per 10 min) |
@@ -208,7 +221,9 @@ python -m scripts.evaluate --show-answers
 ```
 Runs the fixed question set in [`evals/questions.json`](evals/questions.json) against the real knowledge base: questions answered in the chats, questions answered **only in call recordings** (the source must be a recording), traps where two programmes share vocabulary (hackathon team size vs Wadhwani platform team size), and unrelated questions (must get "I don't know"), in English and French. Reports latency against the 10-second target. Latest results: all pass, median ≈3 s, max ≈4 s.
 
-What the evaluation caught and fixed: the model refusing when a rule was relayed by a member rather than an organiser; French questions answered in English when excerpts were English (the answer language is now stated explicitly); and rules of one programme attributed to another (the instructions now name the community's parallel programmes and forbid mixing them).
+It also checks duplicate detection on real questions re-asked in the group: Jeli must step in for those the group answered, and stay silent for new questions and for questions left unanswered.
+
+What the evaluation caught and fixed: half of the chunks retrieved for a hackathon question were another bot's messages, leaving no usable excerpt once filtered (chunks are now over-fetched, then the best usable ones kept); the model refusing when a rule was relayed by a member rather than an organiser; French questions answered in English when excerpts were English (the answer language is now stated explicitly); and rules of one programme attributed to another (the instructions now name the community's parallel programmes and forbid mixing them).
 
 ### Tests
 ```bash
@@ -302,7 +317,10 @@ Run **exactly one replica of WAHA**: two instances of the same WhatsApp session 
 | `GEMINI_MODELS` | no | Answer models, in fallback order. Default `gemini-3.6-flash,gemini-3.5-flash-lite,gemini-flash-lite-latest` |
 | `ANSWER_MIN_SIMILARITY` | no | Below it, "I don't know" without calling the model. Default 0.60 |
 | `TRANSCRIPTION_MODELS` | no | Models that transcribe recordings, in fallback order. Default `gemini-3.6-flash,gemini-3.5-flash-lite` |
-| `IGNORED_AUTHORS` | no | Comma-separated authors never used in answers (other bots). Names or phone numbers |
+| `IGNORED_AUTHORS` | no | Comma-separated authors never used in answers (other bots). Display names or phone numbers; matched against the WhatsApp id too |
+| `DUPLICATE_DETECTION` | no | Point to earlier answers when the group re-asks a question (R7). Default `true` |
+| `DUPLICATE_MIN_SIMILARITY` | no | Similarity needed before even checking. Default 0.70 |
+| `DUPLICATE_REPLIES_PER_HOUR` | no | Uninvited replies per group per hour. Default 3 |
 | `CHAT_LABELS` | no | Readable chat names in sources: `chat-id=Name;other-id=Other name` |
 | `EXPORT_TIMEZONE` | no | Default timezone of imported exports. Default `UTC` |
 | `INDEX_INTERVAL_SECONDS` | no | How often live messages are indexed. Default 300 |
@@ -328,7 +346,7 @@ app/
 ├── config.py          # settings from environment / .env
 ├── models.py          # platform-independent message types
 ├── adapters/          # whatsapp_waha.py, telegram.py — thin, swappable
-├── answer/            # responder.py, rag.py, llm.py (Gemini + fallback), prompts.py, citations.py, language.py
+├── answer/            # responder.py, rag.py, catchup.py, intents.py, llm.py (Gemini + fallback), prompts.py, citations.py, language.py
 ├── ingest/            # whatsapp_export.py, transcribe.py, chunker.py, live.py
 ├── kb/                # embeddings.py (Gemini), store.py (pgvector), indexer.py, search.py
 └── jobs/              # indexing.py (digest and duplicate check next)

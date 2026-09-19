@@ -8,7 +8,7 @@ from google.genai import errors
 from app.answer.citations import display_author
 from app.answer.language import TEXTS, detect_language
 from app.answer.llm import LLM, GeneratedAnswer, LLMUnavailable
-from app.answer.rag import Answerer
+from app.answer.rag import AlreadyAnswered, Answerer
 from app.answer.citations import timestamped_link
 from app.kb.store import SearchHit
 from app.models import Recording, StoredMessage
@@ -138,6 +138,43 @@ def test_answers_from_a_call_link_to_the_moment_it_was_said(monkeypatch):
     assert "[12:34] Charles Botom: Every team member" in prompt
     assert "[1] 🎥 Module 1 class session · 15 Sep 2026 · at 12:34 · Charles Botom" in reply
     assert "https://youtu.be/6q4uPBO_sDc?t=754" in reply
+
+
+class FakeDuplicateLLM:
+    def __init__(self, result):
+        self.result, self.calls = result, 0
+
+    async def generate(self, prompt, schema, system=None, **kwargs):
+        self.calls += 1
+        return self.result
+
+
+def test_a_question_already_answered_in_the_group_gets_the_earlier_answer(monkeypatch):
+    llm = FakeDuplicateLLM(AlreadyAnswered(already_answered=True, answer="It moved to 25 September.", sources=[1]))
+    reply = asyncio.run(make_answerer(llm, monkeypatch=monkeypatch).already_answered("When is the bootcamp?", 0.7))
+    assert reply.startswith(TEXTS["en"]["already_covered"] + "\nIt moved to 25 September.")
+    assert "[1] METI cohort · 12 Sep 2026, 14:00 UTC" in reply
+
+
+@pytest.mark.parametrize(
+    "result, similarity",
+    [
+        (AlreadyAnswered(already_answered=True, answer="Yes.", sources=[1]), 0.65),  # below the stricter gate
+        (AlreadyAnswered(already_answered=False, answer="", sources=[]), 0.9),  # same topic, not answered
+        (AlreadyAnswered(already_answered=True, answer="Yes.", sources=[]), 0.9),  # no source
+    ],
+)
+def test_jeli_stays_silent_unless_sure_the_group_answered(monkeypatch, result, similarity):
+    hits = [hit(1, ["m1"], similarity, T0)]
+    answerer = make_answerer(FakeDuplicateLLM(result), hits=hits, monkeypatch=monkeypatch)
+    assert asyncio.run(answerer.already_answered("When is the bootcamp?", 0.7)) is None
+
+
+def test_other_bots_are_recognised_by_whatsapp_id_too(monkeypatch):
+    answerer = make_answerer(FakeLLM(), monkeypatch=monkeypatch)
+    live = StoredMessage("x", "g", "whatsapp_live", "UniPods Bot", T0, "hi", author_id="2290149486256@c.us")
+    assert answerer.is_ignored(live)
+    assert not answerer.is_ignored(MESSAGES[0])
 
 
 def test_timestamped_links_only_for_youtube():

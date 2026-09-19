@@ -6,34 +6,50 @@ from app.answer.responder import Responder
 from app.models import IncomingMessage
 
 
-def make_incoming(text, addressed_to_bot=True):
+def make_incoming(text, addressed_to_bot=True, is_private=False, author="Awa", author_id="22370000000@c.us"):
     return IncomingMessage(
         platform="whatsapp",
         chat_id="g@g.us",
         message_id="1",
-        author="Awa",
+        author=author,
         text=text,
         sent_at=datetime(2026, 9, 19, tzinfo=timezone.utc),
-        is_private=False,
+        is_private=is_private,
         addressed_to_bot=addressed_to_bot,
+        author_id=author_id,
     )
 
 
 class FakeAnswerer:
-    def __init__(self):
-        self.questions = []
+    def __init__(self, already=None, ignored=()):
+        self.questions, self.checked = [], []
+        self.already = already
+        self.ignored = set(ignored)
 
     async def answer(self, question, asker):
         self.questions.append((question, asker))
         return "answer"
 
+    async def already_answered(self, question, min_similarity):
+        self.checked.append(question)
+        return self.already
 
-def reply(text, answerer=None, addressed_to_bot=True):
-    return asyncio.run(Responder(answerer).respond(make_incoming(text, addressed_to_bot)))
+    def is_ignored(self, message):
+        return message.author in self.ignored
 
 
-def test_stays_silent_when_not_addressed():
-    assert reply("random chat", FakeAnswerer(), addressed_to_bot=False) is None
+class FakeCatchup:
+    def __init__(self):
+        self.calls = []
+
+    async def summarize(self, since, language):
+        self.calls.append((since, language))
+        return "digest"
+
+
+def reply(text, answerer=None, catchup=None, responder=None, **incoming):
+    responder = responder or Responder(answerer, catchup, duplicate_detection=True)
+    return asyncio.run(responder.respond(make_incoming(text, **incoming)))
 
 
 def test_questions_go_to_the_answerer():
@@ -48,12 +64,50 @@ def test_bare_mention_and_help_commands_explain_what_jeli_does():
     assert reply("aide", FakeAnswerer()) == TEXTS["fr"]["help"]
 
 
-def test_commands_not_available_yet_get_the_help():
+def test_catchup_requests_get_the_digest_in_the_right_language():
+    catchup = FakeCatchup()
+    assert reply("/catchup since Monday", FakeAnswerer(), catchup) == "digest"
+    assert reply("Qu'est-ce que j'ai raté depuis lundi ?", FakeAnswerer(), catchup) == "digest"
+    assert [language for _, language in catchup.calls] == ["en", "fr"]
+
+
+def test_unknown_commands_get_the_help():
     answerer = FakeAnswerer()
-    assert reply("/catchup since Monday", answerer) == TEXTS["en"]["help"]
+    assert reply("/search bootcamp", answerer) == TEXTS["en"]["help"]
     assert answerer.questions == []
 
 
 def test_without_knowledge_base_jeli_says_it_is_not_ready_in_the_right_language():
     assert reply("Quand est le bootcamp ?") == TEXTS["fr"]["not_ready"]
     assert reply("When is the bootcamp?") == TEXTS["en"]["not_ready"]
+    assert reply("/catchup") == TEXTS["en"]["not_ready"]
+
+
+def test_group_chatter_that_is_not_a_question_is_never_checked():
+    answerer = FakeAnswerer(already="💡 already")
+    assert reply("Thanks everyone, see you tomorrow", answerer, addressed_to_bot=False) is None
+    assert answerer.checked == []
+
+
+def test_a_question_the_group_already_answered_gets_a_pointer():
+    answerer = FakeAnswerer(already="💡 already")
+    assert reply("When is the deadline for the hackathon?", answerer, addressed_to_bot=False) == "💡 already"
+
+
+def test_new_questions_get_no_uninvited_reply():
+    assert reply("When is the deadline for the hackathon?", FakeAnswerer(already=None), addressed_to_bot=False) is None
+
+
+def test_uninvited_replies_are_capped_per_group():
+    answerer = FakeAnswerer(already="💡 already")
+    responder = Responder(answerer, duplicate_detection=True, duplicate_replies_per_hour=2)
+    replies = [reply(f"Where is the link {n}?", responder=responder, addressed_to_bot=False) for n in range(4)]
+    assert replies == ["💡 already", "💡 already", None, None]
+
+
+def test_duplicate_detection_can_be_switched_off_and_ignores_other_bots():
+    answerer = FakeAnswerer(already="💡 already", ignored={"OtherBot"})
+    off = Responder(answerer, duplicate_detection=False)
+    assert reply("When is the deadline?", responder=off, addressed_to_bot=False) is None
+    assert reply("When is the deadline?", answerer, addressed_to_bot=False, author="OtherBot") is None
+    assert answerer.checked == []

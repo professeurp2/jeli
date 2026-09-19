@@ -131,6 +131,29 @@ class Store:
             ).fetchall()
         return {row["id"]: Recording(**row) for row in rows}
 
+    async def messages_since(self, since: datetime, limit: int = 1500) -> list[StoredMessage]:
+        """Chat messages (not recording transcripts) since a moment, oldest first; the newest `limit` if more."""
+        async with self._pool.connection() as conn:
+            rows = await (
+                await conn.execute(
+                    "select id, chat_id, source, author, author_id, sent_at, text from jeli.messages "
+                    "where sent_at >= %s and source <> 'recording' order by sent_at desc, id desc limit %s",
+                    (since, limit),
+                )
+            ).fetchall()
+        return [StoredMessage(**row) for row in reversed(rows)]
+
+    async def recordings_since(self, since: datetime) -> list[Recording]:
+        async with self._pool.connection() as conn:
+            rows = await (
+                await conn.execute(
+                    "select id, title, recorded_at, method, source_url, duration_seconds from jeli.recordings "
+                    "where recorded_at >= %s order by recorded_at",
+                    (since,),
+                )
+            ).fetchall()
+        return [Recording(**row) for row in rows]
+
     async def pending_chats(self) -> list[str]:
         async with self._pool.connection() as conn:
             rows = await (await conn.execute("select distinct chat_id from jeli.messages where chunk_id is null")).fetchall()

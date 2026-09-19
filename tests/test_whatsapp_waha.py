@@ -197,6 +197,19 @@ def test_webhook_stays_silent_on_ordinary_group_chatter(waha_env, calls):
     assert calls == []
 
 
+def test_jeli_steps_in_when_the_responder_finds_an_earlier_answer(waha_env, calls):
+    async def respond(message):
+        return None if message.addressed_to_bot else "💡 This was already answered in the group: 24 September."
+
+    with TestClient(app) as client:
+        app.state.whatsapp.respond = respond
+        post_event(client, message_event("When is the hackathon deadline?"))
+    paths = [path for path, _ in calls]
+    # No read receipt: nobody asked Jeli. Typing, then the reply quoting the question.
+    assert paths == ["/api/startTyping", "/api/stopTyping", "/api/sendText"]
+    assert calls[-1][1]["text"].startswith("💡")
+
+
 def test_group_chatter_is_remembered_once(waha_env, calls):
     remembered = []
 

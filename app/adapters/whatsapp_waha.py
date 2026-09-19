@@ -220,28 +220,50 @@ class Waha:
         await self._post("/api/sendText", payload)
 
     async def handle(self, message: IncomingMessage) -> None:
-        """Answer like a person would: read, type for a while, then reply (WAHA's recommended sequence)."""
-        if not message.addressed_to_bot or not self.may_reply(message):
-            return
-        chat = {"chatId": message.chat_id}
         try:
-            await asyncio.sleep(reading_delay())
-            await self._post_quietly("/api/sendSeen", {**chat, "messageIds": [message.message_id]})
-            await self._post_quietly("/api/startTyping", chat)
-            try:
-                typing_since = time.monotonic()
-                reply = await self.respond(message)
-                if reply:
-                    # Answer generation counts as typing time: only wait for what is left.
-                    await asyncio.sleep(max(0.0, typing_duration(reply) - (time.monotonic() - typing_since)))
-                    # Still "typing…" while other answers go out first.
-                    await self.spacer.wait_turn()
-            finally:
-                await self._post_quietly("/api/stopTyping", chat)
-            if reply:
-                await self.send_text(message.chat_id, reply, reply_to=message.message_id)
+            if message.addressed_to_bot:
+                await self._converse(message)
+            else:
+                await self._step_in_if_needed(message)
         except Exception:
             log.exception("Failed to handle WhatsApp message %s", message.message_id)
+
+    async def _converse(self, message: IncomingMessage) -> None:
+        """Answer like a person would: read, type for a while, then reply (WAHA's recommended sequence)."""
+        if not self.may_reply(message):
+            return
+        chat = {"chatId": message.chat_id}
+        await asyncio.sleep(reading_delay())
+        await self._post_quietly("/api/sendSeen", {**chat, "messageIds": [message.message_id]})
+        await self._post_quietly("/api/startTyping", chat)
+        try:
+            typing_since = time.monotonic()
+            reply = await self.respond(message)
+            if reply:
+                # Answer generation counts as typing time: only wait for what is left.
+                await asyncio.sleep(max(0.0, typing_duration(reply) - (time.monotonic() - typing_since)))
+                # Still "typing…" while other answers go out first.
+                await self.spacer.wait_turn()
+        finally:
+            await self._post_quietly("/api/stopTyping", chat)
+        if reply:
+            await self.send_text(message.chat_id, reply, reply_to=message.message_id)
+
+    async def _step_in_if_needed(self, message: IncomingMessage) -> None:
+        """A message not addressed to Jeli: it speaks only when the responder finds that the group
+        already answered this question (R7), and within the same anti-ban limits."""
+        reply = await self.respond(message)
+        if not reply or not self.may_reply(message):
+            return
+        chat = {"chatId": message.chat_id}
+        await asyncio.sleep(reading_delay())
+        await self._post_quietly("/api/startTyping", chat)
+        try:
+            await asyncio.sleep(typing_duration(reply))
+            await self.spacer.wait_turn()
+        finally:
+            await self._post_quietly("/api/stopTyping", chat)
+        await self.send_text(message.chat_id, reply, reply_to=message.message_id)
 
     async def aclose(self) -> None:
         await self._http.aclose()

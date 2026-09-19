@@ -32,6 +32,15 @@ TEXTS = {
         "sources": "Sources",
         "fallback": "I can't write a full answer right now, but here is where the group talked about it:",
         "not_ready": "I'm not connected to the group's memory yet. Try again soon!",
+        "already_covered": "💡 This was already answered in the group:",
+        "catchup_header": "🗓️ Catch-up since {since} ({messages} messages)",
+        "catchup_nothing": "Nothing new in the group since {since}.",
+        "catchup_unavailable": "{messages} messages since {since}, but I can't summarise them right now. Try again in a few minutes.",
+        "catchup_highlights": "📣 Highlights",
+        "catchup_decisions": "✅ Decisions",
+        "catchup_deadlines": "⏰ Deadlines and dates",
+        "catchup_questions": "❓ Still unanswered",
+        "catchup_recordings": "🎥 Recorded sessions",
         "help": (
             "Hi, I'm Jeli, the group's memory. Ask me about anything discussed in the group — "
             "mention me (@Jeli), reply to one of my messages, or start with \"Jeli,\". "
@@ -43,6 +52,15 @@ TEXTS = {
         "sources": "Sources",
         "fallback": "Je ne peux pas rédiger de réponse complète pour l'instant, mais voici où le groupe en a parlé :",
         "not_ready": "Je ne suis pas encore connecté à la mémoire du groupe. Réessayez bientôt !",
+        "already_covered": "💡 Cette question a déjà reçu une réponse dans le groupe :",
+        "catchup_header": "🗓️ Récap depuis {since} ({messages} messages)",
+        "catchup_nothing": "Rien de nouveau dans le groupe depuis {since}.",
+        "catchup_unavailable": "{messages} messages depuis {since}, mais je ne peux pas les résumer pour l'instant. Réessayez dans quelques minutes.",
+        "catchup_highlights": "📣 À retenir",
+        "catchup_decisions": "✅ Décisions",
+        "catchup_deadlines": "⏰ Échéances et dates",
+        "catchup_questions": "❓ Questions restées sans réponse",
+        "catchup_recordings": "🎥 Sessions enregistrées",
         "help": (
             "Bonjour, je suis Jeli, la mémoire du groupe. Posez-moi une question sur ce qui s'est dit ici — "
             "mentionnez-moi (@Jeli), répondez à l'un de mes messages, ou commencez par « Jeli, ». "

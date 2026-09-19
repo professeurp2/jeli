@@ -23,20 +23,29 @@ from app.answer.citations import (
     format_time,
 )
 from app.answer.language import TEXTS, detect_language
+from pydantic import BaseModel
+
 from app.answer.llm import LLM, LLMUnavailable
-from app.answer.prompts import SYSTEM, build_prompt
+from app.answer.prompts import DUPLICATE_SYSTEM, SYSTEM, build_prompt
 from app.ingest.transcribe import format_offset
 from app.kb.embeddings import Embedder
 from app.kb.indexer import RECORDING_PREFIX
-from app.kb.search import search
+from app.kb.search import GUARANTEED_SEMANTIC, search
 from app.kb.store import Store
-from app.models import Recording
+from app.models import IncomingMessage, Recording, StoredMessage
 
 log = logging.getLogger(__name__)
 
-RETRIEVED_CHUNKS = 6
+RETRIEVED_CHUNKS = 6  # excerpts given to the model
+CANDIDATE_CHUNKS = 12  # retrieved, before leaving out ignored authors
 SOURCES_SHOWN = 3
 FALLBACK_SNIPPET_CHARS = 160
+
+
+class AlreadyAnswered(BaseModel):
+    already_answered: bool
+    answer: str
+    sources: list[int]
 
 
 @dataclass(frozen=True)
@@ -87,7 +96,7 @@ class Answerer:
     async def answer(self, question: str, asker: str) -> str:
         language = detect_language(question)
         texts = TEXTS[language]
-        hits = await search(self.store, self.embedder, question, limit=RETRIEVED_CHUNKS)
+        hits = await search(self.store, self.embedder, question, limit=CANDIDATE_CHUNKS)
         if not hits or max(hit.similarity for hit in hits) < self.min_similarity:
             return texts["dont_know"]
 
@@ -105,26 +114,67 @@ class Answerer:
         cited = [e for e in excerpts if e.number in set(generated.sources)]
         if not generated.answered or not cited or not generated.answer.strip():
             return texts["dont_know"]
-        sources = "\n".join(e.source() for e in cited[:SOURCES_SHOWN])
-        return f"{generated.answer.strip()}\n\n📌 {texts['sources']}\n{sources}"
+        return self._with_sources(generated.answer, cited, texts)
 
-    async def _excerpts(self, hits) -> list[Excerpt]:
-        """Rebuild each chunk from its messages, oldest chunk first, without ignored authors."""
+    async def already_answered(self, question: str, min_similarity: float) -> str | None:
+        """For a question asked in the group (not to Jeli): the group's earlier answer, or None.
+
+        Jeli speaks uninvited only when sure: a stricter similarity gate, a model asked to confirm
+        that an excerpt answers this very question, and silence on any doubt or failure.
+        """
+        language = detect_language(question)
+        hits = await search(self.store, self.embedder, question, limit=CANDIDATE_CHUNKS)
+        if not hits or max(hit.similarity for hit in hits) < min_similarity:
+            return None
+        excerpts = await self._excerpts(hits)
+        if not excerpts:
+            return None
+        prompt = build_prompt(question, "a member", [e.for_prompt() for e in excerpts], language)
+        try:
+            generated = await self.llm.generate(prompt, AlreadyAnswered, system=DUPLICATE_SYSTEM)
+        except LLMUnavailable:
+            return None
+        cited = [e for e in excerpts if e.number in set(generated.sources)]
+        if not generated.already_answered or not cited or not generated.answer.strip():
+            return None
+        texts = TEXTS[language]
+        return self._with_sources(f"{texts['already_covered']}\n{generated.answer.strip()}", cited, texts)
+
+    def is_ignored(self, message: StoredMessage | IncomingMessage) -> bool:
+        """By display name or phone number, and by WhatsApp id: live messages carry a display name,
+        not the phone number that exports show."""
+        keys = {author_key(message.author)}
+        if message.author_id:
+            keys.add(author_key(message.author_id.split("@")[0]))
+        return bool(keys & self.ignored)
+
+    @staticmethod
+    def _with_sources(answer: str, cited: list[Excerpt], texts: dict[str, str]) -> str:
+        sources = "\n".join(e.source() for e in cited[:SOURCES_SHOWN])
+        return f"{answer.strip()}\n\n📌 {texts['sources']}\n{sources}"
+
+    async def _excerpts(self, hits, keep: int = RETRIEVED_CHUNKS) -> list[Excerpt]:
+        """Rebuild the best `keep` chunks from their messages, without ignored authors, oldest first.
+
+        Hits are over-fetched: measured, half of the chunks retrieved for a hackathon question were
+        entirely another bot's messages, which left no excerpt with the answer once filtered out.
+        """
         messages = await self.store.messages_by_ids([id_ for hit in hits for id_ in hit.message_ids])
         recordings = await self.store.recordings(
             sorted({hit.chat_id for hit in hits if hit.chat_id.startswith(RECORDING_PREFIX)})
         )
         by_id = {m.id: m for m in messages}
-        rank = {hit.chunk_id: position for position, hit in enumerate(hits)}
+        usable = []  # (fused rank, hit, messages kept), in fused order
+        for position, hit in enumerate(hits):
+            kept = [by_id[id_] for id_ in hit.message_ids if id_ in by_id and not self.is_ignored(by_id[id_])]
+            if kept:
+                usable.append((position, hit, kept))
+        # As in search: the semantically closest are kept first, then the best of the fused order.
+        closest = sorted(usable, key=lambda item: item[1].similarity, reverse=True)[:GUARANTEED_SEMANTIC]
+        chosen = (closest + [item for item in usable if item not in closest])[:keep]
+
         excerpts = []
-        for hit in sorted(hits, key=lambda h: h.started_at):
-            kept = [
-                by_id[id_]
-                for id_ in hit.message_ids
-                if id_ in by_id and author_key(by_id[id_].author) not in self.ignored
-            ]
-            if not kept:
-                continue
+        for position, hit, kept in sorted(chosen, key=lambda item: item[1].started_at):
             recording = recordings.get(hit.chat_id)
             if recording:
                 lines = [f"[{format_offset(m.sent_at - recording.recorded_at)}] {m.author}: {m.text}" for m in kept]
@@ -133,7 +183,7 @@ class Answerer:
             excerpts.append(
                 Excerpt(
                     number=len(excerpts) + 1,
-                    relevance_rank=rank[hit.chunk_id],
+                    relevance_rank=position,
                     chat_label=self.chat_labels.get(hit.chat_id, hit.chat_id),
                     started_at=kept[0].sent_at,
                     authors=list(dict.fromkeys(m.author for m in kept)),

@@ -1,7 +1,10 @@
-"""What Jeli replies to a message addressed to it. Every adapter calls Responder.respond."""
+"""What Jeli replies to a message. Every adapter calls Responder.respond with every message."""
 
 import logging
 
+from app.adapters.pacing import SlidingWindowLimiter
+from app.answer.catchup import Catchup
+from app.answer.intents import catchup_since, looks_like_question
 from app.answer.language import TEXTS, detect_language
 from app.answer.rag import Answerer
 from app.models import IncomingMessage
@@ -12,20 +15,52 @@ HELP_COMMANDS = {"/start", "/help", "/aide", "help", "aide"}
 
 
 class Responder:
-    def __init__(self, answerer: Answerer | None = None):
+    def __init__(
+        self,
+        answerer: Answerer | None = None,
+        catchup: Catchup | None = None,
+        duplicate_detection: bool = False,
+        duplicate_min_similarity: float = 0.70,
+        duplicate_replies_per_hour: int = 3,
+    ):
         self.answerer = answerer
+        self.catchup = catchup
+        self.duplicate_detection = duplicate_detection
+        self.duplicate_min_similarity = duplicate_min_similarity
+        # Uninvited replies are capped per group, on top of the channel's own anti-ban limits.
+        self.uninvited = SlidingWindowLimiter(duplicate_replies_per_hour, 3600)
 
     async def respond(self, message: IncomingMessage) -> str | None:
         """The reply to a message, or None to stay silent."""
         if not message.addressed_to_bot:
-            return None
+            return await self._already_answered(message)
+
         text = message.text.strip()
-        texts = TEXTS[detect_language(text)]
+        language = detect_language(text)
+        texts = TEXTS[language]
         if not text or text.lower() in HELP_COMMANDS:
             return texts["help"]
+        since = catchup_since(text)
+        if since is not None:
+            return await self.catchup.summarize(since, language) if self.catchup else texts["not_ready"]
         if text.startswith("/"):
-            # /catchup and /search arrive with the next features; until then, explain what works.
             return texts["help"]
         if self.answerer is None:
             return texts["not_ready"]
         return await self.answerer.answer(text, asker=message.author)
+
+    async def _already_answered(self, message: IncomingMessage) -> str | None:
+        """R7: a question asked in the group that the group already answered gets a pointer to it."""
+        if (
+            not self.duplicate_detection
+            or self.answerer is None
+            or message.is_private
+            or not looks_like_question(message.text)
+            or self.answerer.is_ignored(message)
+        ):
+            return None
+        reply = await self.answerer.already_answered(message.text, self.duplicate_min_similarity)
+        if reply and not self.uninvited.allow(message.chat_id):
+            log.info("Already-answered question in %s, but the hourly cap on uninvited replies is reached", message.chat_id)
+            return None
+        return reply

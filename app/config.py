@@ -40,6 +40,11 @@ class Settings(BaseSettings):
     answer_min_similarity: float = 0.60
     # Authors whose messages are never used in answers, e.g. other bots in the group (comma-separated).
     ignored_authors: str = ""
+    # R7: when a member asks the group a question it already answered, Jeli points to that answer,
+    # uninvited. Stricter than normal answers, and capped per group to keep a low profile.
+    duplicate_detection: bool = True
+    duplicate_min_similarity: float = 0.70
+    duplicate_replies_per_hour: int = 3
     # Readable names for chats in citations: "chat-id=Name;other-id=Other name".
     chat_labels: str = ""
     # Supabase Postgres, through the pooler: postgresql://jeli_app.<ref>:<password>@<pooler-host>:5432/postgres
