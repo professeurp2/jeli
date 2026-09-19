@@ -1,4 +1,6 @@
 fastapi>=0.115
+# Forms and file uploads on the dashboard
+python-multipart>=0.0.9
 uvicorn[standard]>=0.30
 httpx>=0.27
 python-telegram-bot>=22.0,<23

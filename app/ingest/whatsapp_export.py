@@ -54,15 +54,24 @@ class ExportedMessage:
 
 def read_export(path: Path) -> str:
     """Text of an export: the .txt itself, or the chat file inside WhatsApp's .zip."""
-    if path.suffix.lower() == ".zip":
-        with zipfile.ZipFile(path) as archive:
+    return read_export_bytes(path.name, path.read_bytes())
+
+
+def read_export_bytes(filename: str, data: bytes) -> str:
+    """The same, from an uploaded file."""
+    if filename.lower().endswith(".zip"):
+        try:
+            archive = zipfile.ZipFile(io.BytesIO(data))
+        except zipfile.BadZipFile as error:
+            raise ValueError("This .zip file cannot be opened") from error
+        with archive:
             names = [n for n in archive.namelist() if n.lower().endswith(".txt")]
             if not names:
-                raise ValueError(f"No .txt chat file in {path}")
+                raise ValueError(f"No .txt chat file in {filename}")
             # "_chat.txt" on iPhone, "WhatsApp Chat with …" on Android.
             name = next((n for n in names if n.endswith("_chat.txt")), names[0])
-            return io.TextIOWrapper(archive.open(name), encoding="utf-8-sig").read()
-    return path.read_text(encoding="utf-8-sig")
+            return archive.read(name).decode("utf-8-sig", errors="replace")
+    return data.decode("utf-8-sig", errors="replace")
 
 
 def _date_order(dates: list[tuple[int, int, int]], day_first_default: bool) -> str:

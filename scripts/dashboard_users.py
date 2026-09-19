@@ -11,7 +11,7 @@ import argparse
 import secrets
 from pathlib import Path
 
-from app.dashboard import hash_password
+from app.web.auth import hash_password
 
 
 def main() -> None:

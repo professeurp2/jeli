@@ -29,7 +29,7 @@ Built for the **UniPods METI AI Innovation Programme — Cohort 1 Chatbot Hackat
 | R9 | Session recaps: summary, decisions, action items with owners, key moments linked to the video | ✅ Day 6 |
 | R10 | Daily digest in each group (opt-in) | ✅ Day 6 |
 | R11 | `/search <topic>`: where the group talked about it, without a model call | ✅ Day 6 |
-| R13 | Web dashboard for the team: status, usage, group questions, knowledge — one account per member | ✅ |
+| R13 | The team's control panel: pause, try, questions, deadlines, old conversations, activities, misuse watchlist, exceptions, settings, WhatsApp link, activity log | ✅ |
 | R14 | Deadline reminders: `/deadlines`, and "coming up" in every digest | ✅ |
 
 ---
@@ -84,7 +84,28 @@ It speaks up only when sure: the question must look like one, be very close to a
 
 **Deadlines (R14):** Jeli scans new messages and call transcripts every hour for deadlines a message states — resolving "Friday" or "tomorrow" from that message's date, skipping guesses, keeping an organiser's announcement over a member's contradicting claim, and merging two wordings of the same deadline. `/deadlines` (or *"what are the upcoming deadlines?"*) lists the next two weeks with who announced each and where; every catch-up and daily digest ends with what is due in the next three days. Reminders never come as extra messages of their own.
 
-**Dashboard (R13):** `https://<jeli-domain>/dashboard`, for the team: one account per member, each with its own password (`python -m scripts.dashboard_users --passwords <file> <names…>` writes the passwords to a file to hand out, and prints `DASHBOARD_USERS`, which keeps only salted scrypt hashes; no accounts = no dashboard). It shows the status of WhatsApp, answers, background jobs and each Gemini model; usage over 7 days (questions, share answered with sources, "I don't know", reply times, catch-ups, recaps…); the questions asked in the groups — those Jeli could not answer (knowledge gaps to fill) and all of them (what the community needs: material for the pitch and the next features); and what Jeli knows (chats, recordings, indexing backlog, deadlines). No member ever appears: usage is counted as anonymous events, group questions are kept without their author, mentions or phone numbers, and private questions are never kept. 
+**Dashboard (R13): the team's control panel.** `https://<jeli-domain>/dashboard`, in plain words — no model names, thresholds or ids. Each team member signs in with their own password; everything they change applies at once, without a redeploy, and is written to the activity log with their name.
+
+| Page | What the team does there |
+|---|---|
+| Overview | Jeli's state, what needs attention, questions per day, coming deadlines, activities |
+| **Pause Jeli** (every page) | One click: Jeli answers nobody and posts nothing, but keeps remembering the groups |
+| Try Jeli | Ask as a member would (questions, `/catchup`, `/recap`, `/deadlines`, `/search`), or say something in a "group" to see whether Jeli would step in. Nothing reaches WhatsApp; works while paused |
+| Questions | What the groups asked and what Jeli couldn't answer (7 or 30 days), copy or download — for the FAQ, the pitch, the next features |
+| Deadlines | Remove a wrong one (it is never found again), add one announced elsewhere |
+| Knowledge | Add old conversations from WhatsApp's "Export chat" (.txt or .zip): a summary to check first, then Jeli learns them; rename how a conversation is cited |
+| Activities | Switch on/off, run now or stop: memory updates, deadline finding, the daily summary (time, language), the weekly team report (day, time) |
+| Watchlist | Members who misuse Jeli (see below): block, unblock, forgive |
+| Exceptions | People Jeli never quotes (other bots), people it doesn't answer, the groups it works in |
+| Settings | How sure Jeli must be before answering (careful / balanced / relaxed), its name, pointing to earlier answers, pace limits |
+| WhatsApp | Connection state, the code to scan to link Jeli's phone, how to keep the number safe |
+| Team | Members, change one's own password, the activity log |
+
+Settings changed on the dashboard are kept in `jeli.settings` and win over the environment; secrets and the team's phone numbers are never among them. Signing in sets a signed session cookie (`DASHBOARD_SECRET`); every change carries a token tied to the session and is refused from another site; five wrong passwords in 15 minutes and that name or address must wait. Accounts: `python -m scripts.dashboard_users --passwords <file> <names…>` writes new passwords to a file to hand out and prints `DASHBOARD_USERS` (salted scrypt hashes only); members can then choose their own. No accounts = no dashboard.
+
+**Misuse (watchlist):** Jeli spots members who try to wear it out or turn it against its rules — floods of questions (past the per-member limit), the same message three times in 10 minutes, oversized messages, attempts to make it ignore its instructions — and records each incident (who and what, never the message). Three within an hour and Jeli stays silent with that member for an hour on its own; the team can block them for good.
+
+No member appears in usage figures: usage is counted as anonymous events, group questions are kept without their author, mentions or phone numbers, and private questions are never kept. 
 
 **Weekly team report:** once a week (`TEAM_REPORT_TIME`, e.g. `mon 07:00` UTC), each team member (`TEAM_NUMBERS`) gets the dashboard's news in a private message: questions and outcomes, what Jeli could not answer, the latest group questions, what is due in the next 7 days, and a link to the dashboard. Private messages a number starts are what WhatsApp watches most, so: only numbers that are on WhatsApp (checked first), a minute or so apart, never twice in a week (claimed in the database, by a hash of the number), and nothing in a quiet week. **Each member saves Jeli's number and sends it a first message** before the first report, so it is a conversation they started. The numbers are personal data: set them on the server only, never in the repository.
 
@@ -338,6 +359,7 @@ Run **exactly one replica of WAHA**: two instances of the same WhatsApp session 
 | `DUPLICATE_MIN_SIMILARITY` | no | Similarity needed before even checking. Default 0.70 |
 | `DUPLICATE_REPLIES_PER_HOUR` | no | Uninvited replies per group per hour. Default 3 |
 | `DASHBOARD_USERS` | no | Accounts of `/dashboard`, `name:salt:hash,…`, made by `python -m scripts.dashboard_users`. Empty: no dashboard |
+| `DASHBOARD_SECRET` | with `DASHBOARD_USERS` | Random string signing the dashboard's sessions. Empty: members sign in again after each restart |
 | `DAILY_DIGEST_TIME` | no | `HH:MM` (UTC) to post the daily digest in each group of `WHATSAPP_GROUP_IDS`. Empty: off |
 | `TEAM_REPORT_TIME` | no | Day and time (UTC) of the weekly team report, e.g. `mon 07:00`. Empty: off |
 | `TEAM_NUMBERS` | with `TEAM_REPORT_TIME` | Team members' WhatsApp numbers, comma-separated. Server only |
@@ -367,11 +389,13 @@ app/
 ├── config.py          # settings from environment / .env
 ├── models.py          # platform-independent message types
 ├── adapters/          # whatsapp_waha.py, telegram.py — thin, swappable
-├── dashboard.py       # /dashboard (R13)
+├── serve.py           # production entry point (one dual-stack socket)
+├── web/               # the dashboard: pages.py, auth.py (sign-in, sessions, CSRF), ui.py (look), chart.py
+├── control/           # runtime.py (team settings), apply.py, activities.py + setup.py (background work), guard.py (misuse), schedule.py, words.py
 ├── answer/            # responder.py, rag.py, catchup.py, recaps.py, deadlines.py, intents.py, llm.py (Gemini + fallback), prompts.py, citations.py, language.py
 ├── ingest/            # whatsapp_export.py, transcribe.py, chunker.py, live.py
 ├── kb/                # embeddings.py (Gemini), store.py (pgvector), indexer.py, search.py
-└── jobs/              # indexing.py, deadlines.py, daily_digest.py, team_report.py
+└── jobs/              # daily_digest.py, team_report.py (one run each; scheduled by control/activities.py)
 scripts/               # import_whatsapp_export, import_recording, recap_recording, extract_deadlines, dashboard_users, search, ask, evaluate, forget
 evals/questions.json   # fixed question set for answer quality
 db/schema.sql          # knowledge base schema and least-privilege role

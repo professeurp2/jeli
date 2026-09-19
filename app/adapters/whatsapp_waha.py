@@ -25,7 +25,9 @@ from fastapi import APIRouter, BackgroundTasks, Header, HTTPException, Request
 
 from app.adapters import Ingest, Respond
 from app.adapters.pacing import SendSpacer, SlidingWindowLimiter, reading_delay, typing_duration
+from app.answer.citations import is_ignored
 from app.config import Settings
+from app.control.guard import Guard
 from app.models import IncomingMessage
 
 log = logging.getLogger(__name__)
@@ -147,6 +149,10 @@ class Waha:
         # Set from WAHA's session.status events: Jeli stays silent while the session is not WORKING.
         self.paused = False
         self.status: str | None = None
+        # Set by the team from the dashboard: Jeli keeps remembering the groups but sends nothing.
+        self.suspended = False
+        # Spots and silences members who misuse Jeli (floods, repeats, manipulation attempts).
+        self.guard: Guard | None = None
 
     def accepts(self, message: IncomingMessage) -> bool:
         """Direct messages are always accepted; groups only if listed in WHATSAPP_GROUP_IDS (when set)."""
@@ -181,7 +187,11 @@ class Waha:
         self.set_status(status)
 
     def may_reply(self, message: IncomingMessage) -> bool:
-        """Anti-ban guards: never answer while the session is unhealthy, late, or too often."""
+        """Anti-ban guards: never answer while paused by the team or the session is unhealthy, nor
+        late, too often, or to a member who misuses Jeli."""
+        if self.suspended:
+            log.info("Jeli is paused by the team: not answering message %s", message.message_id)
+            return False
         if self.paused:
             log.warning("Session is not WORKING: not answering message %s", message.message_id)
             return False
@@ -189,8 +199,17 @@ class Waha:
         if age > MAX_REPLY_AGE_SECONDS:
             log.info("Not answering message %s: %d s old (backlog after a reconnection)", message.message_id, age)
             return False
+        if self.guard:
+            refusal = self.guard.check(message) if message.addressed_to_bot else (
+                "blocked" if is_ignored(message, self.guard.blocked) else None
+            )
+            if refusal:
+                log.info("Not answering message %s: %s", message.message_id, refusal)
+                return False
         if not self.user_limiter.allow(message.author_id or message.chat_id):
             log.warning("Member rate limit reached: not answering message %s", message.message_id)
+            if self.guard and message.addressed_to_bot:
+                self.guard.report(message, "flood")
             return False
         if not self.hourly_limiter.allow("all"):
             log.error("Hourly answer limit reached: Jeli stays silent until the window frees up")
@@ -222,6 +241,8 @@ class Waha:
         await self._post("/api/sendText", payload)
 
     async def handle(self, message: IncomingMessage) -> None:
+        if self.suspended:
+            return  # the message is still remembered (ingested separately)
         try:
             if message.addressed_to_bot:
                 await self._converse(message)
@@ -270,7 +291,7 @@ class Waha:
     async def post(self, chat_id: str, text: str) -> bool:
         """A message Jeli sends on its own schedule (daily digest, weekly report), within the same limits.
         Returns False when it was not sent: session not WORKING or hourly limit reached."""
-        if self.paused or not self.hourly_limiter.allow("all"):
+        if self.suspended or self.paused or not self.hourly_limiter.allow("all"):
             return False
         chat = {"chatId": chat_id}
         await self._post_quietly("/api/startTyping", chat)
@@ -296,13 +317,75 @@ class Waha:
 
     async def post_private(self, number: str, text: str) -> bool:
         """A private message to a team member (the weekly report), within the same limits."""
-        if self.paused:
+        if self.suspended or self.paused:
             return False
         chat_id = await self.private_chat(number)
         if chat_id is None:
             log.warning("The number ending in %s is not on WhatsApp: no report sent", number[-2:])
             return False
         return await self.post(chat_id, text)
+
+    # --- For the dashboard's WhatsApp page -------------------------------------------------------
+
+    async def me(self) -> dict | None:
+        """Jeli's own account ({"id", "pushName"}) while linked, else None."""
+        try:
+            response = await self._http.get(f"/api/sessions/{self.session}/me")
+            response.raise_for_status()
+            return response.json() or None
+        except (httpx.HTTPError, ValueError):
+            return None
+
+    async def profile_picture(self, chat_id: str) -> bytes | None:
+        """The profile picture of a chat or of Jeli itself, as image bytes, if it has one."""
+        try:
+            response = await self._http.get(
+                "/api/contacts/profile-picture", params={"contactId": chat_id, "session": self.session}
+            )
+            response.raise_for_status()
+            url = (response.json() or {}).get("profilePictureURL")
+            if not url:
+                return None
+            async with httpx.AsyncClient(timeout=15) as client:
+                picture = await client.get(url)
+                picture.raise_for_status()
+                return picture.content
+        except (httpx.HTTPError, ValueError):
+            return None
+
+    async def qr_code(self) -> bytes | None:
+        """The QR code to link Jeli's phone, as a PNG, while the session waits for it."""
+        try:
+            response = await self._http.get(f"/api/{self.session}/auth/qr", headers={"Accept": "image/png"})
+            response.raise_for_status()
+            return response.content if response.headers.get("content-type", "").startswith("image/") else None
+        except httpx.HTTPError:
+            return None
+
+    async def restart_session(self) -> bool:
+        """Start the connection again (a new QR code when the number is not linked)."""
+        try:
+            response = await self._http.post(f"/api/sessions/{self.session}/restart")
+            response.raise_for_status()
+        except httpx.HTTPError as error:
+            log.error("Cannot restart the WhatsApp session: %r", error)
+            return False
+        await self.sync_status()
+        return True
+
+    async def group_names(self) -> dict[str, str]:
+        """The groups Jeli's number is in: id → name."""
+        try:
+            response = await self._http.get(f"/api/{self.session}/chats/overview", params={"limit": 200})
+            response.raise_for_status()
+            chats = response.json()
+        except (httpx.HTTPError, ValueError):
+            return {}
+        return {
+            chat["id"]: chat.get("name") or chat["id"]
+            for chat in chats
+            if isinstance(chat, dict) and str(chat.get("id", "")).endswith("@g.us")
+        }
 
     async def aclose(self) -> None:
         await self._http.aclose()

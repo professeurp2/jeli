@@ -75,7 +75,7 @@ class Responder:
             reply, kind = await self._route(message.text.strip(), message.author, language)
         else:
             reply, kind = await self._already_answered(message), "already_answered"
-        if reply and self.record:
+        if reply and self.record and message.platform != "dashboard":  # tries from the dashboard are not usage
             event = UsageEvent(
                 kind=kind,
                 outcome=_outcome(kind, reply, language),

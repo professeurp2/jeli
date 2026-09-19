@@ -58,6 +58,7 @@ class Deadline:
     programme: str = ""
     message_id: str | None = None
     author: str = ""
+    id: int | None = None  # set once stored
 
 
 @dataclass(frozen=True)

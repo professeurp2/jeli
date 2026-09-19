@@ -210,16 +210,127 @@ class Store:
                 added += cursor.rowcount
         return added
 
-    async def deadlines_between(self, start: date, end: date) -> list[Deadline]:
+    async def deadlines_between(self, start: date, end: date, include_dismissed: bool = False) -> list[Deadline]:
+        """Deadlines due between two days. Those the team removed only with include_dismissed, so
+        that extraction knows them and never finds them again."""
         async with self._pool.connection() as conn:
             rows = await (
                 await conn.execute(
-                    "select what, due_date, chat_id, announced_at, due_time, programme, message_id, author "
-                    "from jeli.deadlines where due_date between %s and %s order by due_date, due_time, announced_at",
-                    (start, end),
+                    "select id, what, due_date, chat_id, announced_at, due_time, programme, message_id, author "
+                    "from jeli.deadlines where due_date between %s and %s and (%s or dismissed_at is null) "
+                    "order by due_date, due_time, announced_at",
+                    (start, end, include_dismissed),
                 )
             ).fetchall()
         return [Deadline(**row) for row in rows]
+
+    async def dismiss_deadline(self, deadline_id: int, actor: str) -> str | None:
+        """Remove a deadline from every list; returns what it was, or None if unknown."""
+        async with self._pool.connection() as conn:
+            row = await (
+                await conn.execute(
+                    "update jeli.deadlines set dismissed_at = now(), dismissed_by = %s "
+                    "where id = %s and dismissed_at is null returning what",
+                    (actor, deadline_id),
+                )
+            ).fetchone()
+        return row["what"] if row else None
+
+    # --- Control panel -------------------------------------------------------------------------
+
+    async def load_settings(self) -> dict:
+        async with self._pool.connection() as conn:
+            rows = await (await conn.execute("select key, value from jeli.settings")).fetchall()
+        return {row["key"]: row["value"] for row in rows}
+
+    async def save_settings(self, values: dict, actor: str) -> None:
+        async with self._pool.connection() as conn:
+            for key, value in values.items():
+                await conn.execute(
+                    "insert into jeli.settings (key, value, updated_by) values (%s, %s, %s) on conflict (key) "
+                    "do update set value = excluded.value, updated_at = now(), updated_by = excluded.updated_by",
+                    (key, Jsonb(value), actor),
+                )
+
+    async def add_audit(self, actor: str, action: str) -> None:
+        async with self._pool.connection() as conn:
+            await conn.execute("insert into jeli.audit (actor, action) values (%s, %s)", (actor, action))
+
+    async def audit_log(self, limit: int = 100) -> list[dict]:
+        async with self._pool.connection() as conn:
+            return await (
+                await conn.execute("select at, actor, action from jeli.audit order by at desc limit %s", (limit,))
+            ).fetchall()
+
+    async def password_hashes(self) -> dict[str, str]:
+        """Passwords members chose themselves; they replace the ones they were given."""
+        async with self._pool.connection() as conn:
+            rows = await (await conn.execute("select name, password_hash from jeli.dashboard_passwords")).fetchall()
+        return {row["name"]: row["password_hash"] for row in rows}
+
+    async def set_password_hash(self, name: str, password_hash: str) -> None:
+        async with self._pool.connection() as conn:
+            await conn.execute(
+                "insert into jeli.dashboard_passwords (name, password_hash) values (%s, %s) on conflict (name) "
+                "do update set password_hash = excluded.password_hash, updated_at = now()",
+                (name, password_hash),
+            )
+
+    async def record_incident(self, member_key: str, member_name: str, kind: str) -> None:
+        async with self._pool.connection() as conn:
+            await conn.execute(
+                "insert into jeli.incidents (member_key, member_name, kind) values (%s, %s, %s)",
+                (member_key, member_name, kind),
+            )
+
+    async def incidents_since(self, since: datetime) -> list[dict]:
+        """Per member: what they did (kind → count), their latest name, and when it last happened."""
+        async with self._pool.connection() as conn:
+            rows = await (
+                await conn.execute(
+                    "select member_key, kind, count(*) as n, max(at) as last_at, "
+                    "(array_agg(member_name order by at desc))[1] as member_name "
+                    "from jeli.incidents where at >= %s group by member_key, kind",
+                    (since,),
+                )
+            ).fetchall()
+        members: dict[str, dict] = {}
+        for row in rows:
+            member = members.setdefault(
+                row["member_key"], {"member_key": row["member_key"], "member_name": "", "kinds": {}, "last_at": row["last_at"]}
+            )
+            member["kinds"][row["kind"]] = row["n"]
+            if row["last_at"] >= member["last_at"]:
+                member["last_at"], member["member_name"] = row["last_at"], row["member_name"] or member["member_name"]
+        return sorted(members.values(), key=lambda m: m["last_at"], reverse=True)
+
+    async def forgive(self, member_key: str) -> None:
+        async with self._pool.connection() as conn:
+            await conn.execute("delete from jeli.incidents where member_key = %s", (member_key,))
+
+    async def questions_since(self, since: datetime, limit: int = 500) -> list[tuple[datetime, str, str]]:
+        """Questions asked in groups, newest first: (when, outcome, question)."""
+        async with self._pool.connection() as conn:
+            rows = await (
+                await conn.execute(
+                    "select at, outcome, question from jeli.events where at >= %s and kind = 'question' "
+                    "and question is not null order by at desc limit %s",
+                    (since, limit),
+                )
+            ).fetchall()
+        return [(row["at"], row["outcome"], row["question"]) for row in rows]
+
+    async def live_groups(self, since: datetime) -> list[str]:
+        """Groups where Jeli received messages since then: where the daily summary goes by default."""
+        async with self._pool.connection() as conn:
+            rows = await (
+                await conn.execute(
+                    "select distinct chat_id from jeli.messages where source = 'whatsapp_live' "
+                    "and chat_id like '%%@g.us' and sent_at >= %s order by chat_id",
+                    (since,),
+                )
+            ).fetchall()
+        return [row["chat_id"] for row in rows]
 
     async def record_event(self, event: UsageEvent) -> None:
         async with self._pool.connection() as conn:

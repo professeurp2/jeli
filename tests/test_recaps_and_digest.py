@@ -4,7 +4,8 @@ from datetime import datetime, time, timedelta, timezone
 from app.answer.intents import is_recap_request
 from app.answer.language import TEXTS
 from app.answer.recaps import ActionItem, KeyMoment, Recaps, SessionRecap, format_recap, match_recordings
-from app.jobs.daily_digest import next_run, post_daily_digests
+from app.control.schedule import next_daily as next_run
+from app.jobs.daily_digest import post_daily_digests
 from app.models import Recording, StoredMessage
 
 

@@ -49,6 +49,8 @@ class Settings(BaseSettings):
     # R13: accounts of the web dashboard at /dashboard, one per team member: "name:salt:hash,…",
     # made by `python -m scripts.dashboard_users` (passwords are never stored). Empty: no dashboard.
     dashboard_users: str = ""
+    # Signs the dashboard's session cookies. Empty: a new one at each start (members sign in again).
+    dashboard_secret: str = ""
     # R10: "HH:MM" (UTC) to post a daily digest in each group of WHATSAPP_GROUP_IDS. Empty: off.
     daily_digest_time: str = ""
     daily_digest_language: str = "en"

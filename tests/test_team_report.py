@@ -4,7 +4,9 @@ from datetime import date, datetime, time, timezone
 import pytest
 
 from app.config import Settings
-from app.jobs.team_report import build_report, next_run, parse_schedule, send_team_reports
+from app.control.schedule import next_weekly as next_run
+from app.control.schedule import parse_schedule
+from app.jobs.team_report import build_report, send_team_reports
 
 SAT = datetime(2026, 9, 19, 12, 0, tzinfo=timezone.utc)
 MON_7 = datetime(2026, 9, 21, 7, 0, tzinfo=timezone.utc)
@@ -42,7 +44,7 @@ def test_report_tells_the_week_in_one_message():
     report = build_report(USAGE, WEEK_BEFORE, MON_7, "⏰ Coming up\n• Thu 24 Sep — Hackathon: submit", "https://jeli.test/dashboard")
     lines = report.splitlines()
     assert lines[0] == "📊 *Jeli weekly report* · Mon 14 Sep – Mon 21 Sep"
-    assert lines[1] == "Questions: 12 · answered with sources 75% · “I don't know” 25% · median reply 2.8 s"
+    assert lines[1] == "Questions: 12 · answered with sources 75% · couldn't answer 25% · typical reply 3 s"
     assert lines[2] == "Catch-ups 3 · Searches 1"
     assert "• Who judges the bots? (Sat 19 Sep)" in lines
     assert "• When is the submission deadline? (Fri 18 Sep, answered)" in lines

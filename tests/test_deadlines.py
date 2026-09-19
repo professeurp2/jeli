@@ -54,7 +54,7 @@ class FakeStore:
         self.deadlines.extend(deadlines)
         return len(deadlines)
 
-    async def deadlines_between(self, start, end):
+    async def deadlines_between(self, start, end, include_dismissed=False):
         return sorted((d for d in self.deadlines if start <= d.due_date <= end), key=lambda d: d.due_date)
 
 

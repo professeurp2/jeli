@@ -1,15 +1,14 @@
 """Daily digest (R10): once a day, each group gets the last 24 hours' highlights, decisions, deadlines
 and unanswered questions.
 
-Off unless DAILY_DIGEST_TIME is set. A message Jeli sends on its own is kept to the minimum: one per
-group per day, only when there is something new, never twice (each run is claimed in the database,
-so a restart cannot repeat it), and within the channel's anti-ban limits.
+Off until the team switches it on (or DAILY_DIGEST_TIME is set). A message Jeli sends on its own is
+kept to the minimum: one per group per day, only when there is something new, never twice (each run
+is claimed in the database, so a restart cannot repeat it), and within the channel's anti-ban limits.
 """
 
-import asyncio
 import logging
 from collections.abc import Awaitable, Callable
-from datetime import datetime, time, timedelta, timezone
+from datetime import datetime, timedelta
 
 from app.answer.catchup import Catchup
 from app.kb.store import Store
@@ -20,11 +19,6 @@ JOB = "daily_digest"
 PERIOD = timedelta(hours=24)
 
 Post = Callable[[str, str], Awaitable[bool]]
-
-
-def next_run(now: datetime, at: time) -> datetime:
-    candidate = now.replace(hour=at.hour, minute=at.minute, second=0, microsecond=0)
-    return candidate if candidate > now else candidate + timedelta(days=1)
 
 
 async def post_daily_digests(
@@ -45,23 +39,3 @@ async def post_daily_digests(
             log.warning("Daily digest for %s not sent: the channel is paused or at its hourly limit", chat_id)
     return posted
 
-
-async def run_daily(
-    store: Store,
-    catchup: Catchup,
-    post: Post,
-    chat_ids: list[str],
-    at: time,
-    language: str,
-    clock: Callable[[], datetime] = lambda: datetime.now(timezone.utc),
-    sleep=asyncio.sleep,
-) -> None:
-    log.info("Daily digest at %s UTC in %d group(s)", at.strftime("%H:%M"), len(chat_ids))
-    while True:
-        now = clock()
-        await sleep((next_run(now, at) - now).total_seconds())
-        try:
-            posted = await post_daily_digests(store, catchup, post, chat_ids, language, clock())
-            log.info("Daily digest posted in %d group(s)", posted)
-        except Exception:
-            log.exception("Daily digest failed")

@@ -130,7 +130,7 @@ class DeadlineExtractor:
 
     async def _extract(self, messages: list[StoredMessage]) -> int:
         first = messages[0].sent_at.astimezone(timezone.utc).date()
-        known = await self.store.deadlines_between(first - timedelta(days=1), first + MAX_HORIZON)
+        known = await self.store.deadlines_between(first - timedelta(days=1), first + MAX_HORIZON, include_dismissed=True)
         lines = [
             f"[{n}] {m.sent_at.astimezone(timezone.utc):%a %d %b %Y %H:%M} UTC · {self._where(m)} · "
             f"{display_author(m.author)}: {' '.join(m.text.split())[:MAX_MESSAGE_CHARS]}"

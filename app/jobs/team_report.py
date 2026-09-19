@@ -1,11 +1,11 @@
 """Weekly report to the team, in private: what the groups asked Jeli, what it could not answer, how it
 was used, and what is due — the dashboard's news, without having to open it.
 
-Off unless TEAM_REPORT_TIME ("mon 07:00", UTC) and TEAM_NUMBERS are set. Private messages a number
-starts are what WhatsApp watches most, so the report goes only to the team (who have saved Jeli's
-number and written to it once), only to numbers that are on WhatsApp, once a week and never twice
-(each send is claimed in the database), a minute or so apart, within the channel's limits, and not
-at all in a quiet week. No model call: it is built from the dashboard's data.
+Sent to TEAM_NUMBERS on the day and time set on the dashboard ("mon 07:00" UTC by default). Private
+messages a number starts are what WhatsApp watches most, so the report goes only to the team (who
+have saved Jeli's number and written to it once), only to numbers that are on WhatsApp, once a week
+and never twice (each send is claimed in the database), a minute or so apart, within the channel's
+limits, and not at all in a quiet week. No model call: it is built from the dashboard's data.
 """
 
 import asyncio
@@ -14,35 +14,20 @@ import logging
 import random
 from collections import Counter
 from collections.abc import Awaitable, Callable
-from datetime import datetime, time, timedelta, timezone
+from datetime import datetime, timedelta
 
 from app.answer.deadlines import Deadlines
-from app.dashboard import KINDS, OUTCOME_WORDS, _pct
+from app.control.words import KINDS, OUTCOME_WORDS, pct
 from app.kb.store import Store
 
 log = logging.getLogger(__name__)
 
 JOB = "team_report"
 PERIOD = timedelta(days=7)
-WEEKDAYS = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"]
 LISTED = 10  # questions listed per section: the rest is on the dashboard
 GAP_SECONDS = (40.0, 100.0)  # between two members: a person does not send five messages at once
 
 PostPrivate = Callable[[str, str], Awaitable[bool]]
-
-
-def parse_schedule(value: str) -> tuple[int, time]:
-    """"mon 07:00" -> (0, 07:00). ValueError when it is not a day and a time."""
-    day, _, clock = value.strip().lower().partition(" ")
-    if day[:3] not in WEEKDAYS:
-        raise ValueError(f"not a day of the week: {day!r}")
-    return WEEKDAYS.index(day[:3]), time.fromisoformat(clock.strip())
-
-
-def next_run(now: datetime, weekday: int, at: time) -> datetime:
-    candidate = now.replace(hour=at.hour, minute=at.minute, second=0, microsecond=0)
-    candidate += timedelta(days=(weekday - now.weekday()) % 7)
-    return candidate if candidate > now else candidate + timedelta(days=7)
 
 
 def _question_lines(questions: list[tuple[datetime, str, str]], with_outcome: bool) -> list[str]:
@@ -63,10 +48,10 @@ def build_report(usage: dict, since: datetime, now: datetime, coming_up: str | N
         outcomes[outcome] += n
     lines = [f"📊 *Jeli weekly report* · {since:%a %d %b} – {now:%a %d %b}"]
     if questions:
-        median = f" · median reply {usage['median_ms'] / 1000:.1f} s" if usage["median_ms"] is not None else ""
+        median = f" · typical reply {usage['median_ms'] / 1000:.0f} s" if usage["median_ms"] is not None else ""
         lines.append(
-            f"Questions: {questions} · answered with sources {_pct(outcomes['answered'], questions)}"
-            f" · “I don't know” {_pct(outcomes['dont_know'], questions)}{median}"
+            f"Questions: {questions} · answered with sources {pct(outcomes['answered'], questions)}"
+            f" · couldn't answer {pct(outcomes['dont_know'], questions)}{median}"
         )
     else:
         lines.append("No questions this week.")
@@ -119,24 +104,3 @@ async def send_team_reports(
             log.warning("Team report to the number ending in %s not sent", number[-2:])
     return sent
 
-
-async def run_weekly(
-    store: Store,
-    deadlines: Deadlines | None,
-    post_private: PostPrivate,
-    numbers: list[str],
-    weekday: int,
-    at: time,
-    dashboard_url: str = "",
-    clock: Callable[[], datetime] = lambda: datetime.now(timezone.utc),
-    sleep=asyncio.sleep,
-) -> None:
-    log.info("Team report every %s at %s UTC to %d member(s)", WEEKDAYS[weekday], at.strftime("%H:%M"), len(numbers))
-    while True:
-        now = clock()
-        await sleep((next_run(now, weekday, at) - now).total_seconds())
-        try:
-            sent = await send_team_reports(store, deadlines, post_private, numbers, clock(), dashboard_url)
-            log.info("Team report sent to %d member(s)", sent)
-        except Exception:
-            log.exception("Team report failed")

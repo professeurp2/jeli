@@ -113,6 +113,41 @@ create table if not exists jeli.job_runs (
     primary key (job, run_date)
 );
 
+-- Control panel: settings changed from the dashboard (they override the environment), who did what,
+-- and the passwords members chose themselves (salted scrypt hashes).
+create table if not exists jeli.settings (
+    key        text primary key,
+    value      jsonb not null,
+    updated_at timestamptz not null default now(),
+    updated_by text not null default ''
+);
+create table if not exists jeli.audit (
+    id     bigint generated always as identity primary key,
+    at     timestamptz not null default now(),
+    actor  text not null,
+    action text not null
+);
+create index if not exists audit_at on jeli.audit (at desc);
+create table if not exists jeli.dashboard_passwords (
+    name          text primary key,
+    password_hash text not null,
+    updated_at    timestamptz not null default now()
+);
+-- A deadline the team removed stays, dismissed, so that it is never found again.
+alter table jeli.deadlines add column if not exists dismissed_at timestamptz;
+alter table jeli.deadlines add column if not exists dismissed_by text;
+
+-- Misuse spotted by the guard: floods, repeats, oversized messages, manipulation attempts.
+-- member_key is the digits of the member's WhatsApp id (or their name), what the team can block.
+create table if not exists jeli.incidents (
+    id          bigint generated always as identity primary key,
+    at          timestamptz not null default now(),
+    member_key  text not null,
+    member_name text not null default '',
+    kind        text not null
+);
+create index if not exists incidents_at on jeli.incidents (at desc);
+
 -- Least-privilege application role: data access to the jeli schema only.
 do $$
 begin
