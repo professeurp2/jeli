@@ -21,6 +21,11 @@ class IncomingMessage:
     author_id: str | None = None
     # Replies to, or mentions, another member: this message is not for Jeli, even in a conversation.
     talks_to_someone_else: bool = False
+    # A voice note: where the channel keeps its audio (its text is empty until Jeli listens to it).
+    voice_url: str | None = None
+    voice_mimetype: str = ""
+    # Asked by voice: Jeli answers by voice too.
+    reply_by_voice: bool = False
 
 
 @dataclass(frozen=True)

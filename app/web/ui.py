@@ -556,6 +556,8 @@ details summary { cursor: pointer; color: var(--ink-2); font-weight: 500; margin
 .wa-msg a { color: #027eb5; }
 .wa-meta { font-size: 11px; color: var(--wa-muted); text-align: right; margin-top: 2px; }
 .wa-ticks { color: #53bdeb; letter-spacing: -3px; margin-left: 2px; }
+.wa-voice { display: block; width: 260px; max-width: 100%; height: 38px; margin: 2px 0 6px; }
+.wa-voice-gone { font-size: 13px; color: var(--wa-muted); margin-bottom: 4px; }
 .wa-note { font-size: 11.5px; color: var(--wa-muted); font-style: italic; margin-top: 3px; border-top: 1px dashed var(--wa-bar); padding-top: 3px; }
 .wa-system { align-self: center; background: var(--wa-system); color: var(--wa-muted); font-size: 12.5px; padding: 5px 12px; border-radius: 8px; max-width: 85%; text-align: center; box-shadow: 0 1px .5px rgba(11,20,26,.1); }
 .wa-doc { display: flex; align-items: center; gap: 10px; background: var(--wa-reply); border-radius: 6px; padding: 10px; text-decoration: none; color: var(--wa-ink); min-width: 240px; }
@@ -705,6 +707,8 @@ JS = r"""
     const mine = m.role === 'member';
     div.className = 'wa-msg ' + (mine ? 'out' : 'in');
     let html = mine ? '' : '<div class="wa-sender">Jeli</div>';
+    if (m.voice) html += '<audio class="wa-voice" controls preload="metadata" src="' + esc(m.voice) + '"></audio>';
+    else if (m.spoken) html += '<div class="wa-voice-gone">🎤 Voice note</div>';
     if (m.quoted) html += '<div class="wa-reply"><b>' + esc(m.quoted[0] === 'You' ? 'You' : m.quoted[0]) + '</b><span>' + esc(String(m.quoted[1]).slice(0, 180)) + '</span></div>';
     const called = mine && m.called ? '<span class="wa-mention">@Jeli</span> ' : '';
     html += '<div class="wa-text">' + (called ? '<div>' + called + '</div>' : '') + format(m.text) + '</div>';

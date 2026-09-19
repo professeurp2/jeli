@@ -15,6 +15,7 @@ from app.answer.rag import Answerer
 from app.answer.recaps import Recaps
 from app.answer.responder import Responder
 from app.answer.understand import Understander
+from app.answer.voice import Voice
 from app.answer.citations import ignored_keys, is_ignored
 from app.config import get_settings
 from app.control.apply import apply
@@ -85,6 +86,7 @@ async def lifespan(app: FastAPI):
         documents=state.documents,
     )
     state.guard = Guard(record=store.record_incident if store else None)
+    state.voice = Voice(state.llm) if state.llm else None  # voice notes, heard and spoken
 
     async def respond(message: IncomingMessage) -> str | None:
         """What the channels call: nothing at all while the team has paused Jeli. A group message
@@ -128,6 +130,8 @@ async def lifespan(app: FastAPI):
     if state.whatsapp:
         state.whatsapp.guard = state.guard
         state.whatsapp.follow_up = state.responder.is_follow_up
+        state.whatsapp.in_conversation = state.responder.in_conversation
+        state.whatsapp.voice = state.voice
         if state.documents:
             state.whatsapp.on_document = state.documents.add
         if store:

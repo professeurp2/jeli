@@ -28,6 +28,7 @@ from fastapi import APIRouter, BackgroundTasks, Header, HTTPException, Request
 from app.adapters import Ingest, Respond
 from app.adapters.pacing import SendSpacer, SlidingWindowLimiter, reading_delay, typing_duration
 from app.answer.citations import is_ignored, poll_text
+from app.answer.voice import asks_for_voice, sources, spoken, without_voice_request
 from app.config import Settings
 from app.control.guard import Guard
 from app.models import Attachment, IncomingMessage
@@ -46,6 +47,8 @@ TEXT_MENTION = re.compile(r"@(\d{5,})")
 # Documents Jeli keeps when a member shares them in a group.
 DOCUMENT_TYPES = (".pdf", ".docx", ".txt", ".md")
 MAX_DOCUMENT_BYTES = 15 * 1024 * 1024
+# Shown as "recording audio…" for as long as a person would take to record the voice note, at most.
+VOICE_RECORDING_SECONDS = 12
 
 router = APIRouter()
 
@@ -122,6 +125,14 @@ def _find_poll(data: Any) -> tuple[str, list[str]] | None:
     return None
 
 
+def _voice_note(payload: dict) -> dict | None:
+    """The audio of a voice note (or any audio a member sends), None for other messages."""
+    media = payload.get("media") or {}
+    if payload.get("hasMedia") and media.get("url") and (media.get("mimetype") or "").startswith("audio/"):
+        return media
+    return None
+
+
 def parse_message(event: dict, bot_name: str) -> IncomingMessage | None:
     """Turn a WAHA `message` event into an IncomingMessage; None for anything Jeli should not process."""
     if event.get("event") != "message":
@@ -132,7 +143,8 @@ def parse_message(event: dict, bot_name: str) -> IncomingMessage | None:
     poll = _find_poll(payload.get("_data")) or _find_poll({k: v for k, v in payload.items() if k != "_data"})
     if poll:
         text = poll_text(*poll)  # a poll: its question and options, to be remembered with its votes
-    if payload.get("fromMe") or not chat_id or chat_id.endswith(IGNORED_CHAT_SUFFIXES) or not text:
+    voice = _voice_note(payload)
+    if payload.get("fromMe") or not chat_id or chat_id.endswith(IGNORED_CHAT_SUFFIXES) or not (text or voice):
         return None
 
     me = event.get("me") or {}
@@ -165,6 +177,9 @@ def parse_message(event: dict, bot_name: str) -> IncomingMessage | None:
         is_private=is_private,
         addressed_to_bot=is_private or mentioned or replied_to_bot or bool(named) or command,
         talks_to_someone_else=talks_to_someone_else,
+        voice_url=voice["url"] if voice else None,
+        voice_mimetype=voice.get("mimetype", "") if voice else "",
+        reply_by_voice=asks_for_voice(text),
     )
 
 
@@ -223,6 +238,10 @@ class Waha:
         self.on_document = None
         # Records a vote in a poll: (poll_id, voter, options).
         self.on_vote = None
+        # Listens to voice notes and speaks answers (app/answer/voice.py); None: text only.
+        self.voice = None
+        # Whether this member was talking with Jeli a moment ago (set by the responder).
+        self.in_conversation = None
         self._later: set[asyncio.Task] = set()
         self._admins: dict[str, tuple[float, set[str]]] = {}
 
@@ -314,6 +333,17 @@ class Waha:
             payload["mentions"] = list(mentions)
         await self._post("/api/sendText", payload)
 
+    async def send_voice(self, chat_id: str, audio: bytes, reply_to: str | None = None) -> None:
+        """A voice note: WAHA turns the audio (WAV) into the OGG/Opus that WhatsApp plays."""
+        payload = {
+            "chatId": chat_id,
+            "file": {"mimetype": "audio/wav", "filename": "jeli.wav", "data": base64.b64encode(audio).decode()},
+            "convert": True,
+        }
+        if reply_to:
+            payload["reply_to"] = reply_to
+        await self._post("/api/sendVoice", payload)
+
     async def send_file(self, chat_id: str, attachment: Attachment, reply_to: str | None = None) -> None:
         payload = {
             "chatId": chat_id,
@@ -395,9 +425,13 @@ class Waha:
     async def handle(self, message: IncomingMessage) -> None:
         if self.suspended:
             return  # the message is still remembered (ingested separately)
-        if not message.addressed_to_bot and self.follow_up and self.follow_up(message):
-            message = dataclasses.replace(message, addressed_to_bot=True)
         try:
+            if message.voice_url:
+                message = await self._listen(message)
+                if message is None:
+                    return
+            if not message.addressed_to_bot and self.follow_up and self.follow_up(message):
+                message = dataclasses.replace(message, addressed_to_bot=True)
             if message.addressed_to_bot:
                 await self._converse(message)
             else:
@@ -405,27 +439,75 @@ class Waha:
         except Exception:
             log.exception("Failed to handle WhatsApp message %s", message.message_id)
 
+    async def _listen(self, message: IncomingMessage) -> IncomingMessage | None:
+        """A voice note, listened to when it is for Jeli: sent to it, a reply to it, or said in a
+        conversation with it. Voice notes between members are never listened to."""
+        in_conversation = bool(self.in_conversation and self.in_conversation(message))
+        if self.voice is None or self.paused or not (message.addressed_to_bot or in_conversation):
+            return None
+        if self.guard and is_ignored(message, self.guard.blocked):
+            return None
+        try:
+            response = await self._http.get(httpx.URL(message.voice_url).raw_path.decode())  # served by our WAHA
+            response.raise_for_status()
+        except httpx.HTTPError as error:
+            log.warning("Cannot download the voice note %s: %r", message.message_id, error)
+            return None
+        heard = await self.voice.listen(response.content, message.voice_mimetype)
+        if not heard:
+            return None
+        message = dataclasses.replace(message, text=heard, voice_url=None, reply_by_voice=True)
+        if self.ingest and not message.is_private:
+            await self.ingest(dataclasses.replace(message, text=f"🎤 {heard}"))  # the group's memory keeps it too
+        return message
+
     async def _converse(self, message: IncomingMessage) -> None:
-        """Answer like a person would: read, type for a while, then reply (WAHA's recommended sequence)."""
+        """Answer like a person would: read, type (or record) for a while, then reply (WAHA's
+        recommended sequence). Asked by voice, or asked for a voice reply: a voice note."""
         if not self.may_reply(message):
             return
         chat = {"chatId": message.chat_id}
+        by_voice = self.voice is not None and message.reply_by_voice
+        if by_voice:
+            message = dataclasses.replace(message, text=without_voice_request(message.text))
         await asyncio.sleep(reading_delay())
         await self._post_quietly("/api/sendSeen", {**chat, "messageIds": [message.message_id]})
         await self._post_quietly("/api/startTyping", chat)
+        audio = None
         try:
             typing_since = time.monotonic()
             reply = await self.respond(message)
+            if reply and by_voice:
+                await self._post_quietly(f"/api/{self.session}/presence", {**chat, "presence": "recording"})
+                audio = await self.voice.speak(spoken(reply))
             if reply:
                 # Answer generation counts as typing time: only wait for what is left.
-                await asyncio.sleep(max(0.0, typing_duration(reply) - (time.monotonic() - typing_since)))
+                busy = min(VOICE_RECORDING_SECONDS, len(audio) / 48_000) if audio else typing_duration(reply)
+                await asyncio.sleep(max(0.0, busy - (time.monotonic() - typing_since)))
                 # Still "typing…" while other answers go out first.
                 await self.spacer.wait_turn()
         finally:
             await self._post_quietly("/api/stopTyping", chat)
         if reply:
-            await self.send_reply(message, reply)
+            if not (audio and await self._send_voice_reply(message, reply, audio)):
+                await self.send_reply(message, reply)
             await self.deliver_files(message, reply)
+
+    async def _send_voice_reply(self, message: IncomingMessage, reply: str, audio: bytes) -> bool:
+        """The answer as a voice note replying to the member, then its sources in writing (a voice
+        note cannot quote). False when the voice note could not be sent: the text goes instead."""
+        try:
+            await self.send_voice(message.chat_id, audio, reply_to=message.message_id)
+        except httpx.HTTPError:
+            log.warning("Voice note for message %s not sent: answering in writing", message.message_id)
+            return False
+        written = sources(reply)
+        source_message = getattr(reply, "reply_to", None)
+        if written or source_message:
+            await self.spacer.wait_turn()
+            # Said in this chat: point at the message itself, as WhatsApp does.
+            await self.send_text(message.chat_id, written or "📌", reply_to=source_message or message.message_id)
+        return True
 
     async def _step_in_if_needed(self, message: IncomingMessage) -> None:
         """A message not addressed to Jeli: it speaks only when the responder finds that the group
@@ -626,7 +708,7 @@ async def receive_webhook(
     message = parse_message(event, adapter.bot_name)
     # Acknowledge at once and handle in the background, so WAHA never times out and retries.
     if message and adapter.accepts(message) and adapter.first_delivery(message.message_id):
-        if adapter.ingest:
+        if adapter.ingest and message.text:  # a voice note is remembered once listened to
             background_tasks.add_task(adapter.ingest, message)
         background_tasks.add_task(adapter.handle, message)
     return {"ok": True}

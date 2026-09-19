@@ -74,12 +74,17 @@ class Conversations:
         for chat_member in [k for k in self._turns if k[1] == key]:
             self._turns.pop(chat_member, None)
 
-    def is_follow_up(self, message: IncomingMessage) -> bool:
-        """A group message not addressed to Jeli that continues a conversation with it."""
+    def is_open(self, message: IncomingMessage) -> bool:
+        """Jeli answered this member in this group a moment ago, and they are not talking to someone
+        else: their next message may be for Jeli (a voice note is listened to, to find out)."""
         if not self.enabled or message.is_private or message.addressed_to_bot or message.talks_to_someone_else:
             return False
         turns = self._turns.get(self._key(message))
-        if not turns or self.clock() - turns[-1].at > self.window_minutes * 60:
+        return bool(turns) and self.clock() - turns[-1].at <= self.window_minutes * 60
+
+    def is_follow_up(self, message: IncomingMessage) -> bool:
+        """A group message not addressed to Jeli that continues a conversation with it."""
+        if not self.is_open(message):
             return False
         text = message.text.strip()
         if CLOSING.match(text):

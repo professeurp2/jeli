@@ -6,6 +6,7 @@ thresholds as numbers, no ids — what Jeli does, for whom, and what needs atten
 """
 
 import asyncio
+import base64
 import csv
 import dataclasses
 import hashlib
@@ -30,6 +31,7 @@ from app.control.runtime import FIELDS, coerce
 from app.control.schedule import WEEKDAY_NAMES, WEEKDAYS, parse_schedule
 from app.control.words import KINDS, OUTCOME_WORDS, OUTCOMES, pct
 from app.answer.documents import missing_documents
+from app.answer.voice import asks_for_voice, spoken, without_voice_request
 from app.ingest.whatsapp_export import attachments, export_documents, message_ids, parse_export, read_export_bytes, who_shared
 from app.kb.indexer import RECORDING_PREFIX
 from app.models import Attachment, Deadline, IncomingMessage, StoredMessage
@@ -471,6 +473,7 @@ EXAMPLES = [
     "/deadlines",
     "/recap module 1",
     "Who are you?",
+    "When is the deadline? Reply by voice",
 ]
 PRIVATE = "private"
 
@@ -516,7 +519,8 @@ async def try_page(request: Request, member: Member) -> HTMLResponse:
             <div class="wa-row"><textarea name="text" id="text" placeholder="Type a message" required maxlength="2000" rows="1"></textarea>
             <button type="submit" class="wa-send" aria-label="Send">{icon("send", 20)}</button></div>
             <p class="hint">Shown exactly as on WhatsApp. Nothing is sent there, and Jeli answers here even while paused.
-            “Without calling Jeli” shows whether it would step in on its own, or follow the conversation.</p>
+            “Without calling Jeli” shows whether it would step in on its own, or follow the conversation.
+            Add “reply by voice” (or « réponds en vocal ») to hear the voice note Jeli would send.</p>
           </form>
         </div>""",
         icon_name="chat",
@@ -598,8 +602,13 @@ async def try_ask(request: Request, member: Change) -> JSONResponse:
     followed = not called and state.responder.is_follow_up(message)
     if followed:
         message = dataclasses.replace(message, addressed_to_bot=True)
+    voice = getattr(state, "voice", None)
+    by_voice = voice is not None and asks_for_voice(text)
+    if by_voice:
+        message = dataclasses.replace(message, text=without_voice_request(text))
     started = time.monotonic()
     reply = await state.responder.respond(message)
+    audio = await voice.speak(spoken(reply)) if reply and by_voice else None
     files, after = [], None
     attachment, pending = getattr(reply, "attachment", None), getattr(reply, "pending", None)
     if pending:
@@ -626,6 +635,9 @@ async def try_ask(request: Request, member: Change) -> JSONResponse:
             jeli["files"] = files
         if after:
             jeli["after"] = after
+        if audio:
+            jeli["voice"] = "data:audio/wav;base64," + base64.b64encode(audio).decode()
+            jeli["note"] = "On WhatsApp: this voice note replies to the member, then its sources follow in writing."
     else:
         note = (
             "Jeli stays silent: the group hasn't answered this before, and you are not in a conversation with it."
@@ -636,7 +648,8 @@ async def try_ask(request: Request, member: Change) -> JSONResponse:
     store = getattr(state, "store", None)
     if store:
         await store.add_try(member, "member", text, {"called": called, "chat": chat})
-        await store.add_try(member, "jeli", jeli["text"], {k: v for k, v in jeli.items() if k not in ("role", "text", "at")} | {"system": jeli["role"] == "system"})
+        kept = {k: v for k, v in jeli.items() if k not in ("role", "text", "at", "voice")}  # the audio is not kept
+        await store.add_try(member, "jeli", jeli["text"], kept | {"system": jeli["role"] == "system", "spoken": bool(audio)})
     return JSONResponse({"jeli": jeli})
 
 

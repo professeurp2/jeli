@@ -117,6 +117,10 @@ class Responder:
         """A group message not addressed to Jeli, but continuing a conversation with it."""
         return self.conversations.is_follow_up(message)
 
+    def in_conversation(self, message: IncomingMessage) -> bool:
+        """This member was talking with Jeli a moment ago (whatever their new message says)."""
+        return self.conversations.is_open(message)
+
     async def _route(self, message: IncomingMessage, language: str) -> tuple[str, str]:
         texts = TEXTS[language]
         text = message.text.strip()

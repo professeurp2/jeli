@@ -235,6 +235,24 @@ def test_try_jeli_answers_as_on_whatsapp_and_keeps_each_members_conversation(cli
     assert client.fake_store.tries_rows == []
 
 
+def test_try_jeli_plays_the_voice_note_jeli_would_send(client):
+    class Voice:
+        async def speak(self, text):
+            self.said = text
+            return b"RIFF-voice"
+
+    app.state.voice = voice = Voice()
+    sign_in(client)
+    headers = {"X-CSRF-Token": csrf_of(client.get("/dashboard/try").text)}
+    jeli = client.post("/dashboard/try", json={"text": "Who are you? Reply by voice", "mode": "ask", "chat": "private"}, headers=headers).json()["jeli"]
+    assert jeli["text"] == TEXTS["en"]["about_jeli"]  # the question, without "reply by voice"
+    assert jeli["voice"] == "data:audio/wav;base64,UklGRi12b2ljZQ==" and voice.said.startswith("I'm Jeli, the memory")
+    assert "/catchup" not in voice.said and "catch you up, recap a session" in voice.said  # commands are not read out
+    kept = client.fake_store.tries_rows[-1]
+    assert "voice" not in kept["details"] and kept["details"]["spoken"] is True  # the audio itself is not kept
+    app.state.voice = None
+
+
 def test_live_pages_answer_304_until_something_changes(client):
     sign_in(client)
     first = client.get("/dashboard", headers={"X-Live": "1"})

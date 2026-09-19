@@ -1,0 +1,120 @@
+import asyncio
+import json
+
+import httpx
+import pytest
+
+from app.adapters import whatsapp_waha
+from app.adapters.whatsapp_waha import Waha, parse_message
+from app.answer.voice import asks_for_voice, sources, spoken, wav, without_voice_request
+from app.config import Settings
+from app.models import Reply
+from tests.test_whatsapp_waha import AWA, BOT_LID, GROUP, message_event
+
+VOICE_MEDIA = {"url": "http://localhost:3000/api/files/default/voice.oga", "mimetype": "audio/ogg; codecs=opus"}
+
+
+def voice_event(chat_id=AWA, **payload):
+    return message_event("", chat_id=chat_id, message_id="voice-1", hasMedia=True, media=VOICE_MEDIA, **payload)
+
+
+def test_a_voice_note_is_a_message_to_listen_to():
+    private = parse_message(voice_event(), "Jeli")
+    assert private.addressed_to_bot and private.text == "" and private.voice_url == VOICE_MEDIA["url"]
+    # In a group: for Jeli when it replies to Jeli; otherwise only if a conversation with Jeli is open.
+    reply = parse_message(voice_event(GROUP, replyTo={"id": "A", "participant": f"{BOT_LID}@lid"}), "Jeli")
+    assert reply.addressed_to_bot and reply.voice_url
+    assert not parse_message(voice_event(GROUP), "Jeli").addressed_to_bot
+
+
+def test_asking_for_a_voice_reply():
+    assert asks_for_voice("Quelle est la date limite ? Réponds en vocal")
+    assert asks_for_voice("send me a voice note about the prize") and asks_for_voice("reply by voice please")
+    assert not asks_for_voice("Who is presenting in the Open Hour?")
+    assert without_voice_request("Quelle est la date limite ? Réponds en vocal") == "Quelle est la date limite ?"
+    assert without_voice_request("reply by voice: when is the deadline?") == "when is the deadline?"
+    assert parse_message(message_event("When is the deadline? Answer by voice", chat_id=AWA), "Jeli").reply_by_voice
+
+
+def test_a_voice_note_says_the_words_and_the_text_keeps_the_sources():
+    reply = "@22370000000 The hackathon closes on *Thursday 24 September*.\n\n> *Diane* · METI cohort, Wed 16 Sep\n> Submissions close on 24 Sept\nhttps://youtu.be/x?t=10"
+    assert spoken(reply) == "The hackathon closes on Thursday 24 September."
+    assert sources(reply) == "> *Diane* · METI cohort, Wed 16 Sep\n> Submissions close on 24 Sept\nhttps://youtu.be/x?t=10"
+    audio = wav(b"\0\0" * 24_000)
+    assert audio.startswith(b"RIFF") and len(audio) == 48_044  # one second
+
+
+class Voice:
+    def __init__(self, heard="When is the hackathon deadline?", audio=wav(b"\0\0" * 2400)):
+        self.heard, self.audio, self.said = heard, audio, []
+
+    async def listen(self, audio, mimetype):
+        assert audio == b"OggS voice" and mimetype.startswith("audio/ogg")
+        return self.heard
+
+    async def speak(self, text):
+        self.said.append(text)
+        return self.audio
+
+
+@pytest.fixture
+def waha(monkeypatch):
+    monkeypatch.setattr(whatsapp_waha, "reading_delay", lambda: 0)
+    monkeypatch.setattr(whatsapp_waha, "typing_duration", lambda text: 0)
+    monkeypatch.setattr(whatsapp_waha, "VOICE_RECORDING_SECONDS", 0)
+    sent = []
+
+    def handler(request):
+        if request.method == "GET":
+            assert request.url.path == "/api/files/default/voice.oga"  # asked to our WAHA, whatever host it named
+            return httpx.Response(200, content=b"OggS voice")
+        body = json.loads(request.content)
+        sent.append((request.url.path, body))
+        if request.url.path == "/api/sendVoice" and waha.voice_fails:
+            return httpx.Response(500, json={"error": "cannot convert"})
+        return httpx.Response(201, json={})
+
+    settings = Settings(_env_file=None, waha_url="http://waha.test:3000", waha_api_key="key", waha_webhook_hmac_key="h",
+                        whatsapp_min_send_interval_seconds=0)
+    asked = []
+
+    async def respond(message):
+        asked.append(message.text)
+        return Reply("The hackathon closes on Thursday 24 September.\n\n> *Diane* · METI cohort, Wed 16 Sep\n> Submissions close on 24 Sept")
+
+    waha = Waha(settings, respond=respond)
+    waha._http = httpx.AsyncClient(base_url=settings.waha_url, transport=httpx.MockTransport(handler))
+    waha.paused, waha.voice_fails, waha.sent, waha.asked = False, False, sent, asked
+    return waha
+
+
+def test_asked_by_voice_jeli_answers_by_voice_then_writes_the_sources(waha):
+    waha.voice = Voice()
+    asyncio.run(waha.handle(parse_message(voice_event(), "Jeli")))
+    assert waha.asked == ["When is the hackathon deadline?"]
+    assert waha.voice.said == ["The hackathon closes on Thursday 24 September."]
+    paths = [path for path, _ in waha.sent]
+    assert paths == ["/api/sendSeen", "/api/startTyping", "/api/default/presence", "/api/stopTyping", "/api/sendVoice", "/api/sendText"]
+    voice, text = waha.sent[4][1], waha.sent[5][1]
+    assert voice["convert"] is True and voice["reply_to"] == "voice-1" and voice["file"]["mimetype"] == "audio/wav"
+    assert text["text"] == "> *Diane* · METI cohort, Wed 16 Sep\n> Submissions close on 24 Sept"
+
+
+def test_when_the_voice_note_cannot_be_sent_the_answer_is_written(waha):
+    waha.voice, waha.voice_fails = Voice(), True
+    asyncio.run(waha.handle(parse_message(message_event("When is the deadline? Reply by voice", chat_id=AWA), "Jeli")))
+    assert waha.asked == ["When is the deadline?"]
+    [text] = [body for path, body in waha.sent if path == "/api/sendText"]
+    assert text["text"].startswith("The hackathon closes on Thursday 24 September.") and "> *Diane*" in text["text"]
+
+
+def test_voice_notes_between_members_are_never_listened_to(waha):
+    waha.voice = Voice()
+    waha.in_conversation = lambda message: False
+    asyncio.run(waha.handle(parse_message(voice_event(GROUP), "Jeli")))
+    assert waha.sent == [] and waha.asked == []
+    # In a conversation with Jeli, the member's voice note is listened to, then treated as a follow-up.
+    waha.in_conversation = lambda message: True
+    waha.follow_up = lambda message: message.text.endswith("?")
+    asyncio.run(waha.handle(parse_message(voice_event(GROUP), "Jeli")))
+    assert waha.asked == ["When is the hackathon deadline?"]
