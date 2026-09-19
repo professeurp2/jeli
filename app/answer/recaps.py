@@ -186,8 +186,6 @@ class Recaps:
         else:
             matches = match_recordings(text, recordings)
         if len(matches) != 1:
-            if not matches and not text.strip().lower().startswith("/recap"):
-                return None
             listed = matches or recordings
             lines = [f"{recordings.index(r) + 1}. {r.title} ({r.recorded_at:%d %b %Y})" for r in listed]
             return texts["recap_choose"] + "\n" + "\n".join(lines)

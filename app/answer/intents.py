@@ -22,7 +22,7 @@ CATCHUP_PHRASE = re.compile(
     r"|résume(-moi)? (la journée|aujourd.hui|les échanges|le groupe|la discussion)",
     re.IGNORECASE,
 )
-RECAP_WORD = re.compile(r"\b(recap|summary|summari[sz]e|digest|résumé|résume|récap|synthèse)\b", re.IGNORECASE)
+RECAP_WORD = re.compile(r"\b(recap|summary|summari[sz]e|digest|résumé|résume|récap|récapitulatif|récapituler|synthèse)\b", re.IGNORECASE)
 
 WEEKDAYS = {
     "monday": 0, "lundi": 0, "tuesday": 1, "mardi": 1, "wednesday": 2, "mercredi": 2, "thursday": 3, "jeudi": 3,
