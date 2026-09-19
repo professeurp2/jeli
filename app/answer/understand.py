@@ -54,7 +54,8 @@ Classify the latest message ("kind"):
   help, invite them to ask about the programme, the sessions or the deadlines.
 - "about_jeli": about Jeli itself — who or what it is, what it can do, how it works, who made it.
   reply: two or three short sentences on what Jeli does, in the member's language.
-- "catchup": what happened, what was said or what they missed in the groups over a period.
+- "catchup": what happened or what they missed in the groups over a period (today, this week, since
+  Monday). Not what was said in a given session, meeting, class or call: that is a "question".
 - "file": asks to be sent a document or file, or a translated version of one.
 - "question": anything else, even vague — the programmes, sessions, people, dates, rules, events.
 standalone: the latest message rewritten as a complete question that makes sense on its own, using

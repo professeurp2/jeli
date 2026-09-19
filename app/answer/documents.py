@@ -178,6 +178,10 @@ class Documents:
     def __init__(self, store: Store, llm: LLM | None):
         self.store = store
         self.llm = llm
+        self.known_names: dict[str, str] = {}  # number → name, given by the team
+
+    def who(self, author: str) -> str:
+        return self.known_names.get(re.sub(r"\D", "", author)) or display_author(author) if author else "a member"
 
     async def add(
         self,
@@ -237,7 +241,7 @@ class Documents:
             return None
         listing = "\n".join(
             f"[{n}] «{d.title}» ({d.filename}, {d.pages} pages, in {LANGUAGE_NAMES.get(d.language, d.language)}), "
-            f"shared by {display_author(d.shared_by)} on {short_day(d.shared_at)}"
+            f"shared by {self.who(d.shared_by)} on {short_day(d.shared_at)}"
             for n, d in enumerate(documents[:40], 1)
         )
         prompt = (
@@ -254,7 +258,7 @@ class Documents:
         document = documents[choice.document - 1]
         texts = TEXTS[language]
         target = choice.translate_to.strip().lower()[:2]
-        who, day = display_author(document.shared_by), short_day(document.shared_at)
+        who, day = self.who(document.shared_by), short_day(document.shared_at)
         if not target or target == document.language:
             file = await self.attachment(document, caption=document.title)
             return Reply(texts["file_here"].format(title=document.title, who=who, day=day), attachment=file) if file else None
@@ -301,7 +305,7 @@ class Documents:
             blocks += [(b.kind if b.kind in ("heading", "bullet") else "paragraph", b.text) for b in translated.blocks]
         title = f"{document.title} ({name})"
         note = (
-            f"Machine translation by Jeli of «{document.title}», shared by {display_author(document.shared_by)} "
+            f"Machine translation by Jeli of «{document.title}», shared by {self.who(document.shared_by)} "
             f"on {short_day(document.shared_at)}. The original prevails."
         )
         pdf = await asyncio.to_thread(build_pdf, title, note, blocks)

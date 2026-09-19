@@ -32,6 +32,7 @@ from app.answer.citations import (
     ignored_keys,
     is_ignored,
     mention_tag,
+    best_snippet,
     quote,
     recording_quote,
     short_day,
@@ -126,15 +127,33 @@ class Excerpt:
         """The message that says what the answer says: most words in common."""
         return max(self.messages, key=lambda m: len(words & _words(m.text)))
 
+    def place(self, words: set[str]) -> tuple:
+        """Where the quote comes from: two quotes from the same place are one."""
+        message = self.best_message(words)
+        if self.document:
+            return (self.chat_id, document_page(message.sent_at, self.document.shared_at))
+        return (message.id,)
+
     def quote(self, words: set[str]) -> str:
         message = self.best_message(words)
         if self.recording:
             return recording_quote(self.recording, message.sent_at - self.recording.recorded_at, message.author, message.text)
         if self.document:
             page = document_page(message.sent_at, self.document.shared_at)
-            return quote(f"📄 *{self.document.title}*, page {page}", snippet(message.text))
+            return quote(f"📄 *{self.document.title}*, page {page}", best_snippet(message.text, words))
         role = " · organiser" if self.by_organiser(message) else ""
-        return quote(f"*{self.name(message)}*{role} · {self.chat_label}, {short_day(message.sent_at)}", snippet(message.text))
+        return quote(f"*{self.name(message)}*{role} · {self.chat_label}, {short_day(message.sent_at)}", best_snippet(message.text, words))
+
+
+def distinct(excerpts: list[Excerpt], words: set[str]) -> list[Excerpt]:
+    """Excerpts that quote different places (a document's page is quoted once)."""
+    seen, kept = set(), []
+    for excerpt in excerpts:
+        place = excerpt.place(words)
+        if place not in seen:
+            seen.add(place)
+            kept.append(excerpt)
+    return kept
 
 
 def merge(results: list[list[SearchHit]], limit: int) -> list[SearchHit]:
@@ -218,7 +237,7 @@ class Answerer:
         if self.explainer is None:
             return self._quotes(texts["dont_know_near"], list(near), question) if near else texts["dont_know"]
         words = _words(question)
-        quotes = "\n\n".join(e.quote(words) for e in sorted(near, key=lambda e: e.relevance_rank)[:QUOTES_SHOWN])
+        quotes = "\n\n".join(e.quote(words) for e in distinct(sorted(near, key=lambda e: e.relevance_rank), words)[:QUOTES_SHOWN])
         return Reply(await self.explainer(question, language, quotes), unanswered=True)
 
     async def already_answered(
@@ -252,7 +271,7 @@ class Answerer:
     def _reply(self, answer: str, cited: list[Excerpt], chat_id: str | None, asker_id: str | None, lead: str = "") -> Reply:
         """The answer with its sources, as WhatsApp does it — an organiser's announcement first."""
         words = _words(answer)
-        ordered = sorted(cited, key=lambda e: (not e.has_announcement, e.relevance_rank))
+        ordered = distinct(sorted(cited, key=lambda e: (not e.has_announcement, e.relevance_rank)), words)
         first = ordered[0]
         source = first.best_message(words)
         if chat_id and source.chat_id == chat_id and source.source == "whatsapp_live":
@@ -272,7 +291,7 @@ class Answerer:
 
     def _quotes(self, header: str, excerpts: list[Excerpt], question: str, shown: int = QUOTES_SHOWN) -> str:
         words = _words(question)
-        best = sorted(excerpts, key=lambda e: e.relevance_rank)[:shown]
+        best = distinct(sorted(excerpts, key=lambda e: e.relevance_rank), words)[:shown]
         return header + "".join(f"\n\n{e.quote(words)}" for e in best)
 
     async def _member_names(self) -> dict[str, str]:

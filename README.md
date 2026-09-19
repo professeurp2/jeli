@@ -312,7 +312,7 @@ railway add --service waha --image devlikeapro/waha:gows \
   --variables "WAHA_SESSION_CONFIG_IGNORE_CHANNELS=true" \
   --variables "WAHA_SESSION_CONFIG_IGNORE_BROADCAST=true" \
   --variables "WAHA_BASE_URL=http://\${{RAILWAY_PRIVATE_DOMAIN}}:3000" \
-  --variables "WHATSAPP_HOOK_EVENTS=message,session.status" \
+  --variables "WHATSAPP_HOOK_EVENTS=message,session.status,poll.vote" \
   --variables "WAHA_DASHBOARD_USERNAME=admin" \
   --variables "WHATSAPP_SWAGGER_USERNAME=admin"
 # Secrets: generate each with python -c "import secrets; print(secrets.token_urlsafe(32))"

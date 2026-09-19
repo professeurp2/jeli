@@ -85,6 +85,17 @@ def snippet(text: str, limit: int = 180) -> str:
     return line if len(line) <= limit else line[:limit].rsplit(" ", 1)[0] + " …"
 
 
+SENTENCES = re.compile(r"(?<=[.!?])\s+|\n+|\s+•\s*")
+
+
+def best_snippet(text: str, words: set[str], limit: int = 180) -> str:
+    """The sentence of a long text that says most of what the answer says (a document's page, a
+    long announcement), rather than its first line."""
+    sentences = [s.strip() for s in SENTENCES.split(text) if len(s.strip()) > 20] or [text]
+    best = max(sentences, key=lambda s: len(words & {w for w in re.findall(r"\w+", s.lower()) if len(w) > 3}))
+    return snippet(best, limit)
+
+
 def quote(header: str, *lines: str) -> str:
     """WhatsApp's own way to cite text that cannot be replied to: a quote block ("> " lines)."""
     return "\n".join(f"> {line}" for line in (header, *lines) if line)

@@ -23,6 +23,8 @@ def apply(state, runtime) -> None:
         state.answerer.min_similarity = runtime["answer_min_similarity"]
         # Organisers listed with their number are shown by name in quotes ("Diane", not "+250 ···55").
         state.answerer.known_names = people_names(runtime["organisers"])
+    if getattr(state, "documents", None) is not None:
+        state.documents.known_names = people_names(runtime["organisers"])
 
     responder = getattr(state, "responder", None)
     if responder is not None:

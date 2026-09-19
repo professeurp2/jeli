@@ -10,7 +10,14 @@ from app.adapters.pacing import SlidingWindowLimiter
 from app.answer.catchup import Catchup
 from app.answer.conversation import Conversations
 from app.answer.deadlines import Deadlines
-from app.answer.intents import catchup_since, is_deadlines_request, is_recap_request, looks_like_question, parse_since
+from app.answer.intents import (
+    SESSION_WORD,
+    catchup_since,
+    is_deadlines_request,
+    is_recap_request,
+    looks_like_question,
+    parse_since,
+)
 from app.answer.language import TEXTS, detect_language
 from app.answer.rag import Answerer
 from app.answer.recaps import Recaps
@@ -139,7 +146,7 @@ class Responder:
             reply = await self.documents.reply(text, language, self.conversations.history(message))
             if reply is not None:
                 return reply, "file"
-        if understood.kind == "catchup" and self.catchup:
+        if understood.kind == "catchup" and self.catchup and not SESSION_WORD.search(text):
             return await self.catchup.summarize(parse_since(text, datetime.now(timezone.utc)), language), "catchup"
         question = understood.standalone
         if question != text and is_deadlines_request(question) and self.deadlines:
