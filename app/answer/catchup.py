@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 
 from pydantic import BaseModel
 
-from app.answer.citations import author_key, display_author
+from app.answer.citations import display_author, ignored_keys, is_ignored
 from app.answer.language import TEXTS
 from app.answer.llm import LLM, LLMUnavailable
 from app.answer.prompts import LANGUAGES, PROGRAMMES
@@ -63,12 +63,15 @@ class Catchup:
         ignored_authors: list[str] = (),
         chat_labels: dict[str, str] | None = None,
         clock=time.monotonic,
+        deadlines=None,
     ):
         self.store = store
         self.llm = llm
-        self.ignored = {author_key(a) for a in ignored_authors}
+        self.ignored = ignored_keys(ignored_authors)
         self.chat_labels = chat_labels or {}
         self._clock = clock
+        # R14: the deadlines of the next days close every digest (app.answer.deadlines.Deadlines).
+        self.deadlines = deadlines
         self._cache: dict[tuple, tuple[float, str]] = {}
 
     async def summarize(
@@ -91,12 +94,13 @@ class Catchup:
     async def _summarize(self, since: datetime, language: str, chat_ids: list[str] | None) -> str | None:
         texts = TEXTS[language]
         messages = [
-            m for m in await self.store.messages_since(since, chat_ids=chat_ids) if author_key(m.author) not in self.ignored
+            m for m in await self.store.messages_since(since, chat_ids=chat_ids) if not is_ignored(m, self.ignored)
         ]
         recordings = await self.store.recordings_since(since)
+        coming_up = await self.deadlines.coming_up_section(language) if self.deadlines else None
         header = texts["catchup_header"].format(since=_day(since, language), messages=len(messages))
         if not messages and not recordings:
-            return None
+            return coming_up  # a quiet day can still bring a reminder
 
         lines = [
             f"[{m.sent_at.astimezone(timezone.utc):%a %d %b %H:%M}] {self.chat_labels.get(m.chat_id, m.chat_id)} · "
@@ -129,4 +133,6 @@ class Catchup:
                 for r in recordings
             ]
             body.append(texts["catchup_recordings"] + "\n" + "\n".join(items))
+        if coming_up:
+            body.append(coming_up)
         return header + "\n\n" + "\n\n".join(body)

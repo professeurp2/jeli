@@ -16,11 +16,12 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 
 from app.answer.citations import (
-    author_key,
     display_author,
     format_recording_source,
     format_source,
     format_time,
+    ignored_keys,
+    is_ignored,
 )
 from app.answer.language import TEXTS, detect_language
 from pydantic import BaseModel
@@ -90,7 +91,7 @@ class Answerer:
         self.embedder = embedder
         self.llm = llm
         self.min_similarity = min_similarity
-        self.ignored = {author_key(a) for a in ignored_authors}
+        self.ignored = ignored_keys(ignored_authors)
         self.chat_labels = chat_labels or {}
 
     async def answer(self, question: str, asker: str) -> str:
@@ -141,12 +142,7 @@ class Answerer:
         return self._with_sources(f"{texts['already_covered']}\n{generated.answer.strip()}", cited, texts)
 
     def is_ignored(self, message: StoredMessage | IncomingMessage) -> bool:
-        """By display name or phone number, and by WhatsApp id: live messages carry a display name,
-        not the phone number that exports show."""
-        keys = {author_key(message.author)}
-        if message.author_id:
-            keys.add(author_key(message.author_id.split("@")[0]))
-        return bool(keys & self.ignored)
+        return is_ignored(message, self.ignored)
 
     @staticmethod
     def _with_sources(answer: str, cited: list[Excerpt], texts: dict[str, str]) -> str:

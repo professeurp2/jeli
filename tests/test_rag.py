@@ -2,6 +2,7 @@ import asyncio
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
+import httpx
 import pytest
 from google.genai import errors
 
@@ -221,6 +222,9 @@ def test_llm_falls_back_to_the_next_model_on_quota_or_overload():
     assert models.models == ["primary", "backup"]
 
     llm, models = make_llm([errors.ServerError(503, {"error": {"message": "busy"}}), good])
+    assert asyncio.run(llm.answer("system", "prompt")) == good
+
+    llm, models = make_llm([httpx.RemoteProtocolError("Server disconnected without sending a response."), good])
     assert asyncio.run(llm.answer("system", "prompt")) == good
 
 

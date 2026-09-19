@@ -51,6 +51,18 @@ def is_recap_request(text: str) -> bool:
     return bool((RECAP_WORD.search(text) or SAID_IN.search(text)) and SESSION_WORD.search(text))
 
 
+DEADLINES = re.compile(
+    r"^/(deadlines|échéances|echeances)\b"
+    r"|\b(upcoming|next|coming) deadlines\b|\bwhat.s due\b|\bdeadlines (this|next) week\b"
+    r"|prochaines? (échéances|dates? limites?)|échéances (de la|cette) semaine|qu.est-ce qu.il faut rendre",
+    re.IGNORECASE,
+)
+
+
+def is_deadlines_request(text: str) -> bool:
+    return bool(DEADLINES.search(text))
+
+
 def looks_like_question(text: str) -> bool:
     """A real question worth checking against the group's history: not a link, not a one-word reply."""
     words = URL.sub("", text).strip()

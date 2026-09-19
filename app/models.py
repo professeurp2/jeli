@@ -1,5 +1,5 @@
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import date, datetime
 
 
 @dataclass(frozen=True)
@@ -31,6 +31,31 @@ class Recording:
     source_url: str | None = None
     duration_seconds: int | None = None
     recap: dict | None = None  # per language, see app/answer/recaps.py
+
+
+@dataclass(frozen=True)
+class UsageEvent:
+    """One interaction, counted for the dashboard (R13): never the text, never the author."""
+
+    kind: str  # question, catchup, recap, deadlines, search, already_answered, help
+    outcome: str = ""  # for questions: answered, dont_know, sources_only, not_ready
+    language: str = ""
+    is_private: bool = False
+    latency_ms: int | None = None
+
+
+@dataclass(frozen=True)
+class Deadline:
+    """A deadline found in a chat or a call (R14), linked to the message that announced it."""
+
+    what: str
+    due_date: date
+    chat_id: str
+    announced_at: datetime
+    due_time: str = ""
+    programme: str = ""
+    message_id: str | None = None
+    author: str = ""
 
 
 @dataclass(frozen=True)

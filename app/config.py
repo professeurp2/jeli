@@ -45,6 +45,8 @@ class Settings(BaseSettings):
     duplicate_detection: bool = True
     duplicate_min_similarity: float = 0.70
     duplicate_replies_per_hour: int = 3
+    # R13: password of the web dashboard at /dashboard (user "admin"). Empty: no dashboard.
+    dashboard_password: str = ""
     # R10: "HH:MM" (UTC) to post a daily digest in each group of WHATSAPP_GROUP_IDS. Empty: off.
     daily_digest_time: str = ""
     daily_digest_language: str = "en"

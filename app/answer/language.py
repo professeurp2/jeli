@@ -41,6 +41,10 @@ TEXTS = {
         "catchup_deadlines": "⏰ Deadlines and dates",
         "catchup_questions": "❓ Still unanswered",
         "catchup_recordings": "🎥 Recorded sessions",
+        "deadlines_header": "⏰ Deadlines in the next {days} days",
+        "deadlines_none": "No deadline announced for the next {days} days.",
+        "deadlines_coming_up": "⏰ Coming up",
+        "deadline_in_call": "call",
         "search_header": "🔎 Where the group talked about it:",
         "search_nothing": "I found nothing about that in the group's records.",
         "recap_summary": "📝 Summary",
@@ -54,6 +58,7 @@ TEXTS = {
             "I answer with my sources, and I say so when I don't know.\n\n"
             "/catchup — what you missed (/catchup 3 days, or \"what did I miss since Monday?\")\n"
             "/recap — summary of a recorded session\n"
+            "/deadlines — what is due in the next two weeks\n"
             "/search <topic> — where the group talked about it"
         ),
     },
@@ -71,6 +76,10 @@ TEXTS = {
         "catchup_deadlines": "⏰ Échéances et dates",
         "catchup_questions": "❓ Questions restées sans réponse",
         "catchup_recordings": "🎥 Sessions enregistrées",
+        "deadlines_header": "⏰ Échéances des {days} prochains jours",
+        "deadlines_none": "Aucune échéance annoncée pour les {days} prochains jours.",
+        "deadlines_coming_up": "⏰ À venir",
+        "deadline_in_call": "appel",
         "search_header": "🔎 Où le groupe en a parlé :",
         "search_nothing": "Je n'ai rien trouvé à ce sujet dans les échanges du groupe.",
         "recap_summary": "📝 Résumé",
@@ -84,6 +93,7 @@ TEXTS = {
             "ou commencez par « Jeli, ». Je réponds avec mes sources, et je le dis quand je ne sais pas.\n\n"
             "/catchup — ce que vous avez raté (/catchup 3 jours, ou « qu'est-ce que j'ai raté depuis lundi ? »)\n"
             "/recap — résumé d'une session enregistrée\n"
+            "/deadlines — les échéances des deux prochaines semaines\n"
             "/search <sujet> — où le groupe en a parlé"
         ),
     },

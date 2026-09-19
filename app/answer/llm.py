@@ -9,6 +9,7 @@ import time
 from collections.abc import Callable
 from typing import Any, TypeVar
 
+import httpx
 from google import genai
 from google.genai import errors, types
 from pydantic import BaseModel, ValidationError
@@ -59,6 +60,11 @@ class LLM:
         self._resting_until[model] = self._clock() + COOLDOWN_SECONDS[reason]
         log.warning("Model %s %s, skipped for %d s", model, reason, COOLDOWN_SECONDS[reason])
 
+    def status(self) -> list[tuple[str, int]]:
+        """Each model and the seconds it still rests after a failure (0: available)."""
+        now = self._clock()
+        return [(model, max(0, int(self._resting_until.get(model, 0) - now))) for model in self.models]
+
     def _available(self) -> list[str]:
         now = self._clock()
         ready = [m for m in self.models if self._resting_until.get(m, 0) <= now]
@@ -96,7 +102,8 @@ class LLM:
                 if error.code not in (404, 429):
                     raise
                 self._rest(model, "quota")
-            except (errors.ServerError, TimeoutError):
+            except (errors.ServerError, TimeoutError, httpx.TransportError):
+                # Overload, slowness or a network drop ("Server disconnected without sending a response").
                 self._rest(model, "unavailable")
             except (ValidationError, ValueError) as error:
                 log.warning("Model %s returned unusable output (%s), trying the next one", model, type(error).__name__)

@@ -146,6 +146,7 @@ class Waha:
         self.spacer = SendSpacer(settings.whatsapp_min_send_interval_seconds)
         # Set from WAHA's session.status events: Jeli stays silent while the session is not WORKING.
         self.paused = False
+        self.status: str | None = None
 
     def accepts(self, message: IncomingMessage) -> bool:
         """Direct messages are always accepted; groups only if listed in WHATSAPP_GROUP_IDS (when set)."""
@@ -163,6 +164,7 @@ class Waha:
         return True
 
     def set_status(self, status: str | None) -> None:
+        self.status = status
         self.paused = status != "WORKING"
         # FAILED means the number must be linked again (scan the QR code in the WAHA dashboard).
         log.log(logging.WARNING if self.paused else logging.INFO, "WhatsApp session %s is %s", self.session, status)

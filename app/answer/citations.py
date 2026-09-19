@@ -29,6 +29,19 @@ def author_key(author: str) -> str:
     return re.sub(r"\D", "", author) if is_phone_number(author) else author.strip().lower()
 
 
+def ignored_keys(authors) -> set[str]:
+    return {author_key(author) for author in authors}
+
+
+def is_ignored(message, keys: set[str]) -> bool:
+    """By display name or phone number, and by WhatsApp id: live messages carry a display name,
+    not the phone number that exports show."""
+    candidates = {author_key(message.author)}
+    if message.author_id:
+        candidates.add(author_key(message.author_id.split("@")[0]))
+    return bool(candidates & keys)
+
+
 def format_time(moment: datetime) -> str:
     return f"{moment.astimezone(timezone.utc):%d %b %Y, %H:%M} UTC"
 

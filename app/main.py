@@ -6,8 +6,10 @@ from datetime import time
 
 from fastapi import FastAPI
 
+from app import dashboard
 from app.adapters import telegram, whatsapp_waha
 from app.answer.catchup import Catchup
+from app.answer.deadlines import DeadlineExtractor, Deadlines
 from app.answer.llm import LLM
 from app.answer.rag import Answerer
 from app.answer.recaps import Recaps
@@ -15,6 +17,7 @@ from app.answer.responder import Responder
 from app.config import get_settings
 from app.ingest.live import LiveIngestor
 from app.jobs.daily_digest import run_daily
+from app.jobs.deadlines import extract_periodically
 from app.jobs.indexing import index_periodically
 from app.kb.embeddings import Embedder
 from app.kb.store import Store
@@ -42,7 +45,8 @@ async def lifespan(app: FastAPI):
     app.state.store, app.state.embedder, app.state.indexing = store, embedder, indexing
 
     # Grounded answers need the knowledge base and a Gemini key; without them Jeli says it isn't ready.
-    answerer = catchup = recaps = None
+    answerer = catchup = recaps = deadlines = llm = deadline_scan = None
+    background = [task for task in (indexing,) if task]
     if store and embedder:
         llm = LLM(settings.gemini_api_key, settings.answer_models)
         answerer = Answerer(
@@ -53,9 +57,15 @@ async def lifespan(app: FastAPI):
             ignored_authors=settings.ignored_author_list,
             chat_labels=settings.chat_label_map,
         )
-        catchup = Catchup(store, llm, ignored_authors=settings.ignored_author_list, chat_labels=settings.chat_label_map)
+        deadlines = Deadlines(store, settings.chat_label_map)
+        catchup = Catchup(
+            store, llm, ignored_authors=settings.ignored_author_list, chat_labels=settings.chat_label_map, deadlines=deadlines
+        )
         recaps = Recaps(store, llm)
-    app.state.answerer = answerer
+        extractor = DeadlineExtractor(store, llm, settings.ignored_author_list, settings.chat_label_map)
+        deadline_scan = asyncio.create_task(extract_periodically(extractor))
+        background.append(deadline_scan)
+    app.state.answerer, app.state.llm, app.state.deadline_scan = answerer, llm, deadline_scan
     respond = Responder(
         answerer,
         catchup,
@@ -63,6 +73,8 @@ async def lifespan(app: FastAPI):
         duplicate_min_similarity=settings.duplicate_min_similarity,
         duplicate_replies_per_hour=settings.duplicate_replies_per_hour,
         recaps=recaps,
+        deadlines=deadlines,
+        record=store.record_event if store else None,
     ).respond
 
     # Each adapter runs when its environment variables are set; WhatsApp is the target channel.
@@ -72,7 +84,6 @@ async def lifespan(app: FastAPI):
     app.state.telegram = await telegram.start(settings, respond)
 
     # R10: the daily digest, only when a time is set and there are groups to post in.
-    background = [task for task in (indexing,) if task]
     app.state.daily_digest = None
     if settings.daily_digest_time and catchup and app.state.whatsapp and settings.whatsapp_groups:
         app.state.daily_digest = asyncio.create_task(
@@ -101,9 +112,11 @@ async def lifespan(app: FastAPI):
         await store.close()
 
 
-app = FastAPI(title="Jeli", description="Group memory bot", lifespan=lifespan)
+# No public API documentation: the only public pages are /health and the password-protected dashboard.
+app = FastAPI(title="Jeli", lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)
 app.include_router(whatsapp_waha.router)
 app.include_router(telegram.router)
+app.include_router(dashboard.router)
 
 
 @app.get("/health")

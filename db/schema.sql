@@ -71,6 +71,37 @@ create table if not exists jeli.recordings (
     created_at       timestamptz not null default now()
 );
 
+-- Deadlines found in chats and calls (R14), each linked to the message that announced it.
+alter table jeli.messages add column if not exists deadlines_checked boolean not null default false;
+create index if not exists messages_deadlines_unchecked on jeli.messages (sent_at) where not deadlines_checked;
+
+create table if not exists jeli.deadlines (
+    id           bigint generated always as identity primary key,
+    what         text not null,
+    due_date     date not null,
+    due_time     text not null default '',  -- as announced, e.g. "2:00 PM CAT"
+    programme    text not null default '',
+    chat_id      text not null,
+    message_id   text references jeli.messages (id) on delete cascade,
+    announced_at timestamptz not null,
+    author       text not null default '',
+    created_at   timestamptz not null default now()
+);
+create unique index if not exists deadlines_unique on jeli.deadlines (due_date, lower(what));
+create index if not exists deadlines_message_id on jeli.deadlines (message_id);
+
+-- Usage counters for the dashboard (R13): what was asked and how it went — never text or authors.
+create table if not exists jeli.events (
+    id         bigint generated always as identity primary key,
+    at         timestamptz not null default now(),
+    kind       text not null,             -- question, catchup, recap, deadlines, search, already_answered, help
+    outcome    text not null default '',  -- for questions: answered, dont_know, sources_only, not_ready
+    language   text not null default '',
+    is_private boolean not null default false,
+    latency_ms integer
+);
+create index if not exists events_at on jeli.events (at);
+
 -- Scheduled jobs that must run once a day at most (the daily digest), even across restarts.
 create table if not exists jeli.job_runs (
     job      text not null,

@@ -10,7 +10,7 @@ from psycopg.types.json import Jsonb
 from psycopg_pool import AsyncConnectionPool, PoolTimeout
 
 from app.ingest.chunker import Chunk
-from app.models import Recording, StoredMessage
+from app.models import Deadline, Recording, StoredMessage, UsageEvent
 
 log = logging.getLogger(__name__)
 
@@ -71,6 +71,10 @@ class Store:
             max_size=max_size,
             open=False,
             kwargs={"autocommit": True, "row_factory": dict_row},
+            # The Supabase pooler closes idle connections: check each one before handing it out.
+            # Measured: a connection left idle during long model calls failed with "server closed
+            # the connection unexpectedly".
+            check=AsyncConnectionPool.check_connection,
         )
 
     async def open(self) -> None:
@@ -176,6 +180,110 @@ class Store:
                 )
             ).fetchall()
         return [StoredMessage(**row) for row in reversed(rows)]
+
+    async def unchecked_messages(self, limit: int = 150) -> list[StoredMessage]:
+        """Messages and transcript segments not yet scanned for deadlines, oldest first."""
+        async with self._pool.connection() as conn:
+            rows = await (
+                await conn.execute(
+                    "select id, chat_id, source, author, author_id, sent_at, text from jeli.messages "
+                    "where not deadlines_checked order by sent_at, id limit %s",
+                    (limit,),
+                )
+            ).fetchall()
+        return [StoredMessage(**row) for row in rows]
+
+    async def mark_deadlines_checked(self, ids: Sequence[str]) -> None:
+        async with self._pool.connection() as conn:
+            await conn.execute("update jeli.messages set deadlines_checked = true where id = any(%s)", (list(ids),))
+
+    async def add_deadlines(self, deadlines: Sequence[Deadline]) -> int:
+        """Store new deadlines; one already known (same day, same wording) is skipped."""
+        added = 0
+        async with self._pool.connection() as conn:
+            for d in deadlines:
+                cursor = await conn.execute(
+                    "insert into jeli.deadlines (what, due_date, due_time, programme, chat_id, message_id, "
+                    "announced_at, author) values (%s, %s, %s, %s, %s, %s, %s, %s) on conflict do nothing",
+                    (d.what, d.due_date, d.due_time, d.programme, d.chat_id, d.message_id, d.announced_at, d.author),
+                )
+                added += cursor.rowcount
+        return added
+
+    async def deadlines_between(self, start: date, end: date) -> list[Deadline]:
+        async with self._pool.connection() as conn:
+            rows = await (
+                await conn.execute(
+                    "select what, due_date, chat_id, announced_at, due_time, programme, message_id, author "
+                    "from jeli.deadlines where due_date between %s and %s order by due_date, due_time, announced_at",
+                    (start, end),
+                )
+            ).fetchall()
+        return [Deadline(**row) for row in rows]
+
+    async def record_event(self, event: UsageEvent) -> None:
+        async with self._pool.connection() as conn:
+            await conn.execute(
+                "insert into jeli.events (kind, outcome, language, is_private, latency_ms) values (%s, %s, %s, %s, %s)",
+                (event.kind, event.outcome, event.language, event.is_private, event.latency_ms),
+            )
+
+    async def usage_since(self, since: datetime) -> dict:
+        """Counters for the dashboard: interactions by kind and day, question outcomes, reply times."""
+        async with self._pool.connection() as conn:
+            by_kind = await (
+                await conn.execute(
+                    "select kind, count(*) as n from jeli.events where at >= %s group by kind", (since,)
+                )
+            ).fetchall()
+            by_day = await (
+                await conn.execute(
+                    "select (at at time zone 'utc')::date as day, outcome, count(*) as n from jeli.events "
+                    "where at >= %s and kind = 'question' group by 1, 2 order by 1",
+                    (since,),
+                )
+            ).fetchall()
+            latency = await (
+                await conn.execute(
+                    "select percentile_cont(0.5) within group (order by latency_ms) as median, "
+                    "percentile_cont(0.95) within group (order by latency_ms) as p95 "
+                    "from jeli.events where at >= %s and kind = 'question' and latency_ms is not null",
+                    (since,),
+                )
+            ).fetchone()
+        return {
+            "by_kind": {row["kind"]: row["n"] for row in by_kind},
+            "questions_by_day": [(row["day"], row["outcome"], row["n"]) for row in by_day],
+            "median_ms": latency["median"],
+            "p95_ms": latency["p95"],
+        }
+
+    async def knowledge_overview(self) -> dict:
+        """What Jeli knows, in counts: per chat, per recording, and the indexing backlog."""
+        async with self._pool.connection() as conn:
+            chats = await (
+                await conn.execute(
+                    "select chat_id, count(*) as messages, max(sent_at) as last_message, "
+                    "count(*) filter (where source = 'whatsapp_live') as live "
+                    "from jeli.messages where source <> 'recording' group by chat_id order by messages desc"
+                )
+            ).fetchall()
+            recordings = await (
+                await conn.execute(
+                    "select r.title, r.recorded_at, r.duration_seconds, "
+                    "coalesce((select array_agg(k order by k) from jsonb_object_keys(r.recap) as k), '{}') as recaps, "
+                    "(select count(*) from jeli.messages m where m.chat_id = r.id) as segments "
+                    "from jeli.recordings r order by r.recorded_at"
+                )
+            ).fetchall()
+            totals = await (
+                await conn.execute(
+                    "select (select count(*) from jeli.chunks) as chunks, "
+                    "(select count(*) from jeli.messages where chunk_id is null) as pending, "
+                    "(select count(*) from jeli.deadlines where due_date >= (now() at time zone 'utc')::date) as deadlines"
+                )
+            ).fetchone()
+        return {"chats": chats, "recordings": recordings, **totals}
 
     async def claim_daily_run(self, job: str, day: date) -> bool:
         """True the first time a job claims a day: a daily message is never sent twice, even across restarts."""
