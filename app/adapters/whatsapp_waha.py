@@ -265,6 +265,21 @@ class Waha:
             await self._post_quietly("/api/stopTyping", chat)
         await self.send_text(message.chat_id, reply, reply_to=message.message_id)
 
+    async def post(self, chat_id: str, text: str) -> bool:
+        """A message Jeli sends on its own schedule (the daily digest), within the same limits.
+        Returns False when it was not sent: session not WORKING or hourly limit reached."""
+        if self.paused or not self.hourly_limiter.allow("all"):
+            return False
+        chat = {"chatId": chat_id}
+        await self._post_quietly("/api/startTyping", chat)
+        try:
+            await asyncio.sleep(typing_duration(text))
+            await self.spacer.wait_turn()
+        finally:
+            await self._post_quietly("/api/stopTyping", chat)
+        await self.send_text(chat_id, text)
+        return True
+
     async def aclose(self) -> None:
         await self._http.aclose()
 

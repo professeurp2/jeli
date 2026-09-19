@@ -10,7 +10,8 @@ QUESTION_START = re.compile(
 )
 URL = re.compile(r"https?://\S+")
 
-CATCHUP_COMMAND = re.compile(r"^/(catchup|catch-up|recap|récap|rattrapage)\b", re.IGNORECASE)
+# /recap is a session recap (R9), not a catch-up.
+CATCHUP_COMMAND = re.compile(r"^/(catchup|catch-up|rattrapage)\b", re.IGNORECASE)
 CATCHUP_PHRASE = re.compile(
     r"what (did|have) i miss(ed)?|catch me up|fill me in|what('s| has| is) new|quoi de neuf"
     r"|qu.est.ce que j.ai (raté|manqué|loupé)|j.ai (raté|manqué|loupé) quoi|ce que j.ai (raté|manqué|loupé)",
@@ -28,6 +29,26 @@ PERIOD = re.compile(
     re.IGNORECASE,
 )
 DEFAULT_PERIOD = timedelta(hours=24)
+
+
+RECAP_COMMAND = re.compile(r"^/(recap|résumé|resume)\b", re.IGNORECASE)
+SESSION_WORD = re.compile(
+    r"\b(session|call|meeting|class|coaching|module|webinar|workshop|réunion|séance|appel|cours|atelier|visio)s?\b",
+    re.IGNORECASE,
+)
+SAID_IN = re.compile(
+    r"what (was|were|did they|did we) (said|say|discuss|discussed|cover|covered|decided)|what happened (in|at|during)"
+    r"|de quoi (a-t-on|on a|ont-ils) parlé|qu.est-ce qui s.est dit|ce qui s.est dit|qu.a-t-on (dit|décidé)",
+    re.IGNORECASE,
+)
+
+
+def is_recap_request(text: str) -> bool:
+    """"/recap 2", "summary of the Module 1 session", "de quoi a-t-on parlé pendant le coaching ?"
+    A catch-up period is checked first: "recap of this week" is a catch-up."""
+    if RECAP_COMMAND.match(text):
+        return True
+    return bool((RECAP_WORD.search(text) or SAID_IN.search(text)) and SESSION_WORD.search(text))
 
 
 def looks_like_question(text: str) -> bool:

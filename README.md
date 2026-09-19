@@ -26,7 +26,9 @@ Built for the **UniPods METI AI Innovation Programme — Cohort 1 Chatbot Hackat
 | R12 | Answers in the language of the question (French / English) | ✅ Day 3 |
 | R7 | Duplicate detection: a question the group already answered gets a pointer to that answer | ✅ Day 5 |
 | R8 | Catch-up digest: `/catchup`, "what did I miss since Monday?" | ✅ Day 5 |
-| R9–R10 | Meeting recaps, daily digest | ⏳ |
+| R9 | Session recaps: summary, decisions, action items with owners, key moments linked to the video | ✅ Day 6 |
+| R10 | Daily digest in each group (opt-in) | ✅ Day 6 |
+| R11 | `/search <topic>`: where the group talked about it, without a model call | ✅ Day 6 |
 
 ---
 
@@ -71,6 +73,12 @@ In a direct message, it answers everything.
 [1] METI cohort · 17 Sep 2026, 20:53 UTC · Awa T.
 ```
 It speaks up only when sure: the question must look like one, be very close to an indexed conversation (`DUPLICATE_MIN_SIMILARITY`, 0.70), and the model must confirm that an excerpt answers *this* question — same topic is not enough, and a question left unanswered stays unanswered. At most `DUPLICATE_REPLIES_PER_HOUR` (3) such replies per group; `DUPLICATE_DETECTION=false` turns it off.
+
+**Session recaps (R9):** `/recap` lists the recorded sessions; `/recap 2`, *"summary of the coaching session"* or *"de quoi a-t-on parlé pendant la session d'accueil ?"* give that session's summary, decisions, action items (owner, due date) and key moments, each with a link to that second of the video. A recap is written once from the whole transcript (one model call) and stored per language: English at import, French on first request — then it answers instantly.
+
+**Search (R11):** `/search <topic>` lists where the group talked about a topic, with snippets — no model call, so it keeps working when the models are out of quota.
+
+**Daily digest (R10), opt-in:** with `DAILY_DIGEST_TIME=17:00` (UTC), each group in `WHATSAPP_GROUP_IDS` gets the last 24 hours' digest once a day — only if there is something new, never twice (each run is claimed in the database, so a restart cannot repeat it), and within the anti-ban limits.
 
 **Catch-up (R8):** `/catchup`, `/catchup 3 days`, *"@Jeli what did I miss since Monday?"*, *"Jeli, qu'est-ce que j'ai raté cette semaine ?"* → highlights, decisions, deadlines and dates, questions still unanswered, and the sessions recorded in that period with their links. Default period: the last 24 hours. The same digest is reused for 10 minutes, so a whole jury asking at once costs one model call.
 
@@ -321,6 +329,8 @@ Run **exactly one replica of WAHA**: two instances of the same WhatsApp session 
 | `DUPLICATE_DETECTION` | no | Point to earlier answers when the group re-asks a question (R7). Default `true` |
 | `DUPLICATE_MIN_SIMILARITY` | no | Similarity needed before even checking. Default 0.70 |
 | `DUPLICATE_REPLIES_PER_HOUR` | no | Uninvited replies per group per hour. Default 3 |
+| `DAILY_DIGEST_TIME` | no | `HH:MM` (UTC) to post the daily digest in each group of `WHATSAPP_GROUP_IDS`. Empty: off |
+| `DAILY_DIGEST_LANGUAGE` | no | `en` or `fr`. Default `en` |
 | `CHAT_LABELS` | no | Readable chat names in sources: `chat-id=Name;other-id=Other name` |
 | `EXPORT_TIMEZONE` | no | Default timezone of imported exports. Default `UTC` |
 | `INDEX_INTERVAL_SECONDS` | no | How often live messages are indexed. Default 300 |
@@ -346,11 +356,11 @@ app/
 ├── config.py          # settings from environment / .env
 ├── models.py          # platform-independent message types
 ├── adapters/          # whatsapp_waha.py, telegram.py — thin, swappable
-├── answer/            # responder.py, rag.py, catchup.py, intents.py, llm.py (Gemini + fallback), prompts.py, citations.py, language.py
+├── answer/            # responder.py, rag.py, catchup.py, recaps.py, intents.py, llm.py (Gemini + fallback), prompts.py, citations.py, language.py
 ├── ingest/            # whatsapp_export.py, transcribe.py, chunker.py, live.py
 ├── kb/                # embeddings.py (Gemini), store.py (pgvector), indexer.py, search.py
-└── jobs/              # indexing.py (digest and duplicate check next)
-scripts/               # import_whatsapp_export, import_recording, search, ask, evaluate, forget
+└── jobs/              # indexing.py, daily_digest.py
+scripts/               # import_whatsapp_export, import_recording, recap_recording, search, ask, evaluate, forget
 evals/questions.json   # fixed question set for answer quality
 db/schema.sql          # knowledge base schema and least-privilege role
 tests/

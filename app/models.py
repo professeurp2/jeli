@@ -30,6 +30,7 @@ class Recording:
     method: str  # "gemini" or "subtitles"
     source_url: str | None = None
     duration_seconds: int | None = None
+    recap: dict | None = None  # per language, see app/answer/recaps.py
 
 
 @dataclass(frozen=True)

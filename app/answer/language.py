@@ -41,10 +41,20 @@ TEXTS = {
         "catchup_deadlines": "⏰ Deadlines and dates",
         "catchup_questions": "❓ Still unanswered",
         "catchup_recordings": "🎥 Recorded sessions",
+        "search_header": "🔎 Where the group talked about it:",
+        "search_nothing": "I found nothing about that in the group's records.",
+        "recap_summary": "📝 Summary",
+        "recap_actions": "📋 To do",
+        "recap_moments": "⏱️ Key moments",
+        "recap_choose": "Which session? Reply with /recap and its number:",
+        "recap_unavailable": "I can't write this recap right now. Try again in a few minutes.",
         "help": (
-            "Hi, I'm Jeli, the group's memory. Ask me about anything discussed in the group — "
-            "mention me (@Jeli), reply to one of my messages, or start with \"Jeli,\". "
-            "I answer with my sources, and I say so when I don't know."
+            "Hi, I'm Jeli, the group's memory. Ask me about anything discussed in the group or in "
+            "recorded sessions — mention me (@Jeli), reply to one of my messages, or start with \"Jeli,\". "
+            "I answer with my sources, and I say so when I don't know.\n\n"
+            "/catchup — what you missed (/catchup 3 days, or \"what did I miss since Monday?\")\n"
+            "/recap — summary of a recorded session\n"
+            "/search <topic> — where the group talked about it"
         ),
     },
     "fr": {
@@ -61,10 +71,20 @@ TEXTS = {
         "catchup_deadlines": "⏰ Échéances et dates",
         "catchup_questions": "❓ Questions restées sans réponse",
         "catchup_recordings": "🎥 Sessions enregistrées",
+        "search_header": "🔎 Où le groupe en a parlé :",
+        "search_nothing": "Je n'ai rien trouvé à ce sujet dans les échanges du groupe.",
+        "recap_summary": "📝 Résumé",
+        "recap_actions": "📋 À faire",
+        "recap_moments": "⏱️ Moments clés",
+        "recap_choose": "Quelle session ? Répondez /recap suivi de son numéro :",
+        "recap_unavailable": "Je ne peux pas rédiger ce résumé pour l'instant. Réessayez dans quelques minutes.",
         "help": (
-            "Bonjour, je suis Jeli, la mémoire du groupe. Posez-moi une question sur ce qui s'est dit ici — "
-            "mentionnez-moi (@Jeli), répondez à l'un de mes messages, ou commencez par « Jeli, ». "
-            "Je réponds avec mes sources, et je le dis quand je ne sais pas."
+            "Bonjour, je suis Jeli, la mémoire du groupe. Posez-moi une question sur ce qui s'est dit ici "
+            "ou pendant les sessions enregistrées — mentionnez-moi (@Jeli), répondez à l'un de mes messages, "
+            "ou commencez par « Jeli, ». Je réponds avec mes sources, et je le dis quand je ne sais pas.\n\n"
+            "/catchup — ce que vous avez raté (/catchup 3 jours, ou « qu'est-ce que j'ai raté depuis lundi ? »)\n"
+            "/recap — résumé d'une session enregistrée\n"
+            "/search <sujet> — où le groupe en a parlé"
         ),
     },
 }

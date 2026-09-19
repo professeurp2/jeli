@@ -45,6 +45,9 @@ class Settings(BaseSettings):
     duplicate_detection: bool = True
     duplicate_min_similarity: float = 0.70
     duplicate_replies_per_hour: int = 3
+    # R10: "HH:MM" (UTC) to post a daily digest in each group of WHATSAPP_GROUP_IDS. Empty: off.
+    daily_digest_time: str = ""
+    daily_digest_language: str = "en"
     # Readable names for chats in citations: "chat-id=Name;other-id=Other name".
     chat_labels: str = ""
     # Supabase Postgres, through the pooler: postgresql://jeli_app.<ref>:<password>@<pooler-host>:5432/postgres

@@ -18,7 +18,8 @@ from datetime import date, datetime, time, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
-from app.answer.llm import LLM
+from app.answer.llm import LLM, LLMUnavailable
+from app.answer.recaps import Recaps
 from app.config import get_settings
 from app.ingest.transcribe import Progress, Segment, Transcriber, format_offset, is_youtube, parse_subtitles
 from app.kb.embeddings import Embedder
@@ -121,6 +122,13 @@ async def main(args: argparse.Namespace) -> None:
         await store.add_messages(messages)
         created = await index_pending(store, embedder)
         print(f"Stored {len(messages)} segments as {recording_id}{f' (replacing {replaced})' if replaced else ''}; {created} chunks indexed")
+        if not args.no_recap:
+            recaps = Recaps(store, LLM(settings.gemini_api_key, settings.answer_models))
+            try:
+                await recaps.generate(recording, "en")
+                print("Recap written (ask Jeli: /recap)")
+            except LLMUnavailable:
+                print("Recap not written (no model available): run python -m scripts.recap_recording later")
     finally:
         await store.close()
 
@@ -134,4 +142,5 @@ if __name__ == "__main__":
     parser.add_argument("--timezone", default=get_settings().export_timezone)
     parser.add_argument("--retranscribe", action="store_true", help="ignore the cached transcript")
     parser.add_argument("--dry-run", action="store_true", help="transcribe (or read the cache) but store nothing")
+    parser.add_argument("--no-recap", action="store_true", help="don't write the session recap")
     run(main(parser.parse_args()))

@@ -54,8 +54,8 @@ class FakeStore:
     def __init__(self, messages=MESSAGES, recordings=(RECORDING,)):
         self.messages, self.recordings = list(messages), list(recordings)
 
-    async def messages_since(self, since):
-        return [m for m in self.messages if m.sent_at >= since]
+    async def messages_since(self, since, chat_ids=None):
+        return [m for m in self.messages if m.sent_at >= since and (chat_ids is None or m.chat_id in chat_ids)]
 
     async def recordings_since(self, since):
         return [r for r in self.recordings if r.recorded_at >= since]

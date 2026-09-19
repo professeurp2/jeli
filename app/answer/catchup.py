@@ -71,23 +71,32 @@ class Catchup:
         self._clock = clock
         self._cache: dict[tuple, tuple[float, str]] = {}
 
-    async def summarize(self, since: datetime, language: str) -> str:
+    async def summarize(
+        self, since: datetime, language: str, chat_ids: list[str] | None = None, quiet_if_empty: bool = False
+    ) -> str | None:
+        """All chats by default; `chat_ids` limits the digest, e.g. the daily digest of one group.
+        With `quiet_if_empty`, None instead of "nothing new"."""
         # Rounded to 10 minutes: "the last 24 hours" asked a minute apart is the same digest.
-        key = (int(since.timestamp()) // 600, language)
+        key = (int(since.timestamp()) // 600, language, tuple(chat_ids or ()))
         cached = self._cache.get(key)
         if cached and self._clock() - cached[0] < CACHE_SECONDS:
-            return cached[1]
-        digest = await self._summarize(since, language)
-        self._cache[key] = (self._clock(), digest)
+            digest = cached[1]
+        else:
+            digest = await self._summarize(since, language, chat_ids)
+            self._cache[key] = (self._clock(), digest)
+        if digest is None:
+            return None if quiet_if_empty else TEXTS[language]["catchup_nothing"].format(since=_day(since, language))
         return digest
 
-    async def _summarize(self, since: datetime, language: str) -> str:
+    async def _summarize(self, since: datetime, language: str, chat_ids: list[str] | None) -> str | None:
         texts = TEXTS[language]
-        messages = [m for m in await self.store.messages_since(since) if author_key(m.author) not in self.ignored]
+        messages = [
+            m for m in await self.store.messages_since(since, chat_ids=chat_ids) if author_key(m.author) not in self.ignored
+        ]
         recordings = await self.store.recordings_since(since)
         header = texts["catchup_header"].format(since=_day(since, language), messages=len(messages))
         if not messages and not recordings:
-            return texts["catchup_nothing"].format(since=_day(since, language))
+            return None
 
         lines = [
             f"[{m.sent_at.astimezone(timezone.utc):%a %d %b %H:%M}] {self.chat_labels.get(m.chat_id, m.chat_id)} · "

@@ -30,6 +30,9 @@ class FakeAnswerer:
         self.questions.append((question, asker))
         return "answer"
 
+    async def where_discussed(self, topic):
+        return f"sources for {topic}"
+
     async def already_answered(self, question, min_similarity):
         self.checked.append(question)
         return self.already
@@ -73,8 +76,32 @@ def test_catchup_requests_get_the_digest_in_the_right_language():
 
 def test_unknown_commands_get_the_help():
     answerer = FakeAnswerer()
-    assert reply("/search bootcamp", answerer) == TEXTS["en"]["help"]
+    assert reply("/pizza", answerer) == TEXTS["en"]["help"]
+    assert reply("/search", answerer) == TEXTS["en"]["help"]
     assert answerer.questions == []
+
+
+def test_search_shows_where_the_group_talked_about_it():
+    answerer = FakeAnswerer()
+    assert reply("/search bootcamp venue", answerer) == "sources for bootcamp venue"
+
+
+class FakeRecaps:
+    def __init__(self, result):
+        self.result, self.calls = result, []
+
+    async def reply(self, text, language):
+        self.calls.append((text, language))
+        return self.result
+
+
+def test_session_recaps_and_fallback_to_a_normal_question():
+    found = Responder(FakeAnswerer(), recaps=FakeRecaps("🎥 recap"))
+    assert reply("Summary of the Module 1 session?", responder=found) == "🎥 recap"
+    assert reply("/recap 2", responder=found) == "🎥 recap"
+    # Not about a recorded session: answered as a question.
+    unknown = Responder(FakeAnswerer(), recaps=FakeRecaps(None))
+    assert reply("Summary of the bootcamp session?", responder=unknown) == "answer"
 
 
 def test_without_knowledge_base_jeli_says_it_is_not_ready_in_the_right_language():

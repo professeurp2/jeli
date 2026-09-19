@@ -193,11 +193,21 @@ class Answerer:
             )
         return excerpts
 
-    def _fallback(self, texts: dict[str, str], excerpts: list[Excerpt]) -> str:
+    async def where_discussed(self, topic: str) -> str:
+        """R11, /search: where the group talked about a topic — sources and snippets, no model call,
+        so it keeps working when every model is out of quota."""
+        texts = TEXTS[detect_language(topic)]
+        hits = await search(self.store, self.embedder, topic, limit=CANDIDATE_CHUNKS)
+        if not hits or max(hit.similarity for hit in hits) < self.min_similarity:
+            return texts["search_nothing"]
+        excerpts = await self._excerpts(hits)
+        return self._fallback(texts, excerpts, header="search_header") if excerpts else texts["search_nothing"]
+
+    def _fallback(self, texts: dict[str, str], excerpts: list[Excerpt], header: str = "fallback") -> str:
         lines = []
         for excerpt in sorted(excerpts, key=lambda e: e.relevance_rank)[:SOURCES_SHOWN]:
             snippet = excerpt.lines[0]
             if len(snippet) > FALLBACK_SNIPPET_CHARS:
                 snippet = snippet[:FALLBACK_SNIPPET_CHARS].rsplit(" ", 1)[0] + " …"
             lines.append(f"{excerpt.source()}\n   « {snippet} »")
-        return f"{texts['fallback']}\n\n" + "\n".join(lines)
+        return f"{texts[header]}\n\n" + "\n".join(lines)

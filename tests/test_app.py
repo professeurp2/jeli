@@ -15,6 +15,7 @@ def test_health_without_any_channel_configured():
         "database": False,
         "indexing": False,
         "answers": False,
+        "daily_digest": False,
     }
 
 

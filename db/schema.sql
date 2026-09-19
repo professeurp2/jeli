@@ -67,7 +67,16 @@ create table if not exists jeli.recordings (
     source_url       text,              -- YouTube link (answers link to the exact moment) or file name
     duration_seconds integer,
     method           text not null,     -- how the transcript was made: gemini, subtitles
+    recap            jsonb,             -- session recap per language: {"en": {...}, "fr": {...}}
     created_at       timestamptz not null default now()
+);
+
+-- Scheduled jobs that must run once a day at most (the daily digest), even across restarts.
+create table if not exists jeli.job_runs (
+    job      text not null,
+    run_date date not null,
+    ran_at   timestamptz not null default now(),
+    primary key (job, run_date)
 );
 
 -- Least-privilege application role: data access to the jeli schema only.

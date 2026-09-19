@@ -3,9 +3,10 @@
 import logging
 from collections.abc import Sequence
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import date, datetime
 
 from psycopg.rows import dict_row
+from psycopg.types.json import Jsonb
 from psycopg_pool import AsyncConnectionPool, PoolTimeout
 
 from app.ingest.chunker import Chunk
@@ -118,41 +119,71 @@ class Store:
                 ),
             )
 
-    async def recordings(self, ids: Sequence[str]) -> dict[str, Recording]:
-        if not ids:
-            return {}
+    async def _recordings(self, condition: str, params: tuple) -> list[Recording]:
         async with self._pool.connection() as conn:
             rows = await (
                 await conn.execute(
-                    "select id, title, recorded_at, method, source_url, duration_seconds from jeli.recordings "
-                    "where id = any(%s)",
-                    (list(ids),),
+                    "select id, title, recorded_at, method, source_url, duration_seconds, recap from jeli.recordings "
+                    f"{condition} order by recorded_at",
+                    params,
                 )
             ).fetchall()
-        return {row["id"]: Recording(**row) for row in rows}
+        return [Recording(**row) for row in rows]
 
-    async def messages_since(self, since: datetime, limit: int = 1500) -> list[StoredMessage]:
-        """Chat messages (not recording transcripts) since a moment, oldest first; the newest `limit` if more."""
+    async def recordings(self, ids: Sequence[str]) -> dict[str, Recording]:
+        if not ids:
+            return {}
+        return {r.id: r for r in await self._recordings("where id = any(%s)", (list(ids),))}
+
+    async def recordings_since(self, since: datetime) -> list[Recording]:
+        return await self._recordings("where recorded_at >= %s", (since,))
+
+    async def all_recordings(self) -> list[Recording]:
+        return await self._recordings("", ())
+
+    async def save_recap(self, recording_id: str, language: str, recap: dict) -> None:
+        async with self._pool.connection() as conn:
+            await conn.execute(
+                "update jeli.recordings set recap = coalesce(recap, '{}'::jsonb) || jsonb_build_object(%s::text, %s::jsonb) "
+                "where id = %s",
+                (language, Jsonb(recap), recording_id),
+            )
+
+    async def messages_of(self, chat_id: str) -> list[StoredMessage]:
+        """Every message of a chat (or segment of a recording), in time order."""
         async with self._pool.connection() as conn:
             rows = await (
                 await conn.execute(
                     "select id, chat_id, source, author, author_id, sent_at, text from jeli.messages "
-                    "where sent_at >= %s and source <> 'recording' order by sent_at desc, id desc limit %s",
-                    (since, limit),
+                    "where chat_id = %s order by sent_at, id",
+                    (chat_id,),
+                )
+            ).fetchall()
+        return [StoredMessage(**row) for row in rows]
+
+    async def messages_since(
+        self, since: datetime, chat_ids: Sequence[str] | None = None, limit: int = 1500
+    ) -> list[StoredMessage]:
+        """Chat messages (not recording transcripts) since a moment, oldest first; the newest `limit` if more."""
+        chats = "and chat_id = any(%s)" if chat_ids is not None else ""
+        params = (since, list(chat_ids), limit) if chat_ids is not None else (since, limit)
+        async with self._pool.connection() as conn:
+            rows = await (
+                await conn.execute(
+                    "select id, chat_id, source, author, author_id, sent_at, text from jeli.messages "
+                    f"where sent_at >= %s and source <> 'recording' {chats} order by sent_at desc, id desc limit %s",
+                    params,
                 )
             ).fetchall()
         return [StoredMessage(**row) for row in reversed(rows)]
 
-    async def recordings_since(self, since: datetime) -> list[Recording]:
+    async def claim_daily_run(self, job: str, day: date) -> bool:
+        """True the first time a job claims a day: a daily message is never sent twice, even across restarts."""
         async with self._pool.connection() as conn:
-            rows = await (
-                await conn.execute(
-                    "select id, title, recorded_at, method, source_url, duration_seconds from jeli.recordings "
-                    "where recorded_at >= %s order by recorded_at",
-                    (since,),
-                )
-            ).fetchall()
-        return [Recording(**row) for row in rows]
+            cursor = await conn.execute(
+                "insert into jeli.job_runs (job, run_date) values (%s, %s) on conflict do nothing", (job, day)
+            )
+        return cursor.rowcount == 1
 
     async def pending_chats(self) -> list[str]:
         async with self._pool.connection() as conn:
