@@ -122,3 +122,33 @@ def test_an_export_with_media_gives_its_documents_and_who_shared_them():
     assert name == "00000012-UniPods Hackathon Guidelines.pdf" and data.startswith(b"%PDF")
     by = who_shared(name, attachments(chat))
     assert by.author == "Diane" and by.sent_at.date().isoformat() == "2026-09-16"
+
+
+def test_polls_are_remembered_with_their_votes():
+    from app.adapters.whatsapp_waha import parse_message
+    from app.answer.citations import with_tally
+
+    event = {
+        "event": "message", "session": "default", "me": {"id": "22380000000@c.us"},
+        "payload": {
+            "id": "poll-1", "from": "120363@g.us", "participant": "250783188655@c.us", "fromMe": False, "body": "",
+            "timestamp": 1758300000, "_data": {"Info": {"PushName": "Diane"}, "Message": {"pollCreationMessageV3": {
+                "name": "Which day for the demo?", "options": [{"optionName": "Tuesday"}, {"optionName": "Wednesday"}]}}},
+        },
+    }
+    message = parse_message(event, "Jeli")
+    assert message.text == "📊 Poll: Which day for the demo?\nOptions: Tuesday · Wednesday"
+    assert with_tally(message.text, {"Wednesday": 7, "Tuesday": 3}).endswith("Votes so far: Wednesday 7 · Tuesday 3")
+    assert with_tally(message.text, None).endswith("No votes yet.") and with_tally("Hello", None) == "Hello"
+    reply = {**event, "payload": {**event["payload"], "body": "I vote Tuesday", "_data": {"Info": {"PushName": "Awa"},
+             "quotedMessage": {"pollCreationMessageV3": {"name": "Which day?", "options": [{"optionName": "Tuesday"}]}}}}}
+    assert parse_message(reply, "Jeli").text == "I vote Tuesday"  # a reply to a poll is not a poll
+
+
+def test_organisers_are_known_by_name_and_number():
+    from app.answer.citations import display_person, ignored_keys, people_names
+
+    entries = ["Diane +250 783 188 655", "Gift NTULI +263 77 409 4822", "Munira"]
+    assert ignored_keys(entries) == {"diane", "250783188655", "gift ntuli", "263774094822", "munira"}
+    assert people_names(entries) == {"250783188655": "Diane", "263774094822": "Gift NTULI"}
+    assert display_person("Diane +250 783 188 655") == "Diane (+250 ···55)"

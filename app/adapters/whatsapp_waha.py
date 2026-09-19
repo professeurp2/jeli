@@ -27,7 +27,7 @@ from fastapi import APIRouter, BackgroundTasks, Header, HTTPException, Request
 
 from app.adapters import Ingest, Respond
 from app.adapters.pacing import SendSpacer, SlidingWindowLimiter, reading_delay, typing_duration
-from app.answer.citations import is_ignored
+from app.answer.citations import is_ignored, poll_text
 from app.config import Settings
 from app.control.guard import Guard
 from app.models import Attachment, IncomingMessage
@@ -94,6 +94,34 @@ def _author(payload: dict) -> str:
     return info.get("PushName") or data.get("pushName") or data.get("notifyName") or "Someone"
 
 
+def _find_poll(data: Any) -> tuple[str, list[str]] | None:
+    """A poll's question and options, wherever the engine puts them ("pollCreationMessageV3"…)."""
+    if isinstance(data, dict):
+        for key, value in data.items():
+            if "quoted" in key.lower() or key == "replyTo":
+                continue  # a reply to a poll is not a new poll
+            if "poll" in key.lower() and isinstance(value, dict):
+                question = value.get("name") or value.get("title") or value.get("question")
+                options = value.get("options") or value.get("pollOptions") or []
+                names = [o.get("optionName") or o.get("name") if isinstance(o, dict) else str(o) for o in options]
+                names = [n for n in names if n]
+                if question and names:
+                    return str(question), names
+            found = _find_poll(value)
+            if found:
+                return found
+        question, options = data.get("pollName"), data.get("pollOptions")
+        if question and isinstance(options, list):
+            names = [o.get("name") if isinstance(o, dict) else str(o) for o in options]
+            return str(question), [n for n in names if n]
+    elif isinstance(data, list):
+        for item in data:
+            found = _find_poll(item)
+            if found:
+                return found
+    return None
+
+
 def parse_message(event: dict, bot_name: str) -> IncomingMessage | None:
     """Turn a WAHA `message` event into an IncomingMessage; None for anything Jeli should not process."""
     if event.get("event") != "message":
@@ -101,6 +129,9 @@ def parse_message(event: dict, bot_name: str) -> IncomingMessage | None:
     payload = event.get("payload") or {}
     chat_id = payload.get("from") or ""
     text = (payload.get("body") or "").strip()
+    poll = _find_poll(payload.get("_data")) or _find_poll({k: v for k, v in payload.items() if k != "_data"})
+    if poll:
+        text = poll_text(*poll)  # a poll: its question and options, to be remembered with its votes
     if payload.get("fromMe") or not chat_id or chat_id.endswith(IGNORED_CHAT_SUFFIXES) or not text:
         return None
 
@@ -190,6 +221,8 @@ class Waha:
         self.follow_up = None
         # Keeps a document shared in a group: (filename, data, mimetype, shared_by, shared_at, chat_id).
         self.on_document = None
+        # Records a vote in a poll: (poll_id, voter, options).
+        self.on_vote = None
         self._later: set[asyncio.Task] = set()
         self._admins: dict[str, tuple[float, set[str]]] = {}
 
@@ -568,6 +601,12 @@ async def receive_webhook(
         return {"ok": True}
     if event.get("event") == "session.status":
         adapter.set_status((event.get("payload") or {}).get("status"))
+        return {"ok": True}
+    if event.get("event") == "poll.vote":
+        payload = event.get("payload") or {}
+        vote, poll = payload.get("vote") or {}, payload.get("poll") or {}
+        if adapter.on_vote and poll.get("id") and vote.get("from"):
+            background_tasks.add_task(adapter.on_vote, poll["id"], vote["from"], [str(o) for o in vote.get("selectedOptions") or []])
         return {"ok": True}
 
     shared = parse_shared_document(event)

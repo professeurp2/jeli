@@ -55,7 +55,7 @@ FIELDS = {
         # A session's recording an organiser shares in a group is added on its own.
         Field("auto_sessions", "bool", lambda s: True),
         # Organisers, beyond the groups' admins (names or numbers).
-        Field("organisers", "list", lambda s: []),
+        Field("organisers", "list", lambda s: s.organiser_list),
         Field("answer_min_similarity", "float", lambda s: s.answer_min_similarity, 0.5, 0.8),
         Field("duplicate_detection", "bool", lambda s: s.duplicate_detection),
         Field("duplicate_min_similarity", "float", lambda s: s.duplicate_min_similarity, 0.6, 0.9),

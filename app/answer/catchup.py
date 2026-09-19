@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 
 from pydantic import BaseModel
 
-from app.answer.citations import display_author, ignored_keys, is_ignored
+from app.answer.citations import POLL_MARK, display_author, ignored_keys, is_ignored, with_tally
 from app.answer.language import TEXTS
 from app.answer.llm import LLM, LLMUnavailable
 from app.answer.prompts import LANGUAGES, PROGRAMMES
@@ -25,7 +25,7 @@ You write catch-up digests for members of a WhatsApp community who missed messag
 {PROGRAMMES}
 From the messages below (and the list of call recordings), extract what a member who missed them
 needs to know:
-- highlights: announcements and the main discussions;
+- highlights: the organisers' announcements first (lines marked "(organiser)"), then polls and the main discussions;
 - decisions: what was decided or confirmed;
 - deadlines: deadlines and upcoming dates, always with the date;
 - open_questions: questions members asked that nobody answered.
@@ -69,6 +69,7 @@ class Catchup:
         self.llm = llm
         self.ignored = ignored_keys(ignored_authors)
         self.chat_labels = chat_labels or {}
+        self.organisers: set[str] = set()  # their messages are announcements (set from the settings)
         self._clock = clock
         # R14: the deadlines of the next days close every digest (app.answer.deadlines.Deadlines).
         self.deadlines = deadlines
@@ -106,9 +107,12 @@ class Catchup:
         if not messages and not recordings:
             return None
 
+        polls = [m.id for m in messages if m.text.startswith(POLL_MARK)]
+        tallies = await self.store.poll_tallies(polls) if polls and hasattr(self.store, "poll_tallies") else {}
         lines = [
             f"[{m.sent_at.astimezone(timezone.utc):%a %d %b %H:%M}] {self.chat_labels.get(m.chat_id, m.chat_id)} · "
-            f"{display_author(m.author)}: {' '.join(m.text.split())[:MAX_MESSAGE_CHARS]}"
+            f"{display_author(m.author)}{' (organiser)' if is_ignored(m, self.organisers) else ''}: "
+            f"{' '.join(with_tally(m.text, tallies.get(m.id)).split())[:MAX_MESSAGE_CHARS]}"
             for m in messages
         ]
         sessions = [f"- «{r.title}» ({_day(r.recorded_at)})" for r in recordings]

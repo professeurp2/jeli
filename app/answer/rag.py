@@ -25,7 +25,9 @@ from datetime import datetime
 from pydantic import BaseModel
 
 from app.answer.citations import (
+    POLL_MARK,
     author_key,
+    with_tally,
     display_author,
     ignored_keys,
     is_ignored,
@@ -77,6 +79,19 @@ class Excerpt:
     names: dict  # phone number digits → WhatsApp name
     recording: Recording | None = None
     document: Document | None = None
+    organisers: frozenset = frozenset()  # keys of the organisers: their messages are announcements
+    tallies: dict = None  # poll message id → votes per option
+
+    def __post_init__(self):
+        if self.tallies is None:
+            object.__setattr__(self, "tallies", {})
+
+    def by_organiser(self, message: StoredMessage) -> bool:
+        return is_ignored(message, set(self.organisers))
+
+    @property
+    def has_announcement(self) -> bool:
+        return any(self.by_organiser(m) for m in self.messages)
 
     @property
     def authors(self) -> list[str]:
@@ -90,7 +105,8 @@ class Excerpt:
             return f"[{format_offset(message.sent_at - self.recording.recorded_at)}] {message.author}: {message.text}"
         if self.document:
             return f"[page {document_page(message.sent_at, self.document.shared_at)}] {message.text}"
-        return f"{self.name(message)}: {message.text}"
+        role = " (organiser)" if self.by_organiser(message) else ""
+        return f"{self.name(message)}{role}: {with_tally(message.text, self.tallies.get(message.id))}"
 
     @property
     def lines(self) -> list[str]:
@@ -117,7 +133,8 @@ class Excerpt:
         if self.document:
             page = document_page(message.sent_at, self.document.shared_at)
             return quote(f"📄 *{self.document.title}*, page {page}", snippet(message.text))
-        return quote(f"*{self.name(message)}* · {self.chat_label}, {short_day(message.sent_at)}", snippet(message.text))
+        role = " · organiser" if self.by_organiser(message) else ""
+        return quote(f"*{self.name(message)}*{role} · {self.chat_label}, {short_day(message.sent_at)}", snippet(message.text))
 
 
 def merge(results: list[list[SearchHit]], limit: int) -> list[SearchHit]:
@@ -155,6 +172,9 @@ class Answerer:
         self._names: tuple[float, dict[str, str]] | None = None
         # Explains why there is no answer from what Jeli knows of its own state (awareness.py).
         self.explainer = None
+        # Keys of the organisers (set from the settings): their announcements rank first.
+        self.organisers: set[str] = set()
+        self.known_names: dict[str, str] = {}  # number → name, given by the team
 
     async def _search(self, queries: list[str]) -> list[SearchHit]:
         queries = list(dict.fromkeys(q for q in queries if q.strip()))[:4]
@@ -230,9 +250,9 @@ class Answerer:
         return is_ignored(message, self.ignored)
 
     def _reply(self, answer: str, cited: list[Excerpt], chat_id: str | None, asker_id: str | None, lead: str = "") -> Reply:
-        """The answer with its sources, as WhatsApp does it."""
+        """The answer with its sources, as WhatsApp does it — an organiser's announcement first."""
         words = _words(answer)
-        ordered = sorted(cited, key=lambda e: e.relevance_rank)
+        ordered = sorted(cited, key=lambda e: (not e.has_announcement, e.relevance_rank))
         first = ordered[0]
         source = first.best_message(words)
         if chat_id and source.chat_id == chat_id and source.source == "whatsapp_live":
@@ -259,7 +279,7 @@ class Answerer:
         if self._names and time.monotonic() - self._names[0] < NAMES_TTL_SECONDS:
             return self._names[1]
         lookup = getattr(self.store, "member_names", None)
-        names = await lookup() if lookup else {}
+        names = {**(await lookup() if lookup else {}), **self.known_names}
         self._names = (time.monotonic(), names)
         return names
 
@@ -276,15 +296,19 @@ class Answerer:
         document_ids = sorted({hit.chat_id for hit in hits if hit.chat_id.startswith(DOCUMENT_PREFIX)})
         documents = await self.store.documents(document_ids) if document_ids else {}
         names = await self._member_names()
+        polls = [m.id for m in messages if m.text.startswith(POLL_MARK)]
+        tallies = await self.store.poll_tallies(polls) if polls and hasattr(self.store, "poll_tallies") else {}
         by_id = {m.id: m for m in messages}
         usable = []  # (fused rank, hit, messages kept), in fused order
         for position, hit in enumerate(hits):
             kept = [by_id[id_] for id_ in hit.message_ids if id_ in by_id and not self.is_ignored(by_id[id_])]
             if kept:
                 usable.append((position, hit, kept))
-        # As in search: the semantically closest are kept first, then the best of the fused order.
+        # As in search: the semantically closest are kept first, then the best of the fused order —
+        # where an organiser's announcement goes before members' talk about it.
         closest = sorted(usable, key=lambda item: item[1].similarity, reverse=True)[:GUARANTEED_SEMANTIC]
-        chosen = (closest + [item for item in usable if item not in closest])[:keep]
+        announced = [item for item in usable if item not in closest and any(is_ignored(m, self.organisers) for m in item[2])]
+        chosen = (closest + announced + [item for item in usable if item not in closest and item not in announced])[:keep]
 
         excerpts = []
         for position, hit, kept in sorted(chosen, key=lambda item: item[1].started_at):
@@ -300,6 +324,8 @@ class Answerer:
                     names=names,
                     recording=recordings.get(hit.chat_id),
                     document=document,
+                    organisers=frozenset(self.organisers),
+                    tallies=tallies,
                 )
             )
         return excerpts

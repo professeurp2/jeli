@@ -23,7 +23,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 
 from app.adapters.pacing import SlidingWindowLimiter
-from app.answer.citations import display_author, ignored_keys, is_phone_number
+from app.answer.citations import display_author, display_person, ignored_keys, is_phone_number
 from app.config import get_settings
 from app.control.guard import INCIDENTS
 from app.control.runtime import FIELDS, coerce
@@ -1368,8 +1368,8 @@ async def exceptions_page(request: Request, member: Member) -> HTMLResponse:
     cards = []
     for key, (title, description) in LISTS.items():
         tags = "".join(
-            f'<span class="tag">{esc(display_author(value))}'
-            + ui.form("/dashboard/exceptions", csrf, ui.hidden("list", key) + ui.hidden("action", "remove") + ui.hidden("value", value) + f'<button class="btn ghost small" aria-label="Remove {esc(display_author(value))}">×</button>', cls="inline")
+            f'<span class="tag">{esc(display_person(value))}'
+            + ui.form("/dashboard/exceptions", csrf, ui.hidden("list", key) + ui.hidden("action", "remove") + ui.hidden("value", value) + f'<button class="btn ghost small" aria-label="Remove {esc(display_person(value))}">×</button>', cls="inline")
             + "</span>"
             for value in runtime[key]
         ) or '<span class="muted">Nobody yet.</span>'
@@ -1377,7 +1377,7 @@ async def exceptions_page(request: Request, member: Member) -> HTMLResponse:
             "/dashboard/exceptions",
             csrf,
             ui.hidden("list", key) + ui.hidden("action", "add")
-            + '<input name="value" required maxlength="80" placeholder="Name or phone number" style="max-width:280px">'
+            + '<input name="value" required maxlength="80" placeholder="Name, phone number, or both" style="max-width:280px">'
             + ui.button("Add", kind="small", icon_name="plus"),
             cls="actions",
         )

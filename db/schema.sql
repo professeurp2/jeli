@@ -184,6 +184,15 @@ create table if not exists jeli.tries (
 );
 create index if not exists tries_member_at on jeli.tries (member, at);
 
+-- Votes in the groups' polls: one row per voter (their latest choice), for the running tallies.
+create table if not exists jeli.poll_votes (
+    poll_id  text not null,  -- the poll's message id
+    voter    text not null,
+    options  text[] not null,
+    voted_at timestamptz not null default now(),
+    primary key (poll_id, voter)
+);
+
 -- Least-privilege application role: data access to the jeli schema only.
 do $$
 begin

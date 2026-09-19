@@ -83,6 +83,8 @@ Submissions close on Thursday 24 September: a working chatbot, the code link and
 
 **Meetings, on their own:** organisers — the groups' admins, and anyone the team lists on the dashboard — share each recording's link with a description. When one of them posts a link, a model reads the message and tells whether it shares a session's recording, which session and which day ("yesterday's Module 2 class"). A YouTube recording is transcribed in the background — about ten minutes per hour of video — its recap written, and Jeli then quotes it to the minute with a link to that moment. A recording Jeli cannot watch (Teams, SharePoint, Drive behind a sign-in) is kept as a link, so Jeli can say where it is. The team can also add a session from the dashboard (Knowledge → *Add a recorded session*). Jeli cannot join a live call.
 
+**Organisers count most:** the groups' admins and the organisers the team lists (`ORGANISERS`, then the dashboard's Exceptions page — names, numbers, or both: "Diane +250 …") are marked as organisers in what Jeli reads. Their announcements rank first among the excerpts, prevail over members' claims, open the catch-ups, and are quoted by name. **Polls** posted in the groups are remembered with their options, and each vote is counted (WAHA's `poll.vote` events): *"what did people vote for the demo day?"* gets the running tally.
+
 **Never a bare "I don't know":** when the groups hold no answer, Jeli says so and adds what it knows of the situation, without inventing anything: the recording of that session is being transcribed (the first 30 minutes are done — ask again in a few minutes), the session is scheduled for Tuesday, the recording is a Teams link it cannot watch (here it is), its memory of the groups stops on Friday, a document was shared but its file is missing — then one next step. The dashboard counts these as questions Jeli couldn't answer.
 
 **One exception (R7):** when a member asks *the group* a question that the group already answered — a reply to someone who asked before, or an announcement that states it — Jeli points to that answer, uninvited, replying to it when it can.
@@ -375,6 +377,7 @@ Run **exactly one replica of WAHA**: two instances of the same WhatsApp session 
 | `DAILY_DIGEST_TIME` | no | `HH:MM` (UTC) to post the daily digest in each group of `WHATSAPP_GROUP_IDS`. Empty: off |
 | `TEAM_REPORT_TIME` | no | Day and time (UTC) of the weekly team report, e.g. `mon 07:00`. Empty: off |
 | `TEAM_NUMBERS` | with `TEAM_REPORT_TIME` | Team members' WhatsApp numbers, comma-separated. Server only |
+| `ORGANISERS` | no | The community's organisers, beyond the groups' admins: names and/or numbers ("Diane +250 …"), comma-separated. Server only; editable on the dashboard |
 | `DAILY_DIGEST_LANGUAGE` | no | `en` or `fr`. Default `en` |
 | `CHAT_LABELS` | no | Readable chat names in sources: `chat-id=Name;other-id=Other name` |
 | `EXPORT_TIMEZONE` | no | Default timezone of imported exports. Default `UTC` |

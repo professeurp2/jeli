@@ -46,7 +46,8 @@ milestones, sessions they must attend. For each:
 - message: the number of the message that states it.
 The last day of a period is a deadline for it ("the build phase runs from 18 to 24 September" →
 24 September). Skip guesses and questions ("I think it closes Sunday", "is it due Friday?").
-When a member contradicts an organiser's announcement about the same date, keep the announcement.
+When a member contradicts an organiser's announcement (lines marked "(organiser)") about the same
+date, keep the announcement.
 Skip deadlines listed as already known, even if worded differently. Only what a message states:
 never invent or guess.
 """
@@ -115,6 +116,7 @@ class DeadlineExtractor:
         self.llm = llm
         self.ignored = ignored_keys(ignored_authors)
         self.chat_labels = chat_labels or {}
+        self.organisers: set[str] = set()  # their messages are announcements (set from the settings)
 
     async def run(self, max_batches: int | None = None) -> int:
         """Scan messages not scanned yet, at most max_batches batches (None: all). Returns the
@@ -133,7 +135,7 @@ class DeadlineExtractor:
         known = await self.store.deadlines_between(first - timedelta(days=1), first + MAX_HORIZON, include_dismissed=True)
         lines = [
             f"[{n}] {m.sent_at.astimezone(timezone.utc):%a %d %b %Y %H:%M} UTC · {self._where(m)} · "
-            f"{display_author(m.author)}: {' '.join(m.text.split())[:MAX_MESSAGE_CHARS]}"
+            f"{display_author(m.author)}{' (organiser)' if is_ignored(m, self.organisers) else ''}: {' '.join(m.text.split())[:MAX_MESSAGE_CHARS]}"
             for n, m in enumerate(messages, 1)
         ]
         prompt = (

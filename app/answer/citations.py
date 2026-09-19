@@ -29,8 +29,40 @@ def author_key(author: str) -> str:
     return re.sub(r"\D", "", author) if is_phone_number(author) else author.strip().lower()
 
 
+PERSON = re.compile(r"^(?P<name>.*?)[\s,(]*(?P<number>\+?\d[\d\s().-]{6,}\d)\)?\s*$")
+
+
+def person(entry: str) -> tuple[str, str]:
+    """"Diane +250 783 188 655" → ("Diane", "250783188655"); a name or a number alone works too."""
+    entry = entry.strip()
+    match = PERSON.match(entry)
+    if match and match["name"].strip():
+        return match["name"].strip(" ,(-"), re.sub(r"\D", "", match["number"])
+    if is_phone_number(entry):
+        return "", re.sub(r"\D", "", entry)
+    return entry, ""
+
+
 def ignored_keys(authors) -> set[str]:
-    return {author_key(author) for author in authors}
+    """Keys to recognise people by: their name, their number, or both ("Diane +250 783 188 655")."""
+    keys = set()
+    for entry in authors:
+        name, number = person(entry)
+        keys |= {k for k in (name.lower(), number) if k}
+    return keys
+
+
+def people_names(entries) -> dict[str, str]:
+    """Number (digits) → name, from entries that give both."""
+    return {number: name for name, number in map(person, entries) if name and number}
+
+
+def display_person(entry: str) -> str:
+    """"Diane +250 783 188 655" → "Diane (+250 ···55)": the number masked as elsewhere."""
+    name, number = person(entry)
+    match = PERSON.match(entry.strip())
+    masked = display_author(match["number"] if match else entry) if number else ""
+    return f"{name} ({masked})" if name and masked else name or masked
 
 
 def is_ignored(message, keys: set[str]) -> bool:
@@ -77,3 +109,20 @@ def recording_quote(recording: Recording, offset: timedelta, speaker: str, text:
     that starts playing there."""
     header = f"🎥 *{recording.title}* · {short_day(recording.recorded_at)}, at {format_offset(offset)}"
     return quote(header, f"{speaker}: {snippet(text)}" if speaker else snippet(text), timestamped_link(recording.source_url, offset) or "")
+
+
+POLL_MARK = "📊 Poll:"
+
+
+def poll_text(question: str, options: list[str]) -> str:
+    return f"{POLL_MARK} {question}\nOptions: " + " · ".join(options)
+
+
+def with_tally(text: str, tally: dict[str, int] | None) -> str:
+    """A poll's message, with its votes so far."""
+    if not text.startswith(POLL_MARK):
+        return text
+    if not tally:
+        return text + "\nNo votes yet."
+    ranked = sorted(tally.items(), key=lambda item: -item[1])
+    return text + "\nVotes so far: " + " · ".join(f"{option} {n}" for option, n in ranked)

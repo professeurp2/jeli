@@ -185,6 +185,35 @@ class Store:
             ).fetchall()
         return {row["number"]: row["author"] for row in rows if row["author"] and row["author"] != "Someone"}
 
+    async def save_poll_vote(self, poll_id: str, voter: str, options: list[str]) -> None:
+        """A member's vote: their latest choice replaces the previous one (an empty choice withdraws it)."""
+        async with self._pool.connection() as conn:
+            if options:
+                await conn.execute(
+                    "insert into jeli.poll_votes (poll_id, voter, options) values (%s, %s, %s) on conflict (poll_id, voter) "
+                    "do update set options = excluded.options, voted_at = now()",
+                    (poll_id, voter, options),
+                )
+            else:
+                await conn.execute("delete from jeli.poll_votes where poll_id = %s and voter = %s", (poll_id, voter))
+
+    async def poll_tallies(self, poll_ids: Sequence[str]) -> dict[str, dict[str, int]]:
+        """Votes per option, for each poll."""
+        if not poll_ids:
+            return {}
+        async with self._pool.connection() as conn:
+            rows = await (
+                await conn.execute(
+                    "select poll_id, option, count(*) as n from jeli.poll_votes, unnest(options) as option "
+                    "where poll_id = any(%s) group by poll_id, option",
+                    (list(poll_ids),),
+                )
+            ).fetchall()
+        tallies: dict[str, dict[str, int]] = {}
+        for row in rows:
+            tallies.setdefault(row["poll_id"], {})[row["option"]] = row["n"]
+        return tallies
+
     async def mentioned_documents(self, limit: int = 60) -> list[dict]:
         """Messages that shared a file the chat history does not include ("<document omis>"),
         newest first: author, when, where, and the message's text."""

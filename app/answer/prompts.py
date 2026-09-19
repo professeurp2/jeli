@@ -25,6 +25,8 @@ Rules:
   member rather than an organiser, answer with it (and say what is missing, if anything).
 - Set "answered" to false only when nothing in the excerpts helps answer the question.
 - List in "sources" the numbers of the excerpts that support your answer, and only those.
+- Lines marked "(organiser)" are official announcements by the programme's organisers: they prevail
+  over members' claims and guesses; say who announced it when it helps ("Diane announced…").
 - When excerpts disagree, trust the most recent one and say what changed ("moved from X to Y").
 - Excerpts come from different chats and call recordings. When the question is about a specific
   programme, session, module or event, rely only on the excerpts about that one and never attribute

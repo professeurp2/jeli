@@ -1,6 +1,6 @@
 """Apply the team's settings (Runtime) to the running components, at startup and after each change."""
 
-from app.answer.citations import ignored_keys
+from app.answer.citations import ignored_keys, people_names
 
 # Deadlines the team adds by hand are shown as coming from "Team".
 BUILT_IN_LABELS = {"team": "Team"}
@@ -9,16 +9,20 @@ BUILT_IN_LABELS = {"team": "Team"}
 def apply(state, runtime) -> None:
     ignored = ignored_keys(runtime["ignored_authors"])
     labels = {**BUILT_IN_LABELS, **runtime["chat_labels"]}
+    organisers = ignored_keys(runtime["organisers"])
     for name in ("answerer", "catchup", "extractor"):
         component = getattr(state, name, None)
         if component is not None:
             component.ignored = ignored
+            component.organisers = organisers
     for name in ("answerer", "catchup", "extractor", "deadlines"):
         component = getattr(state, name, None)
         if component is not None:
             component.chat_labels = labels
     if getattr(state, "answerer", None) is not None:
         state.answerer.min_similarity = runtime["answer_min_similarity"]
+        # Organisers listed with their number are shown by name in quotes ("Diane", not "+250 ···55").
+        state.answerer.known_names = people_names(runtime["organisers"])
 
     responder = getattr(state, "responder", None)
     if responder is not None:

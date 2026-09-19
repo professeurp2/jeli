@@ -130,6 +130,8 @@ async def lifespan(app: FastAPI):
         state.whatsapp.follow_up = state.responder.is_follow_up
         if state.documents:
             state.whatsapp.on_document = state.documents.add
+        if store:
+            state.whatsapp.on_vote = store.save_poll_vote
         await state.whatsapp.sync_status()
     state.telegram = await telegram.start(settings, respond)
 

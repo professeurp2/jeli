@@ -58,6 +58,9 @@ class Settings(BaseSettings):
     team_report_time: str = ""
     # The team members' WhatsApp numbers, comma-separated. Personal data: set it on the server only.
     team_numbers: str = ""
+    # The community's organisers (names and/or numbers, comma-separated): their messages are
+    # announcements. The groups' admins count too. Server only; the team edits it on the dashboard.
+    organisers: str = ""
     # Set by Railway when the service has a public domain: the report links to the dashboard.
     railway_public_domain: str = ""
     # Readable names for chats in citations: "chat-id=Name;other-id=Other name".
@@ -91,6 +94,10 @@ class Settings(BaseSettings):
         """Account name (lower case) → "salt:hash"."""
         pairs = (item.strip().split(":", 1) for item in self.dashboard_users.split(",") if ":" in item)
         return {name.strip().lower(): secret.strip() for name, secret in pairs if name.strip()}
+
+    @property
+    def organiser_list(self) -> list[str]:
+        return [person.strip() for person in self.organisers.split(",") if person.strip()]
 
     @property
     def team_number_list(self) -> list[str]:
