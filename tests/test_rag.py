@@ -9,8 +9,9 @@ from app.answer.citations import display_author
 from app.answer.language import TEXTS, detect_language
 from app.answer.llm import LLM, GeneratedAnswer, LLMUnavailable
 from app.answer.rag import Answerer
+from app.answer.citations import timestamped_link
 from app.kb.store import SearchHit
-from app.models import StoredMessage
+from app.models import Recording, StoredMessage
 
 T0 = datetime(2026, 9, 12, 14, 0, tzinfo=timezone.utc)
 OTHER_BOT = "+229 01 49 48 62 56"
@@ -31,9 +32,22 @@ def hit(chunk_id, ids, similarity, started_at):
 HITS = [hit(2, ["m4"], 0.74, T0 + timedelta(days=1)), hit(1, ["m1", "m2", "m3"], 0.70, T0)]
 
 
+RECORDING = Recording(
+    id="recording:module-1", title="Module 1 class session", recorded_at=datetime(2026, 9, 15, 13, 0, tzinfo=timezone.utc),
+    method="gemini", source_url="https://youtu.be/6q4uPBO_sDc",
+)
+MESSAGES.append(
+    StoredMessage("r1", RECORDING.id, "recording", "Charles Botom", RECORDING.recorded_at + timedelta(minutes=12, seconds=34),
+                  "Every team member needs to complete the course.")
+)
+
+
 class FakeStore:
     async def messages_by_ids(self, ids):
         return [m for m in MESSAGES if m.id in ids]
+
+    async def recordings(self, ids):
+        return {RECORDING.id: RECORDING} if RECORDING.id in ids else {}
 
 
 class FakeLLM:
@@ -106,6 +120,24 @@ def test_when_no_model_is_available_jeli_points_to_the_most_relevant_sources(mon
     # The most relevant excerpt comes first, even though it is the more recent one.
     assert reply.index("13 Sep 2026") < reply.index("12 Sep 2026")
     assert "« Moussa: Pitch deck due Friday 6 pm. »" in reply
+
+
+def test_answers_from_a_call_link_to_the_moment_it_was_said(monkeypatch):
+    recording_hit = SearchHit(9, RECORDING.id, MESSAGES[-1].sent_at, MESSAGES[-1].sent_at, [], ["r1"], "", 0.0, 0.8)
+    llm = FakeLLM(GeneratedAnswer(answered=True, answer="Everyone in the team must complete it.", sources=[1]))
+    reply = ask(make_answerer(llm, hits=[recording_hit], monkeypatch=monkeypatch), "Must every member do the course?")
+    [prompt] = llm.prompts
+    assert "Call recording «Module 1 class session» (15 September 2026), from 12:34" in prompt
+    assert "[12:34] Charles Botom: Every team member" in prompt
+    assert "[1] 🎥 Module 1 class session · 15 Sep 2026 · at 12:34 · Charles Botom" in reply
+    assert "https://youtu.be/6q4uPBO_sDc?t=754" in reply
+
+
+def test_timestamped_links_only_for_youtube():
+    offset = timedelta(minutes=1, seconds=5)
+    assert timestamped_link("https://www.youtube.com/watch?v=abcdefgh&t=10", offset) == "https://www.youtube.com/watch?v=abcdefgh&t=65"
+    assert timestamped_link("https://drive.google.com/file/d/xyz/view", offset) is None
+    assert timestamped_link(None, offset) is None
 
 
 def test_phone_numbers_are_masked_but_names_kept():

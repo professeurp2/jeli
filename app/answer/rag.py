@@ -6,19 +6,31 @@
    other bots, with phone numbers masked), and ask for an answer that cites them.
 4. Keep only answers that cite at least one real excerpt; show those as sources.
 5. If every model is down or out of quota, still point to where the group talked about it.
+
+Call recordings are searched like conversations; their excerpts are timestamped within the call,
+and their sources link to the exact moment when the recording is on YouTube.
 """
 
 import logging
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 
-from app.answer.citations import author_key, display_author, format_source, format_time
+from app.answer.citations import (
+    author_key,
+    display_author,
+    format_recording_source,
+    format_source,
+    format_time,
+)
 from app.answer.language import TEXTS, detect_language
 from app.answer.llm import LLM, LLMUnavailable
 from app.answer.prompts import SYSTEM, build_prompt
+from app.ingest.transcribe import format_offset
 from app.kb.embeddings import Embedder
+from app.kb.indexer import RECORDING_PREFIX
 from app.kb.search import search
 from app.kb.store import Store
+from app.models import Recording
 
 log = logging.getLogger(__name__)
 
@@ -34,12 +46,24 @@ class Excerpt:
     chat_label: str
     started_at: datetime
     authors: list[str]
-    lines: list[str]  # "Author: text", phone numbers masked
+    lines: list[str]  # "Author: text" (phone numbers masked), or "[12:34] Speaker: text" for recordings
+    recording: Recording | None = None
+
+    @property
+    def offset(self) -> timedelta:
+        return self.started_at - self.recording.recorded_at if self.recording else timedelta()
 
     def for_prompt(self) -> str:
-        return f"[{self.number}] {self.chat_label} · {format_time(self.started_at)}\n" + "\n".join(self.lines)
+        if self.recording:
+            day = f"{self.recording.recorded_at.astimezone(timezone.utc):%d %B %Y}"
+            header = f"[{self.number}] Call recording «{self.recording.title}» ({day}), from {format_offset(self.offset)}"
+        else:
+            header = f"[{self.number}] {self.chat_label} · {format_time(self.started_at)}"
+        return header + "\n" + "\n".join(self.lines)
 
     def source(self) -> str:
+        if self.recording:
+            return format_recording_source(self.number, self.recording, self.offset, self.authors)
         return format_source(self.number, self.chat_label, self.started_at, self.authors)
 
 
@@ -86,6 +110,9 @@ class Answerer:
     async def _excerpts(self, hits) -> list[Excerpt]:
         """Rebuild each chunk from its messages, oldest chunk first, without ignored authors."""
         messages = await self.store.messages_by_ids([id_ for hit in hits for id_ in hit.message_ids])
+        recordings = await self.store.recordings(
+            sorted({hit.chat_id for hit in hits if hit.chat_id.startswith(RECORDING_PREFIX)})
+        )
         by_id = {m.id: m for m in messages}
         rank = {hit.chunk_id: position for position, hit in enumerate(hits)}
         excerpts = []
@@ -97,6 +124,11 @@ class Answerer:
             ]
             if not kept:
                 continue
+            recording = recordings.get(hit.chat_id)
+            if recording:
+                lines = [f"[{format_offset(m.sent_at - recording.recorded_at)}] {m.author}: {m.text}" for m in kept]
+            else:
+                lines = [f"{display_author(m.author)}: {m.text}" for m in kept]
             excerpts.append(
                 Excerpt(
                     number=len(excerpts) + 1,
@@ -104,7 +136,8 @@ class Answerer:
                     chat_label=self.chat_labels.get(hit.chat_id, hit.chat_id),
                     started_at=kept[0].sent_at,
                     authors=list(dict.fromkeys(m.author for m in kept)),
-                    lines=[f"{display_author(m.author)}: {m.text}" for m in kept],
+                    lines=lines,
+                    recording=recording,
                 )
             )
         return excerpts

@@ -1,7 +1,11 @@
 """How sources are shown to members."""
 
 import re
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
+
+from app.ingest.transcribe import format_offset, is_youtube
+from app.models import Recording
 
 PHONE = re.compile(r"^\+?[\d\s().-]{7,}$")
 
@@ -29,6 +33,27 @@ def format_time(moment: datetime) -> str:
     return f"{moment.astimezone(timezone.utc):%d %b %Y, %H:%M} UTC"
 
 
+def _authors(authors: list[str]) -> str:
+    return ", ".join(display_author(a) for a in authors[:2]) + (" …" if len(authors) > 2 else "")
+
+
 def format_source(number: int, chat_label: str, started_at: datetime, authors: list[str]) -> str:
-    shown = ", ".join(display_author(a) for a in authors[:2]) + (" …" if len(authors) > 2 else "")
-    return f"[{number}] {chat_label} · {format_time(started_at)} · {shown}"
+    return f"[{number}] {chat_label} · {format_time(started_at)} · {_authors(authors)}"
+
+
+def timestamped_link(url: str | None, offset: timedelta) -> str | None:
+    """A YouTube link that starts playing at `offset`; None for other sources."""
+    if not url or not is_youtube(url):
+        return None
+    parts = urlsplit(url)
+    query = [(k, v) for k, v in parse_qsl(parts.query) if k != "t"] + [("t", f"{int(offset.total_seconds())}")]
+    return urlunsplit((parts.scheme, parts.netloc, parts.path, urlencode(query), ""))
+
+
+def format_recording_source(number: int, recording: Recording, offset: timedelta, authors: list[str]) -> str:
+    source = (
+        f"[{number}] 🎥 {recording.title} · {recording.recorded_at.astimezone(timezone.utc):%d %b %Y} · "
+        f"at {format_offset(offset)} · {_authors(authors)}"
+    )
+    link = timestamped_link(recording.source_url, offset)
+    return f"{source}\n    {link}" if link else source

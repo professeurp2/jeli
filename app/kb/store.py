@@ -9,7 +9,7 @@ from psycopg.rows import dict_row
 from psycopg_pool import AsyncConnectionPool, PoolTimeout
 
 from app.ingest.chunker import Chunk
-from app.models import StoredMessage
+from app.models import Recording, StoredMessage
 
 log = logging.getLogger(__name__)
 
@@ -101,6 +101,36 @@ class Store:
                 added += cursor.rowcount
         return added
 
+    async def save_recording(self, recording: Recording) -> None:
+        async with self._pool.connection() as conn:
+            await conn.execute(
+                "insert into jeli.recordings (id, title, recorded_at, source_url, duration_seconds, method) "
+                "values (%s, %s, %s, %s, %s, %s) on conflict (id) do update set title = excluded.title, "
+                "recorded_at = excluded.recorded_at, source_url = excluded.source_url, "
+                "duration_seconds = excluded.duration_seconds, method = excluded.method",
+                (
+                    recording.id,
+                    recording.title,
+                    recording.recorded_at,
+                    recording.source_url,
+                    recording.duration_seconds,
+                    recording.method,
+                ),
+            )
+
+    async def recordings(self, ids: Sequence[str]) -> dict[str, Recording]:
+        if not ids:
+            return {}
+        async with self._pool.connection() as conn:
+            rows = await (
+                await conn.execute(
+                    "select id, title, recorded_at, method, source_url, duration_seconds from jeli.recordings "
+                    "where id = any(%s)",
+                    (list(ids),),
+                )
+            ).fetchall()
+        return {row["id"]: Recording(**row) for row in rows}
+
     async def pending_chats(self) -> list[str]:
         async with self._pool.connection() as conn:
             rows = await (await conn.execute("select distinct chat_id from jeli.messages where chunk_id is null")).fetchall()
@@ -177,9 +207,12 @@ class Store:
         ]
 
     async def forget(self, chat_id: str | None = None) -> tuple[int, int]:
-        """Delete stored messages and chunks, for one chat or everything. Returns (messages, chunks)."""
+        """Delete stored messages and chunks (and the recording, for a recording's id), for one chat
+        or everything. Returns (messages, chunks)."""
         condition, params = ("where chat_id = %s", (chat_id,)) if chat_id else ("", ())
+        recording_condition = "where id = %s" if chat_id else ""
         async with self._pool.connection() as conn, conn.transaction():
             messages = (await conn.execute(f"delete from jeli.messages {condition}", params)).rowcount
             chunks = (await conn.execute(f"delete from jeli.chunks {condition}", params)).rowcount
+            await conn.execute(f"delete from jeli.recordings {recording_condition}", params)
         return messages, chunks

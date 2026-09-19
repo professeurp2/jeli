@@ -18,7 +18,7 @@ Built for the **UniPods METI AI Innovation Programme — Cohort 1 Chatbot Hackat
 |---|---|---|
 | — | FastAPI app + WhatsApp gateway (WAHA), echo replies, CI/CD | ✅ Day 1 |
 | R1 | Chat ingestion: WhatsApp export import + live group messages | ✅ Day 2 |
-| R2 | Call ingestion (transcription) | ⏳ |
+| R2 | Call ingestion: YouTube, audio/video files, Teams/Zoom transcripts; answers link to the moment | ✅ Day 4 |
 | R3 | Knowledge base: conversation chunks, Gemini embeddings, hybrid search (pgvector + keywords) | ✅ Day 2 |
 | R4 | Grounded answers with sources (Gemini, with model fallback) | ✅ Day 3 |
 | R5 | Replies in the group (mention, reply, name, `/command`) and in DM | ✅ |
@@ -161,7 +161,26 @@ python -m scripts.search "When is the bootcamp?"
 ```
 Hybrid retrieval: semantic neighbours (pgvector, cosine) and keyword matches (Postgres full-text), merged by reciprocal rank fusion. Consecutive messages are chunked together (a new chunk after 30 minutes of silence or 1,500 characters), so a question finds the conversation, not a lone "yes, Friday".
 
-### 8. Ask a question
+### 8. Import call recordings
+```bash
+# A session recording on YouTube: Gemini watches it directly, window by window
+python -m scripts.import_recording https://youtu.be/<id> --title "Module 1 class session" --date 2026-09-15
+# A recording downloaded from Teams, Drive… (audio or video)
+python -m scripts.import_recording data/recordings/session.mp4 --title "…" --date 2026-09-16
+# A transcript exported from Teams or Zoom: most accurate, and uses no quota
+python -m scripts.import_recording data/recordings/transcript.vtt --title "…" --date 2026-09-16
+```
+- Gemini transcribes in 15-minute windows. For videos only the window is processed, at low resolution and 0.1 frame per second: about 1,900 tokens per minute, and still enough to read the speaker names Teams shows on screen. Names found in one window are passed to the next.
+- Transcripts are cached in `data/transcripts/` (git-ignored): importing again never transcribes twice. `--retranscribe` forces it; `--dry-run` shows the first lines without storing.
+- Each transcript segment is stored like a message of the recording (`chat_id = recording:<date>-<title>`) and chunked and embedded like conversations, with the recording's title at the top of each chunk.
+- Answers cite the session and the moment — and for YouTube, a link that starts playing there:
+  ```
+  [2] 🎥 Module 1 class session · 15 Sep 2026 · at 12:34 · Charles B.
+      https://youtu.be/<id>?t=754
+  ```
+- Recordings behind a login (Teams/OneDrive, private Drive) must be downloaded by someone who has access, then imported as a file.
+
+### 9. Ask a question
 ```bash
 python -m scripts.ask "When is the bootcamp?"
 ```
@@ -183,7 +202,7 @@ How an answer is built ([`app/answer/rag.py`](app/answer/rag.py)):
 
 Models: `gemini-3.6-flash` with minimal thinking (≈2 s), then `gemini-3.5-flash-lite` and `gemini-flash-lite-latest` (<1 s). Measured: default thinking took 14 s or was overloaded; minimal is fast *and* correct.
 
-### 9. Evaluate answer quality
+### 10. Evaluate answer quality
 ```bash
 python -m scripts.evaluate --show-answers
 ```
@@ -280,6 +299,7 @@ Run **exactly one replica of WAHA**: two instances of the same WhatsApp session 
 | `GEMINI_API_KEY` | knowledge base | Google AI Studio key (embeddings and answers) |
 | `GEMINI_MODELS` | no | Answer models, in fallback order. Default `gemini-3.6-flash,gemini-3.5-flash-lite,gemini-flash-lite-latest` |
 | `ANSWER_MIN_SIMILARITY` | no | Below it, "I don't know" without calling the model. Default 0.60 |
+| `TRANSCRIPTION_MODELS` | no | Models that transcribe recordings, in fallback order. Default `gemini-3.6-flash,gemini-3.5-flash-lite` |
 | `IGNORED_AUTHORS` | no | Comma-separated authors never used in answers (other bots). Names or phone numbers |
 | `CHAT_LABELS` | no | Readable chat names in sources: `chat-id=Name;other-id=Other name` |
 | `EXPORT_TIMEZONE` | no | Default timezone of imported exports. Default `UTC` |
@@ -307,10 +327,10 @@ app/
 ├── models.py          # platform-independent message types
 ├── adapters/          # whatsapp_waha.py, telegram.py — thin, swappable
 ├── answer/            # responder.py, rag.py, llm.py (Gemini + fallback), prompts.py, citations.py, language.py
-├── ingest/            # whatsapp_export.py, chunker.py, live.py (transcription next)
+├── ingest/            # whatsapp_export.py, transcribe.py, chunker.py, live.py
 ├── kb/                # embeddings.py (Gemini), store.py (pgvector), indexer.py, search.py
 └── jobs/              # indexing.py (digest and duplicate check next)
-scripts/               # import_whatsapp_export, search, ask, evaluate, forget
+scripts/               # import_whatsapp_export, import_recording, search, ask, evaluate, forget
 evals/questions.json   # fixed question set for answer quality
 db/schema.sql          # knowledge base schema and least-privilege role
 tests/

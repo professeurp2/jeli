@@ -32,8 +32,9 @@ def format_message(message: StoredMessage) -> str:
     return f"[{sent_at:%Y-%m-%d %H:%M} UTC] {message.author}: {message.text[:MAX_MESSAGE_CHARS]}"
 
 
-def _make_chunk(messages: list[StoredMessage]) -> Chunk:
+def _make_chunk(messages: list[StoredMessage], header: str | None) -> Chunk:
     sources = {m.source for m in messages}
+    lines = [format_message(m) for m in messages]
     return Chunk(
         chat_id=messages[0].chat_id,
         source=sources.pop() if len(sources) == 1 else "mixed",
@@ -41,24 +42,31 @@ def _make_chunk(messages: list[StoredMessage]) -> Chunk:
         ended_at=messages[-1].sent_at,
         authors=tuple(dict.fromkeys(m.author for m in messages)),
         message_ids=tuple(m.id for m in messages),
-        content="\n".join(format_message(m) for m in messages),
+        content="\n".join([header, *lines] if header else lines),
     )
 
 
 def chunk_messages(
-    messages: list[StoredMessage], max_gap: timedelta = MAX_GAP, max_chars: int = MAX_CHARS
+    messages: list[StoredMessage],
+    max_gap: timedelta = MAX_GAP,
+    max_chars: int = MAX_CHARS,
+    header: str | None = None,
 ) -> list[Chunk]:
-    """Chunks of one chat's messages, in time order."""
+    """Chunks of one chat's messages, in time order.
+
+    `header` starts every chunk, e.g. a recording's title, so that "what was said in the Module 1
+    session?" finds that session's chunks.
+    """
     chunks: list[Chunk] = []
     current: list[StoredMessage] = []
-    size = 0
+    size = len(header) + 1 if header else 0
     for message in sorted(messages, key=lambda m: m.sent_at):
         line = len(format_message(message)) + 1
         if current and (message.sent_at - current[-1].sent_at > max_gap or size + line > max_chars):
-            chunks.append(_make_chunk(current))
-            current, size = [], 0
+            chunks.append(_make_chunk(current, header))
+            current, size = [], len(header) + 1 if header else 0
         current.append(message)
         size += line
     if current:
-        chunks.append(_make_chunk(current))
+        chunks.append(_make_chunk(current, header))
     return chunks

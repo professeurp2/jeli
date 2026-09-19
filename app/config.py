@@ -33,6 +33,8 @@ class Settings(BaseSettings):
     gemini_api_key: str = ""
     # Answer models, tried in order: the next one takes over on quota, overload or timeout.
     gemini_models: str = "gemini-3.6-flash,gemini-3.5-flash-lite,gemini-flash-lite-latest"
+    # Transcription models, tried in order (they listen to the recording, window by window).
+    transcription_models: str = "gemini-3.6-flash,gemini-3.5-flash-lite"
     # Below this similarity between the question and the best excerpt, Jeli says it doesn't know
     # without asking the model (measured: group questions ≥ 0.65, unrelated ones ≤ 0.56).
     answer_min_similarity: float = 0.60
@@ -55,6 +57,10 @@ class Settings(BaseSettings):
     @property
     def answer_models(self) -> list[str]:
         return [model.strip() for model in self.gemini_models.split(",") if model.strip()]
+
+    @property
+    def transcription_model_list(self) -> list[str]:
+        return [model.strip() for model in self.transcription_models.split(",") if model.strip()]
 
     @property
     def ignored_author_list(self) -> list[str]:

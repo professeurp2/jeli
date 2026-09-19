@@ -11,11 +11,12 @@ create extension if not exists vector with schema extensions;
 
 create schema if not exists jeli;
 
--- Every chat message Jeli knows about, from a WhatsApp export or received live.
+-- Every chat message Jeli knows about, from a WhatsApp export or received live, and every
+-- transcript segment of a call recording (then chat_id is the recording's id).
 create table if not exists jeli.messages (
     id          text primary key,  -- platform message id, or a stable fingerprint for exports
-    chat_id     text not null,     -- e.g. the WhatsApp group id (…@g.us)
-    source      text not null check (source in ('whatsapp_export', 'whatsapp_live', 'telegram')),
+    chat_id     text not null,     -- e.g. the WhatsApp group id (…@g.us), or recording:<slug>
+    source      text not null check (source in ('whatsapp_export', 'whatsapp_live', 'telegram', 'recording')),
     author      text not null,
     author_id   text,
     sent_at     timestamptz not null,
@@ -57,6 +58,17 @@ begin
 end $$;
 
 create index if not exists messages_chunk_id on jeli.messages (chunk_id);
+
+-- Call recordings: their transcript segments are stored in jeli.messages with chat_id = id.
+create table if not exists jeli.recordings (
+    id               text primary key,  -- recording:<slug>
+    title            text not null,
+    recorded_at      timestamptz not null,
+    source_url       text,              -- YouTube link (answers link to the exact moment) or file name
+    duration_seconds integer,
+    method           text not null,     -- how the transcript was made: gemini, subtitles
+    created_at       timestamptz not null default now()
+);
 
 -- Least-privilege application role: data access to the jeli schema only.
 do $$

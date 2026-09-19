@@ -21,6 +21,18 @@ class IncomingMessage:
 
 
 @dataclass(frozen=True)
+class Recording:
+    """A call recording; its transcript segments are StoredMessages with chat_id = id."""
+
+    id: str
+    title: str
+    recorded_at: datetime
+    method: str  # "gemini" or "subtitles"
+    source_url: str | None = None
+    duration_seconds: int | None = None
+
+
+@dataclass(frozen=True)
 class StoredMessage:
     """A message as kept in the knowledge base, whatever its origin."""
 
