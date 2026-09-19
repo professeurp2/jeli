@@ -67,13 +67,29 @@ class Store:
 
 class LLM:
     def __init__(self, choice):
-        self.choice, self.translations = choice, 0
+        self.choice, self.translations, self.requests = choice, 0, []
 
     async def generate(self, prompt, schema, **kwargs):
         if schema is FileChoice:
             return self.choice
         self.translations += 1
-        return Translated(blocks=[Block(kind="heading", text="HACKATHON DU CHATBOT"), Block(kind="paragraph", text="Prix de 5 000 $.")])
+        self.requests.append(prompt)
+        return Translated(
+            blocks=[Block(kind="heading", text="HACKATHON DU CHATBOT"), Block(kind="paragraph", text="Prix de 5 000 $.")],
+            title="Lignes directrices",
+            note="Traduction automatique par Jeli ; l'original fait foi.",
+        )
+
+
+class Echo(LLM):
+    """A model that returns the original instead of translating it (the light models did)."""
+
+    async def generate(self, prompt, schema, **kwargs):
+        if schema is FileChoice:
+            return self.choice
+        self.translations += 1
+        text = prompt.split("\n\n", 1)[1].split("\n\nAlso return")[0]
+        return Translated(blocks=[Block(kind="paragraph", text=part) for part in text.split("\n\n")])
 
 
 def test_a_document_is_kept_and_learned_page_by_page():
@@ -107,9 +123,23 @@ def test_a_translation_comes_as_a_pdf_and_is_kept():
     assert reply.startswith("📄 Je traduis «Guidelines» en français") and reply.attachment is None
     translated = asyncio.run(reply.pending())
     assert isinstance(translated, Attachment) and translated.filename == "Guidelines (French).pdf"
-    assert translated.data.startswith(b"%PDF") and "5 000" in read_pages(".pdf", translated.data)[0]
+    page = read_pages(".pdf", translated.data)[0]
+    assert translated.data.startswith(b"%PDF") and "5 000" in page
+    assert "Lignes directrices (français)" in page and "l'original fait foi" in page  # title and note translated too
+    assert llm.requests[0].startswith("Translate into French:")
     again = asyncio.run(documents.reply("envoie-moi les guidelines en français", "fr"))
     assert again.attachment.filename == "Guidelines (French).pdf" and llm.translations == 1  # kept, not translated twice
+
+
+def test_the_original_sent_back_is_never_passed_off_as_a_translation():
+    store = Store()
+    long_text = "\n\n".join([GUIDELINES, "Judging will be done by the whole group; more information on judging will follow shortly."] * 3)
+    asyncio.run(Documents(store, None).add("Guidelines.pdf", pdf_of(long_text), shared_by="Diane", shared_at=T0))
+    llm = Echo(FileChoice(document=1, translate_to="sw"))
+    reply = asyncio.run(Documents(store, llm).reply("the guidelines in Swahili please", "en"))
+    assert asyncio.run(reply.pending()) == TEXTS["en"]["file_translate_failed"].format(title="Guidelines")
+    assert llm.translations == 2  # asked again once
+    assert asyncio.run(store.translation(next(iter(store.documents_kept)), "sw")) is None  # nothing kept
 
 
 def test_languages_the_pdf_cannot_write_are_declined():

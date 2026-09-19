@@ -47,6 +47,11 @@ NAMES_FR = {
     "en": "anglais", "fr": "français", "pt": "portugais", "es": "espagnol", "sw": "swahili",
     "de": "allemand", "it": "italien", "nl": "néerlandais",
 }
+# Each language in its own words, for the translated document's title.
+NATIVE_NAMES = {
+    "en": "English", "fr": "français", "pt": "português", "es": "español", "sw": "Kiswahili",
+    "de": "Deutsch", "it": "italiano", "nl": "Nederlands",
+}
 
 
 def extension(filename: str, mimetype: str = "") -> str | None:
@@ -157,6 +162,8 @@ class Block(BaseModel):
 
 class Translated(BaseModel):
     blocks: list[Block]
+    title: str = ""
+    note: str = ""
 
 
 CHOOSE_SYSTEM = """\
@@ -167,11 +174,35 @@ they ask for none of these (for example a question about a topic, or a document 
 they ask for a translation or a version in another language; otherwise "".
 """
 
+# Said plainly, in the system and in the request: with a softer wording the light models return the
+# text unchanged (measured: 95% of the words copied, in French as in Swahili).
 TRANSLATE_SYSTEM = """\
-Translate this part of a document into {language}. Keep the meaning, names, numbers, dates, amounts
-and links exactly; never add, drop or summarise anything. Return it as blocks, in order: "heading"
+You are a professional translator. Translate the document the user sends from its language into
+{language}: every heading, sentence and list item must be written in {language}. Keep names, numbers,
+dates, amounts and links exactly, and technical words readers use as they are (hackathon, chatbot,
+AI, demo, pitch); never add, drop or summarise anything. Return it as blocks, in order: "heading"
 for titles, "bullet" for items of a list, "paragraph" for the rest.
 """
+TRANSLATE_REQUEST = "Translate into {language}:\n\n{text}"
+TRANSLATE_FIRST = (
+    "\n\nAlso return \"title\": the title «{title}» in {language}, and \"note\": this sentence in {language}: «{note}»"
+)
+# A part whose words are mostly those of the original was not translated.
+COPIED_SHARE = 0.5
+COPIED_MIN_WORDS = 30
+
+
+def copied(source: str, translated: str) -> bool:
+    """True when `translated` is, in fact, `source` again (the model did not translate)."""
+    vocabulary = set(re.findall(r"[^\W\d_]{4,}", source.lower()))
+    words = re.findall(r"[^\W\d_]{4,}", translated.lower())
+    if len(words) < COPIED_MIN_WORDS:
+        return False  # too short to tell: names, figures, a title
+    return sum(word in vocabulary for word in words) / len(words) > COPIED_SHARE
+
+
+class NotTranslated(LLMUnavailable):
+    """The model returned the original instead of a translation."""
 
 
 class Documents:
@@ -296,19 +327,24 @@ class Documents:
             current = f"{current}\n\n{page}" if current else page
         if current:
             batches.append(current)
-        name = LANGUAGE_NAMES[target]
-        blocks: list[tuple[str, str]] = []
-        for batch in batches:
-            translated = await self.llm.generate(
-                batch, Translated, system=TRANSLATE_SYSTEM.format(language=name), timeout=TRANSLATION_TIMEOUT, temperature=0
-            )
-            blocks += [(b.kind if b.kind in ("heading", "bullet") else "paragraph", b.text) for b in translated.blocks]
-        title = f"{document.title} ({name})"
+        name, native = LANGUAGE_NAMES[target], NATIVE_NAMES[target]
+        title = f"{document.title} ({native})"
         note = (
             f"Machine translation by Jeli of «{document.title}», shared by {self.who(document.shared_by)} "
             f"on {short_day(document.shared_at)}. The original prevails."
         )
-        pdf = await asyncio.to_thread(build_pdf, title, note, blocks)
+        heading, foreword = "", ""
+        blocks: list[tuple[str, str]] = []
+        for number, batch in enumerate(batches):
+            request = TRANSLATE_REQUEST.format(language=name, text=batch)
+            if number == 0:
+                request += TRANSLATE_FIRST.format(title=document.title, language=name, note=note)
+            translated = await self._translate_part(batch, request, name)
+            heading, foreword = heading or translated.title, foreword or translated.note
+            blocks += [(b.kind if b.kind in ("heading", "bullet") else "paragraph", b.text) for b in translated.blocks]
+        if heading.strip():
+            title = f"{heading.strip()} ({native})"
+        pdf = await asyncio.to_thread(build_pdf, title, foreword.strip() or note, blocks)
         stem = document.filename.rsplit(".", 1)[0]
         translation = Document(
             id=f"{document.id}~{target}",
@@ -326,3 +362,14 @@ class Documents:
         await self.store.save_document(translation, pdf)
         log.info("Translated %s into %s", document.title, name)
         return Attachment(translation.filename, translation.mimetype, pdf, caption=title, document_id=translation.id)
+
+    async def _translate_part(self, source: str, request: str, language: str) -> Translated:
+        """One part, translated — asked twice at most: a copy of the original is never kept."""
+        for _ in range(2):
+            translated = await self.llm.generate(
+                request, Translated, system=TRANSLATE_SYSTEM.format(language=language), timeout=TRANSLATION_TIMEOUT, temperature=0
+            )
+            if not copied(source, " ".join(b.text for b in translated.blocks)):
+                return translated
+            log.warning("The model returned the original instead of %s", language)
+        raise NotTranslated
