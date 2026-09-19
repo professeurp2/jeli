@@ -33,6 +33,10 @@ TOKENS_PER_MINUTE_BUDGET = 200_000
 WINDOW_ATTEMPTS = 3
 RETRY_WAIT_SECONDS = 65
 YOUTUBE = re.compile(r"^https?://(www\.|m\.)?(youtube\.com/(watch\?v=|live/|shorts/)|youtu\.be/)[\w-]{6,}")
+# Organisers also share recordings on Google Drive ("anyone with the link").
+DRIVE = re.compile(r"^https?://(?:drive|docs)\.google\.com/(?:file/d/|open\?id=|uc\?(?:[^#\s]*&)?id=)([\w-]{20,})")
+DRIVE_DOWNLOAD = "https://drive.usercontent.google.com/download?id={id}&export=download&confirm=t"
+MAX_DOWNLOAD_BYTES = 1_900_000_000  # Gemini takes files of up to 2 GB
 
 PROMPT = """\
 Transcribe the speech in this recording between {start} and {end}.
@@ -90,6 +94,49 @@ def is_youtube(source: str) -> bool:
     return bool(YOUTUBE.match(source))
 
 
+def drive_id(source: str) -> str | None:
+    """The file id of a Google Drive link, None for any other link."""
+    found = DRIVE.match(source)
+    return found.group(1) if found else None
+
+
+class NotPublic(ValueError):
+    """The recording needs a sign-in: Jeli can only keep its link."""
+
+
+async def download_drive(url: str, folder: Path, progress: Callable[[str], None] = log.info) -> Path:
+    """A Drive video shared with "anyone with the link", saved in `folder`. NotPublic when it asks
+    for a sign-in (Google then answers with a page, not the file)."""
+    file_id = drive_id(url)
+    if file_id is None:
+        raise ValueError("not a Google Drive link")
+    import httpx
+
+    async with httpx.AsyncClient(follow_redirects=True, timeout=httpx.Timeout(60, read=120)) as client:
+        async with client.stream("GET", DRIVE_DOWNLOAD.format(id=file_id)) as response:
+            kind = response.headers.get("content-type", "").split(";")[0]
+            if response.status_code != 200 or not kind.startswith(("video/", "audio/")):
+                raise NotPublic("this Drive file is not shared publicly, or is not a recording")
+            size = int(response.headers.get("content-length") or 0)
+            if size > MAX_DOWNLOAD_BYTES:
+                raise ValueError("this recording is too big (2 GB at most)")
+            extension = {"video/mp4": ".mp4", "video/webm": ".webm", "audio/mpeg": ".mp3", "audio/mp4": ".m4a"}.get(kind, "")
+            path = folder / f"{file_id}{extension or '.' + kind.split('/')[1]}"
+            received, shown = 0, -1
+            with path.open("wb") as out:
+                async for chunk in response.aiter_bytes(1 << 20):
+                    out.write(chunk)
+                    received += len(chunk)
+                    if received > MAX_DOWNLOAD_BYTES:
+                        raise ValueError("this recording is too big (2 GB at most)")
+                    step = received * 10 // size if size else received >> 27
+                    if step != shown:
+                        shown = step
+                        total = f" of {size >> 20} MB" if size else ""
+                        progress(f"Downloading the recording: {received >> 20} MB{total}")
+    return path
+
+
 def _window_segments(window: TranscriptWindow, start: timedelta) -> list[Segment]:
     segments = []
     for item in window.segments:
@@ -135,7 +182,7 @@ class Transcriber:
         return sorted(state.segments, key=lambda s: s.offset)
 
     async def _upload(self, path: Path) -> types.File:
-        self.progress(f"Uploading {path.name} to Gemini…")
+        self.progress("Preparing the recording to be listened to…")
         uploaded = await self.llm.client.aio.files.upload(file=path)
         while uploaded.state == types.FileState.PROCESSING:
             await asyncio.sleep(5)

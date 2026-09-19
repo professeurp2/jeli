@@ -4,7 +4,7 @@ import re
 from datetime import datetime, timedelta, timezone
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
-from app.ingest.transcribe import format_offset, is_youtube
+from app.ingest.transcribe import drive_id, format_offset, is_youtube
 from app.models import Recording
 
 PHONE = re.compile(r"^\+?[\d\s().-]{7,}$")
@@ -107,7 +107,10 @@ def mention_tag(member_id: str) -> str:
 
 
 def timestamped_link(url: str | None, offset: timedelta) -> str | None:
-    """A YouTube link that starts playing at `offset`; None for other sources."""
+    """A YouTube link that starts playing at `offset`; a Drive recording's link as it is (the time is
+    in the quote's header); None for other sources."""
+    if url and drive_id(url):
+        return url
     if not url or not is_youtube(url):
         return None
     parts = urlsplit(url)

@@ -108,6 +108,70 @@ def test_an_organisers_recording_is_recognised_and_added():
     assert asyncio.run(Sessions(store, None, None, reader=nothing).from_organiser(message("Register here: https://forms.gle/x"))) is None
 
 
+DRIVE = "https://drive.google.com/file/d/1E5RrwULX8zSjwxHFSxiQzCTtp20ulYQ8/view?usp=sharing"
+
+
+def test_a_recording_on_google_drive_can_be_watched(tmp_path, monkeypatch):
+    import httpx
+    import pytest
+
+    from app.answer.citations import timestamped_link
+    from app.ingest.sessions import shared_recording, watchable
+    from app.ingest.transcribe import NotPublic, download_drive, drive_id
+
+    assert drive_id(DRIVE) == "1E5RrwULX8zSjwxHFSxiQzCTtp20ulYQ8" and watchable(DRIVE)
+    assert drive_id("https://drive.google.com/open?id=1E5RrwULX8zSjwxHFSxiQzCTtp20ulYQ8") == "1E5RrwULX8zSjwxHFSxiQzCTtp20ulYQ8"
+    assert not watchable("https://teams.microsoft.com/l/meetingrecap?driveId=b%21ipl")
+    assert shared_recording(message(f"MIT onboarding call recording: {DRIVE}")) == DRIVE
+    assert timestamped_link(DRIVE, timedelta(minutes=5)) == DRIVE  # the time is in the quote's header
+
+    def drive(request):
+        if "public" in str(request.url):
+            return httpx.Response(200, headers={"content-type": "video/mp4"}, content=b"\0" * 3000)
+        return httpx.Response(200, headers={"content-type": "text/html"}, content=b"<title>Sign in</title>")
+
+    real = httpx.AsyncClient
+    monkeypatch.setattr(httpx, "AsyncClient", lambda **kwargs: real(transport=httpx.MockTransport(drive), **kwargs))
+    monkeypatch.setattr("app.ingest.transcribe.DRIVE_DOWNLOAD", "https://drive.example/{id}/public")
+    path = asyncio.run(download_drive(DRIVE, tmp_path))
+    assert path.suffix == ".mp4" and path.stat().st_size == 3000
+    monkeypatch.setattr("app.ingest.transcribe.DRIVE_DOWNLOAD", "https://drive.example/{id}/private")
+    with pytest.raises(NotPublic):
+        asyncio.run(download_drive(DRIVE, tmp_path))
+
+
+def test_recordings_shared_by_organisers_in_an_imported_history_are_added():
+    from app.answer.citations import ignored_keys
+    from app.models import StoredMessage
+
+    store = Store()
+    store.recordings_saved["recording:known"] = Recording("recording:known", "Module 1", NOW, "gemini", source_url="https://youtu.be/known12345")
+    sessions = Sessions(store, None, None, reader=LLM(None))
+    read = []
+
+    async def from_organiser(message):
+        read.append(message.text)
+
+    sessions.from_organiser = from_organiser
+
+    def stored(author, text):
+        return StoredMessage(f"m{len(text)}", "meti", "whatsapp_export", author, NOW, text)
+
+    history = [
+        stored("+250 783 188 655", DRIVE),  # Diane, by her number as exports show it
+        stored("+250 783 188 655", "Recording of Module 1: https://youtu.be/known12345"),  # already added
+        stored("+234 902 438 4670", "Please share the recording https://youtu.be/other12345"),  # not an organiser
+        stored("Gift NTULI", "Thanks everyone for joining today"),  # no link
+    ]
+
+    async def run():
+        count = sessions.from_history(history, ignored_keys(["Diane +250 783 188 655", "Gift NTULI +263 77 409 4822"]))
+        await asyncio.sleep(0.05)
+        return count
+
+    assert asyncio.run(run()) == 2 and read == [DRIVE]
+
+
 def test_an_export_with_media_gives_its_documents_and_who_shared_them():
     chat = (
         "[16/09/2026, 10:12:00] Diane: Here are the rules\n"

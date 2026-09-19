@@ -3,24 +3,28 @@
 Organisers (the groups' admins, and the people the team lists) share each recording's link with a
 description ("Here is the recording of today's Module 2 class"). When one of them posts a link, a
 model reads the message and says whether it shares a session's recording, which session and which
-day. A YouTube recording is then transcribed in the background (Gemini watches the video, window by
-window), each moment stored so answers can quote it and link to that second, and its recap written.
-A recording Jeli cannot watch (Teams, SharePoint, Drive behind a sign-in) is still kept as a link,
-so Jeli can say where it is. The team can also add a session from the dashboard.
+day. A recording on YouTube, or on Google Drive shared with anyone with the link, is then
+transcribed in the background (Gemini watches the video, window by window), each moment stored so
+answers can quote it, and its recap written. A recording Jeli cannot watch (Teams, SharePoint, a
+Drive file behind a sign-in) is still kept as a link, so Jeli can say where it is. The team can also
+add a session from the dashboard.
 """
 
 import asyncio
 import logging
 import re
+import tempfile
 import unicodedata
 from dataclasses import dataclass, field
 from datetime import date, datetime, time, timezone
+from pathlib import Path
 
 from pydantic import BaseModel
 
+from app.answer.citations import is_ignored
 from app.answer.llm import LLM, LLMUnavailable
 from app.answer.recaps import Recaps
-from app.ingest.transcribe import Transcriber, format_offset, is_youtube
+from app.ingest.transcribe import NotPublic, Transcriber, download_drive, drive_id, format_offset, is_youtube
 from app.kb.indexer import RECORDING_PREFIX
 from app.kb.store import Store
 from app.models import IncomingMessage, Recording, StoredMessage
@@ -59,12 +63,22 @@ def slugify(text: str) -> str:
     return re.sub(r"[^a-z0-9]+", "-", ascii_text.lower()).strip("-")[:60] or "session"
 
 
+DRIVE_LINK = re.compile(r"https?://(?:drive|docs)\.google\.com/\S+", re.IGNORECASE)
+
+
+def watchable(url: str) -> bool:
+    """A recording Jeli can watch itself: YouTube, or a Google Drive file."""
+    return is_youtube(url) or drive_id(url) is not None
+
+
 def shared_recording(message: IncomingMessage) -> str | None:
-    """The YouTube link of a session's recording shared in a group, if the message is one."""
+    """The YouTube or Drive link of a session's recording shared in a group, if the message is one."""
     if message.is_private:
         return None
-    link = YOUTUBE_LINK.search(message.text)
-    return link.group(0) if link and RECORDING_WORDS.search(message.text) else None
+    link = YOUTUBE_LINK.search(message.text) or DRIVE_LINK.search(message.text)
+    if not link or not watchable(link.group(0)) or not RECORDING_WORDS.search(message.text):
+        return None
+    return link.group(0)
 
 
 @dataclass
@@ -91,8 +105,8 @@ class Sessions:
 
     def start(self, url: str, title: str, recorded_at: datetime, by: str) -> SessionImport | None:
         """Transcribe a session in the background; None when it is already being added."""
-        if not is_youtube(url):
-            raise ValueError("only YouTube links can be transcribed from here")
+        if not watchable(url):
+            raise ValueError("only YouTube and Google Drive links can be transcribed from here")
         current = self.imports.get(url)
         if current and current.state in ("waiting", "transcribing", "learning"):
             return None
@@ -106,7 +120,7 @@ class Sessions:
         url = shared_recording(message)
         if not url or url in self.imports:
             return None
-        title = " ".join(YOUTUBE_LINK.sub("", message.text).split())[:80] or f"Session shared by {message.author}"
+        title = " ".join(DRIVE_LINK.sub("", YOUTUBE_LINK.sub("", message.text)).split())[:80] or f"Session shared by {message.author}"
         return self.start(url, title, message.sent_at, message.author)
 
     async def from_organiser(self, message: IncomingMessage) -> SessionImport | None:
@@ -128,9 +142,35 @@ class Sessions:
         except ValueError:
             recorded_at = message.sent_at
         title = " ".join(share.title.split())[:120] or f"Session shared by {message.author}"
-        if is_youtube(url):
+        if watchable(url):
             return self.start(url, title, recorded_at, message.author)
         return await self.keep_link(url, title, recorded_at, message.author)
+
+    def from_history(self, messages: list[StoredMessage], organisers: set[str]) -> int:
+        """Recordings the organisers shared in an imported chat history: their messages with a link
+        are read like live ones, one after the other, in the background. Returns how many."""
+        candidates = [
+            m for m in messages if LINK.search(m.text) and organisers and is_ignored(m, organisers)
+        ]
+        if candidates and self.reader is not None:
+            asyncio.get_running_loop().create_task(self._read_history(candidates))
+        return len(candidates)
+
+    async def _read_history(self, messages: list[StoredMessage]) -> None:
+        known = {r.source_url for r in await self.store.all_recordings() if r.source_url}
+        for stored in messages:
+            if any(link.rstrip(".,)") in known for link in LINK.findall(stored.text)):
+                continue
+            message = IncomingMessage(
+                "whatsapp", stored.chat_id, stored.id, stored.author, stored.text, stored.sent_at, False, False,
+                author_id=stored.author_id,
+            )
+            try:
+                await self.from_organiser(message)
+            except ValueError:
+                continue
+            except Exception:
+                log.exception("Could not check an imported message for a recording")
 
     async def keep_link(self, url: str, title: str, recorded_at: datetime, by: str) -> SessionImport:
         """A recording Jeli cannot watch: kept as a link, so Jeli can say where it is."""
@@ -152,8 +192,18 @@ class Sessions:
         recording_id = f"{RECORDING_PREFIX}{job.recorded_at:%Y-%m-%d}-{slugify(job.title)}"
         try:
             job.state = "transcribing"
-            transcriber = Transcriber(self.transcription, progress=lambda text: setattr(job, "progress", text))
-            segments = await transcriber.transcribe(job.url)
+            report = lambda text: setattr(job, "progress", text)  # noqa: E731
+            transcriber = Transcriber(self.transcription, progress=report)
+            if drive_id(job.url):
+                with tempfile.TemporaryDirectory(prefix="jeli-") as folder:
+                    try:
+                        path = await download_drive(job.url, Path(folder), progress=report)
+                    except NotPublic:
+                        await self.keep_link(job.url, job.title, job.recorded_at, job.by)
+                        return
+                    segments = await transcriber.transcribe(str(path))
+            else:
+                segments = await transcriber.transcribe(job.url)
             if not segments:
                 raise ValueError("no speech found in this video")
             job.state, job.progress = "learning", f"{len(segments)} moments, {format_offset(segments[-1].offset)} long"

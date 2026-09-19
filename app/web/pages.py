@@ -931,12 +931,12 @@ async def knowledge_page(request: Request, member: Member, preview: str = "") ->
         "/dashboard/sessions/add",
         csrf,
         f"""<div class="fields four">
-          <label>YouTube link of the recording<input name="url" type="url" required placeholder="https://youtu.be/…"></label>
+          <label>YouTube or Google Drive link of the recording<input name="url" type="url" required placeholder="https://youtu.be/… or https://drive.google.com/file/d/…"></label>
           <label>Title<input name="title" required maxlength="120" placeholder="Wadhwani Ignite — Module 2 class"></label>
           <label>Day of the session<input name="day" type="date" required></label>
           <label>Start (GMT)<input name="at" type="time" value="13:00"></label>
         </div>
-        <p class="hint" style="margin-top:8px">Jeli watches the video and transcribes it — about ten minutes for an hour of video — then members can ask about it and get a link to the exact moment. A Teams or Zoom recording must first be posted on YouTube (unlisted is fine). Recordings shared in the groups as a YouTube link are added on their own (Settings).</p>
+        <p class="hint" style="margin-top:8px">Jeli watches the video and transcribes it — about ten minutes for an hour of video — then members can ask about it and get a link to the exact moment. A Drive video must be shared with “anyone with the link”. A Teams or Zoom recording must first be posted on YouTube or Drive. Recordings the organisers share in the groups are added on their own (Settings).</p>
         <div class="actions" style="margin-top:14px">{ui.button("Add the session", kind="primary", icon_name="plus")}</div>""",
     )
     session_rows = [
@@ -1142,11 +1142,14 @@ async def knowledge_import(request: Request, member: Change) -> RedirectResponse
     memory = getattr(state, "activities", {}).get("memory")
     if memory and added:
         memory.run_now(member)
+    sessions = getattr(state, "sessions", None)
+    shared = sessions.from_history(messages, ignored_keys(runtime["organisers"])) if sessions and runtime["auto_sessions"] else 0
     known = len(messages) - added
     return _done(
         request,
         "/dashboard/knowledge",
-        f"{added:,} new messages{f' and {kept} documents' if kept else ''} added{f' ({known:,} messages were already known)' if known else ''}. Jeli is learning them now: they can be asked about in a few minutes.",
+        f"{added:,} new messages{f' and {kept} documents' if kept else ''} added{f' ({known:,} messages were already known)' if known else ''}. Jeli is learning them now: they can be asked about in a few minutes."
+        + (" Recordings the organisers shared in it are being added too." if shared else ""),
     )
 
 

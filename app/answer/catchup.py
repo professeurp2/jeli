@@ -10,7 +10,7 @@ from app.answer.citations import POLL_MARK, display_author, ignored_keys, is_ign
 from app.answer.language import TEXTS
 from app.answer.llm import LLM, LLMUnavailable
 from app.answer.prompts import LANGUAGES, PROGRAMMES
-from app.ingest.transcribe import is_youtube
+from app.ingest.transcribe import drive_id, is_youtube
 from app.kb.store import Store
 
 log = logging.getLogger(__name__)
@@ -143,7 +143,7 @@ class Catchup:
         if recordings:
             items = [
                 f"• {r.title} ({_day(r.recorded_at, language)})"
-                + (f"\n  {r.source_url}" if is_youtube(r.source_url or "") else "")
+                + (f"\n  {r.source_url}" if is_youtube(r.source_url or "") or drive_id(r.source_url or "") else "")
                 for r in recordings
             ]
             body.append(texts["catchup_recordings"] + "\n" + "\n".join(items))
