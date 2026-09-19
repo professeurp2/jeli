@@ -3,7 +3,9 @@ from datetime import timedelta
 
 from google.genai import errors
 
+from app.answer.llm import LLMUnavailable
 from app.ingest.transcribe import (
+    Progress,
     Segment,
     Transcriber,
     TranscriptSegment,
@@ -70,7 +72,7 @@ def test_youtube_urls():
 
 
 class FakeLLM:
-    """One reply per 15-minute window; raises when asked past the end of the video."""
+    """One reply per 15-minute window (or an exception to raise); 400 when asked past the end."""
 
     def __init__(self, windows):
         self.windows = list(windows)
@@ -81,7 +83,10 @@ class FakeLLM:
         self.prompts.append((media, prompt))
         if not self.windows:
             raise errors.ClientError(400, {"error": {"message": "offset beyond video duration"}})
-        return self.windows.pop(0)
+        outcome = self.windows.pop(0)
+        if isinstance(outcome, Exception):
+            raise outcome
+        return outcome
 
 
 def window(*items):
@@ -92,10 +97,18 @@ async def no_budget(tokens):
     pass
 
 
-def transcribe(llm, source="https://youtu.be/6q4uPBO_sDc"):
-    transcriber = Transcriber(llm, progress=lambda message: None)
+async def no_wait(seconds):
+    pass
+
+
+def transcribe(llm, source="https://youtu.be/6q4uPBO_sDc", checkpoints=None, resume=None):
+    transcriber = Transcriber(
+        llm, progress=lambda message: None, sleep=no_wait,
+        checkpoint=lambda state: checkpoints.append((state.next_window, len(state.segments), state.complete))
+        if checkpoints is not None else None,
+    )
     transcriber.budget.spend = no_budget
-    return asyncio.run(transcriber.transcribe(source))
+    return asyncio.run(transcriber.transcribe(source, resume=resume))
 
 
 def test_youtube_video_is_transcribed_window_by_window_until_it_ends():
@@ -121,6 +134,31 @@ def test_offsets_counted_from_the_window_are_shifted():
     llm = FakeLLM([window(("0:00:05", "A", "one")), window(("0:00:05", "A", "two"))])
     segments = transcribe(llm)
     assert [s.offset for s in segments] == [timedelta(seconds=5), timedelta(minutes=15, seconds=5)]
+
+
+def test_progress_is_saved_after_every_window():
+    checkpoints = []
+    transcribe(FakeLLM([window(("0:01:00", "A", "one")), window(("0:16:00", "A", "two"))]), checkpoints=checkpoints)
+    assert checkpoints == [(1, 1, False), (2, 2, False), (2, 2, True)]
+
+
+def test_an_interrupted_transcription_resumes_where_it_stopped():
+    saved = Progress(segments=[Segment(timedelta(minutes=1), "A", "one")], next_window=1)
+    llm = FakeLLM([window(("0:16:00", "A", "two"))])
+    segments = transcribe(llm, resume=saved)
+    assert [s.text for s in segments] == ["one", "two"]
+    first_media, _ = llm.prompts[0]
+    assert first_media.video_metadata.start_offset == "900s"
+
+
+def test_transient_failures_are_retried():
+    llm = FakeLLM([LLMUnavailable(), window(("0:01:00", "A", "one"))])
+    assert len(transcribe(llm)) == 1
+
+
+def test_a_window_that_keeps_failing_after_the_first_is_taken_as_the_end():
+    llm = FakeLLM([window(("0:01:00", "A", "one")), LLMUnavailable(), LLMUnavailable(), LLMUnavailable()])
+    assert len(transcribe(llm)) == 1
 
 
 def test_two_silent_windows_end_the_recording():

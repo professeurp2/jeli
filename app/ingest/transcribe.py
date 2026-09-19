@@ -18,7 +18,7 @@ from pathlib import Path
 from google.genai import errors, types
 from pydantic import BaseModel
 
-from app.answer.llm import LLM
+from app.answer.llm import LLM, LLMUnavailable
 from app.kb.embeddings import TokenBudget
 
 log = logging.getLogger(__name__)
@@ -29,6 +29,9 @@ WINDOW_TIMEOUT_SECONDS = 300
 FRAMES_PER_SECOND = 0.1
 TOKENS_PER_MINUTE_OF_MEDIA = 2_000
 TOKENS_PER_MINUTE_BUDGET = 200_000
+# A window that fails is retried: models rest 60 s after an overload, 5 min when out of quota.
+WINDOW_ATTEMPTS = 3
+RETRY_WAIT_SECONDS = 65
 YOUTUBE = re.compile(r"^https?://(www\.|m\.)?(youtube\.com/(watch\?v=|live/|shorts/)|youtu\.be/)[\w-]{6,}")
 
 PROMPT = """\
@@ -56,6 +59,16 @@ class Segment:
     offset: timedelta  # from the beginning of the recording
     speaker: str
     text: str
+
+
+@dataclass
+class Progress:
+    """Where a transcription stands: saved after every window, so a failure never loses the work done."""
+
+    segments: list[Segment]
+    next_window: int = 0
+    silent_windows: int = 0
+    complete: bool = False
 
 
 def parse_timestamp(value: str) -> timedelta:
@@ -95,17 +108,31 @@ def _window_segments(window: TranscriptWindow, start: timedelta) -> list[Segment
 
 
 class Transcriber:
-    def __init__(self, llm: LLM, budget: TokenBudget | None = None, progress: Callable[[str], None] = log.info):
+    def __init__(
+        self,
+        llm: LLM,
+        budget: TokenBudget | None = None,
+        progress: Callable[[str], None] = log.info,
+        checkpoint: Callable[[Progress], None] = lambda state: None,
+        sleep=asyncio.sleep,
+    ):
         self.llm = llm
         self.budget = budget or TokenBudget(TOKENS_PER_MINUTE_BUDGET)
         self.progress = progress
+        self.checkpoint = checkpoint
+        self._sleep = sleep
 
-    async def transcribe(self, source: str) -> list[Segment]:
-        """A YouTube URL, or the path of an audio or video file."""
-        if is_youtube(source):
-            return await self._transcribe_media(source, "video/*", clip=True)
-        uploaded = await self._upload(Path(source))
-        return await self._transcribe_media(uploaded.uri, uploaded.mime_type, clip=uploaded.mime_type.startswith("video/"))
+    async def transcribe(self, source: str, resume: Progress | None = None) -> list[Segment]:
+        """A YouTube URL, or the path of an audio or video file; `resume` continues a saved transcription."""
+        state = resume or Progress(segments=[])
+        if not state.complete:
+            if is_youtube(source):
+                await self._transcribe_media(source, "video/*", clip=True, state=state)
+            else:
+                uploaded = await self._upload(Path(source))
+                clip = uploaded.mime_type.startswith("video/")
+                await self._transcribe_media(uploaded.uri, uploaded.mime_type, clip=clip, state=state)
+        return sorted(state.segments, key=lambda s: s.offset)
 
     async def _upload(self, path: Path) -> types.File:
         self.progress(f"Uploading {path.name} to Gemini…")
@@ -117,11 +144,9 @@ class Transcriber:
             raise RuntimeError(f"Gemini could not process {path.name}: {uploaded.state}")
         return uploaded
 
-    async def _transcribe_media(self, uri: str, mime_type: str, clip: bool) -> list[Segment]:
-        segments: list[Segment] = []
-        speakers: list[str] = []
-        silent_windows = 0
-        for index in range(MAX_WINDOWS):
+    async def _transcribe_media(self, uri: str, mime_type: str, clip: bool, state: Progress) -> None:
+        speakers = list(dict.fromkeys(s.speaker for s in state.segments))
+        for index in range(state.next_window, MAX_WINDOWS):
             start, end = WINDOW * index, WINDOW * (index + 1)
             # For videos, only this window is processed (and counted against the quota).
             window_metadata = types.VideoMetadata(
@@ -135,10 +160,31 @@ class Transcriber:
             )
             known = f"- Speakers named so far: {', '.join(speakers)}. Keep exactly these names.\n" if speakers else ""
             prompt = PROMPT.format(start=format_offset(start), end=format_offset(end), known_speakers=known)
+            window = await self._window([media, prompt], index)
+            if window is None:
+                break  # past the end of the recording
+            found = _window_segments(window, start)
+            self.progress(f"{format_offset(start)}–{format_offset(end)}: {len(found)} segments")
+            state.next_window = index + 1
+            if found:
+                state.silent_windows = 0
+                state.segments.extend(found)
+                speakers.extend(s.speaker for s in found if s.speaker not in speakers)
+            else:
+                state.silent_windows += 1
+            self.checkpoint(state)
+            if state.silent_windows == 2:
+                break  # the recording is over
+        state.complete = True
+        self.checkpoint(state)
+
+    async def _window(self, contents: list, index: int) -> TranscriptWindow | None:
+        """One window's transcript, retried on transient failures; None when past the end of the video."""
+        for attempt in range(1, WINDOW_ATTEMPTS + 1):
             await self.budget.spend(int(WINDOW.total_seconds() / 60 * TOKENS_PER_MINUTE_OF_MEDIA))
             try:
-                window = await self.llm.generate(
-                    [media, prompt],
+                return await self.llm.generate(
+                    contents,
                     TranscriptWindow,
                     timeout=WINDOW_TIMEOUT_SECONDS,
                     temperature=0,
@@ -146,19 +192,17 @@ class Transcriber:
                 )
             except errors.ClientError as error:
                 if index and error.code == 400:
-                    break  # asked past the end of the video
+                    return None  # asked past the end of the video
                 raise
-            found = _window_segments(window, start)
-            self.progress(f"{format_offset(start)}–{format_offset(end)}: {len(found)} segments")
-            if not found:
-                silent_windows += 1
-                if silent_windows == 2:
-                    break  # the recording is over
-                continue
-            silent_windows = 0
-            segments.extend(found)
-            speakers.extend(s.speaker for s in found if s.speaker not in speakers)
-        return sorted(segments, key=lambda s: s.offset)
+            except LLMUnavailable:
+                if attempt < WINDOW_ATTEMPTS:
+                    self.progress(f"Window {index + 1} failed, retrying in {RETRY_WAIT_SECONDS} s")
+                    await self._sleep(RETRY_WAIT_SECONDS)
+        if index:
+            # Past the end, some videos make Gemini fail instead of returning nothing.
+            self.progress(f"Window {index + 1} keeps failing: taking it as the end of the recording")
+            return None
+        raise LLMUnavailable
 
 
 VTT_VOICE = re.compile(r"^<v\s+([^>]+)>(.*?)(?:</v>)?$", re.DOTALL)

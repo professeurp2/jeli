@@ -20,7 +20,7 @@ from zoneinfo import ZoneInfo
 
 from app.answer.llm import LLM
 from app.config import get_settings
-from app.ingest.transcribe import Segment, Transcriber, format_offset, is_youtube, parse_subtitles
+from app.ingest.transcribe import Progress, Segment, Transcriber, format_offset, is_youtube, parse_subtitles
 from app.kb.embeddings import Embedder
 from app.kb.indexer import RECORDING_PREFIX, index_pending
 from app.kb.store import Store
@@ -36,30 +36,41 @@ def slugify(text: str) -> str:
     return re.sub(r"[^a-z0-9]+", "-", ascii_text.lower()).strip("-")[:60]
 
 
-def load_cache(path: Path) -> list[Segment] | None:
+def load_cache(path: Path) -> Progress | None:
     if not path.exists():
         return None
-    return [Segment(timedelta(seconds=s["offset"]), s["speaker"], s["text"]) for s in json.loads(path.read_text("utf-8"))]
+    data = json.loads(path.read_text("utf-8"))
+    segments = [Segment(timedelta(seconds=s["offset"]), s["speaker"], s["text"]) for s in data["segments"]]
+    return Progress(segments, data["next_window"], data["silent_windows"], data["complete"])
 
 
-def save_cache(path: Path, segments: list[Segment]) -> None:
+def save_cache(path: Path, state: Progress) -> None:
+    """Written after every window: an interrupted transcription resumes where it stopped."""
     path.parent.mkdir(parents=True, exist_ok=True)
-    data = [{"offset": s.offset.total_seconds(), "speaker": s.speaker, "text": s.text} for s in segments]
+    data = {
+        "complete": state.complete,
+        "next_window": state.next_window,
+        "silent_windows": state.silent_windows,
+        "segments": [{"offset": s.offset.total_seconds(), "speaker": s.speaker, "text": s.text} for s in state.segments],
+    }
     path.write_text(json.dumps(data, ensure_ascii=False, indent=1), "utf-8")
 
 
 async def get_segments(source: str, cache: Path, retranscribe: bool) -> tuple[list[Segment], str]:
     if Path(source).suffix.lower() in SUBTITLES:
         return parse_subtitles(Path(source).read_text("utf-8-sig")), "subtitles"
-    cached = None if retranscribe else load_cache(cache)
-    if cached is not None:
+    state = None if retranscribe else load_cache(cache)
+    if state and state.complete:
         print(f"Using the cached transcript {cache}")
-        return cached, "gemini"
+        return sorted(state.segments, key=lambda s: s.offset), "gemini"
+    if state:
+        print(f"Resuming the transcription at window {state.next_window + 1} ({len(state.segments)} segments saved)")
     settings = get_settings()
     key = require(settings.gemini_api_key, "GEMINI_API_KEY")
-    segments = await Transcriber(LLM(key, settings.transcription_model_list), progress=print).transcribe(source)
-    save_cache(cache, segments)
-    return segments, "gemini"
+    transcriber = Transcriber(
+        LLM(key, settings.transcription_model_list), progress=print, checkpoint=lambda s: save_cache(cache, s)
+    )
+    return await transcriber.transcribe(source, resume=state), "gemini"
 
 
 async def main(args: argparse.Namespace) -> None:
