@@ -1563,6 +1563,13 @@ async def whatsapp_page(request: Request, member: Member) -> HTMLResponse:
           <div class="qr"><img id="qr" src="/dashboard/whatsapp/qr.png" alt="Code to scan with Jeli's phone"></div>
           <ol class="steps"><li>Take Jeli's phone.</li><li>Open WhatsApp → <b>Settings</b> → <b>Linked devices</b>.</li>
           <li>Tap <b>Link a device</b> and scan this code.</li><li>This page updates by itself once connected.</li></ol></div>
+          """ + ui.form(
+            "/dashboard/whatsapp/code",
+            csrf,
+            '<label>Or link with a code: Jeli\'s number, with its country code<input name="phone" required placeholder="+234 706 543 5509" style="max-width:260px"></label>'
+            + ui.button("Get a code", kind="small", icon_name="key"),
+            cls="actions",
+        ) + """
           <script>setInterval(() => { const q = document.getElementById('qr'); q.src = '/dashboard/whatsapp/qr.png?' + Date.now(); }, 20000);
           setInterval(() => location.reload(), 60000);</script>"""
     elif whatsapp is not None:
@@ -1582,6 +1589,24 @@ async def whatsapp_page(request: Request, member: Member) -> HTMLResponse:
         "Keeping the number safe", safety, icon_name="shield"
     )
     return _page(request, member, title="WhatsApp", subtitle="Jeli's phone number and its connection", active="whatsapp", body=body)
+
+
+@router.post("/dashboard/whatsapp/code")
+async def whatsapp_code(request: Request, member: Change) -> RedirectResponse:
+    whatsapp = getattr(_state(request), "whatsapp", None)
+    form = await request.form()
+    phone = re.sub(r"\D", "", str(form.get("phone", "")))
+    if whatsapp is None or len(phone) < 8:
+        return _done(request, "/dashboard/whatsapp", "Type Jeli's number with its country code.", "bad")
+    code = await whatsapp.request_code(phone)
+    if not code:
+        return _done(request, "/dashboard/whatsapp", "No code for now: start the connection first, then try again.", "bad")
+    await _store(request).add_audit(member, "Asked for a code to link Jeli's phone")
+    return _done(
+        request,
+        "/dashboard/whatsapp",
+        f"Code: {code} — on Jeli's phone: WhatsApp → Settings → Linked devices → Link a device → Link with phone number instead, then type it.",
+    )
 
 
 @router.get("/dashboard/whatsapp/qr.png")

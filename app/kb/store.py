@@ -500,6 +500,16 @@ class Store:
             "group_questions": [(row["at"], row["outcome"], row["question"]) for row in questions],
         }
 
+    async def latest_message_at(self) -> datetime | None:
+        """The last group message Jeli knows: how far its memory of the groups goes."""
+        async with self._pool.connection() as conn:
+            row = await (
+                await conn.execute(
+                    "select max(sent_at) as latest from jeli.messages where source in ('whatsapp_export', 'whatsapp_live', 'telegram')"
+                )
+            ).fetchone()
+        return row["latest"]
+
     async def recent_events(self, limit: int = 15) -> list[dict]:
         """The latest exchanges with Jeli, newest first: the dashboard's live feed."""
         async with self._pool.connection() as conn:

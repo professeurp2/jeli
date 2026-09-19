@@ -517,6 +517,16 @@ class Waha:
         except httpx.HTTPError:
             return None
 
+    async def request_code(self, phone: str) -> str | None:
+        """A pairing code to type on Jeli's phone (Linked devices → Link with phone number instead)."""
+        try:
+            response = await self._http.post(f"/api/{self.session}/auth/request-code", json={"phoneNumber": phone})
+            response.raise_for_status()
+            return (response.json() or {}).get("code")
+        except (httpx.HTTPError, ValueError) as error:
+            log.error("Cannot get a pairing code: %r", error)
+            return None
+
     async def restart_session(self) -> bool:
         """Start the connection again (a new QR code when the number is not linked)."""
         try:

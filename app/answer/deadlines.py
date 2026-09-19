@@ -36,9 +36,11 @@ TIMEOUT_SECONDS = 60
 SYSTEM = f"""\
 You find deadlines in the messages of a WhatsApp community and in its call transcripts.
 {PROGRAMMES}
-List the deadlines and dated obligations members must act on: submissions, registrations, forms,
-milestones, sessions they must attend. For each:
-- what: under 12 words, naming the programme when it helps ("Hackathon: submit the chatbot");
+List the deadlines and dated events members should know about: submissions, registrations, forms,
+milestones, and scheduled sessions — classes, coaching, Open Hours, webinars, test slots — even
+optional ones. For each:
+- what: under 12 words, naming the programme when it helps ("Hackathon: submit the chatbot",
+  "Open Hour with Gift");
 - due_date: YYYY-MM-DD. Resolve relative dates ("tomorrow", "Friday", "next Tuesday") from the
   date of the message that states it. Skip anything without a precise day;
 - due_time: the time as stated (e.g. "2:00 PM CAT"), or "";

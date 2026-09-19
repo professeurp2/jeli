@@ -102,3 +102,20 @@ def test_small_talk_never_reaches_the_answerer():
     assert asyncio.run(responder.respond(message("Who are you?", addressed=True))) == TEXTS["en"]["about_jeli"]
     assert asyncio.run(responder.respond(message("hello", addressed=True))) == TEXTS["en"]["greeting_reply"]
     assert answerer.asked == []
+
+
+def test_a_catch_up_says_when_jeli_does_not_follow_the_groups_yet():
+    from app.answer.catchup import Catchup
+
+    class Store:
+        async def messages_since(self, since, chat_ids=None, limit=1500):
+            return []
+
+        async def recordings_since(self, since):
+            return []
+
+        async def latest_message_at(self):
+            return datetime(2026, 9, 18, 20, 3, tzinfo=timezone.utc)
+
+    digest = asyncio.run(Catchup(Store(), None).summarize(datetime(2026, 9, 19, 12, 0, tzinfo=timezone.utc), "fr"))
+    assert digest.startswith("Je ne reçois pas encore les messages des groupes : ma mémoire s'arrête le ven. 18 sept. à 20:03 GMT")
