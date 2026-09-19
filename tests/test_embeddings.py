@@ -2,6 +2,7 @@ import asyncio
 import math
 from types import SimpleNamespace
 
+import httpx
 import pytest
 from google.genai import errors
 
@@ -83,6 +84,22 @@ def test_rate_limits_are_retried(monkeypatch):
     models = FakeModels(fail_first=2)
     assert len(asyncio.run(make_embedder(models).embed_documents(["a"]))) == 1
     assert len(models.calls) == 3
+
+
+def test_network_drops_are_retried(monkeypatch):
+    async def no_wait(seconds):
+        pass
+
+    class Flaky(FakeModels):
+        async def embed_content(self, model, contents, config):
+            if not self.calls:
+                self.calls.append("dropped")
+                raise httpx.ConnectError("[Errno 11001] getaddrinfo failed")
+            return await super().embed_content(model, contents, config)
+
+    monkeypatch.setattr(embeddings.asyncio, "sleep", no_wait)
+    models = Flaky()
+    assert len(asyncio.run(make_embedder(models).embed_documents(["a"]))) == 1
 
 
 def test_other_errors_are_not_retried():

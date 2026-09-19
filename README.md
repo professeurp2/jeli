@@ -159,7 +159,7 @@ From then on, Jeli stores the group's new messages as they arrive and indexes th
 ```bash
 python -m scripts.search "When is the bootcamp?"
 ```
-Hybrid retrieval: semantic neighbours (pgvector, cosine) and keyword matches (Postgres full-text), merged by reciprocal rank fusion. Consecutive messages are chunked together (a new chunk after 30 minutes of silence or 1,500 characters), so a question finds the conversation, not a lone "yes, Friday".
+Hybrid retrieval: semantic neighbours (pgvector, cosine) and keyword matches (Postgres full-text), merged by reciprocal rank fusion — while always keeping the two semantically closest chunks, so that keyword noise cannot crowd them out (measured: a French question over English transcripts matched only "module" as a keyword and pushed the one right excerpt, the closest by meaning, down to 10th place). Consecutive messages are chunked together (a new chunk after 30 minutes of silence or 1,500 characters), so a question finds the conversation, not a lone "yes, Friday".
 
 ### 8. Import call recordings
 ```bash
@@ -206,7 +206,9 @@ Models: `gemini-3.6-flash` with minimal thinking (≈2 s), then `gemini-3.5-flas
 ```bash
 python -m scripts.evaluate --show-answers
 ```
-Runs the fixed question set in [`evals/questions.json`](evals/questions.json) against the real knowledge base: questions whose answer the group discussed (must be answered, with sources, containing the expected fact) and unrelated ones (must get "I don't know"). Reports latency against the 10-second target. Current result: **9/9**, median ≈3 s, max ≈7 s.
+Runs the fixed question set in [`evals/questions.json`](evals/questions.json) against the real knowledge base: questions answered in the chats, questions answered **only in call recordings** (the source must be a recording), traps where two programmes share vocabulary (hackathon team size vs Wadhwani platform team size), and unrelated questions (must get "I don't know"), in English and French. Reports latency against the 10-second target. Latest results: all pass, median ≈3 s, max ≈4 s.
+
+What the evaluation caught and fixed: the model refusing when a rule was relayed by a member rather than an organiser; French questions answered in English when excerpts were English (the answer language is now stated explicitly); and rules of one programme attributed to another (the instructions now name the community's parallel programmes and forbid mixing them).
 
 ### Tests
 ```bash

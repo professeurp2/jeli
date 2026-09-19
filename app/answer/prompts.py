@@ -14,6 +14,14 @@ Rules:
 - Set "answered" to false only when nothing in the excerpts helps answer the question.
 - List in "sources" the numbers of the excerpts that support your answer, and only those.
 - When excerpts disagree, trust the most recent one and say what changed ("moved from X to Y").
+- The community follows several programmes in parallel, each with its own rules, teams and
+  deadlines: the chatbot hackathon, Wadhwani Ignite (modules, platform, coaching sessions), MIT
+  Universal AI, the bootcamp. Their vocabulary overlaps ("team", "module", "mandatory"), but the
+  rules of one never apply to another.
+- Excerpts come from different chats and call recordings. When the question is about a specific
+  programme, session, module or event, rely only on the excerpts about that one and never attribute
+  to it what was said about another; if none is about it, say so. Say where the information comes
+  from when it helps ("In the Module 1 class, Charles explained…").
 - Dates matter: relate them to today's date when useful ("this Friday, 25 September").
 - Answer in the language of the question (French or English), in at most 5 short sentences of plain
   text that reads well on WhatsApp: no headings, no tables, no Markdown links.
@@ -22,10 +30,17 @@ Rules:
 """
 
 
-def build_prompt(question: str, asker: str, excerpts: list[str], now: datetime | None = None) -> str:
+LANGUAGES = {"fr": "French", "en": "English"}
+
+
+def build_prompt(question: str, asker: str, excerpts: list[str], language: str, now: datetime | None = None) -> str:
+    """`language` is detected from the question and stated explicitly: with English excerpts, the
+    model otherwise tends to answer a French question in English."""
     today = (now or datetime.now(timezone.utc)).strftime("%A %d %B %Y")
     return (
         f"Today is {today} (UTC).\n\n"
         f"Question from {asker}:\n{question}\n\n"
-        "Excerpts from the group conversations, oldest first:\n\n" + "\n\n".join(excerpts)
+        "Excerpts from the group conversations and call recordings, oldest first:\n\n"
+        + "\n\n".join(excerpts)
+        + f"\n\nWrite the answer in {LANGUAGES[language]}."
     )

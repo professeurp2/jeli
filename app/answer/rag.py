@@ -85,7 +85,8 @@ class Answerer:
         self.chat_labels = chat_labels or {}
 
     async def answer(self, question: str, asker: str) -> str:
-        texts = TEXTS[detect_language(question)]
+        language = detect_language(question)
+        texts = TEXTS[language]
         hits = await search(self.store, self.embedder, question, limit=RETRIEVED_CHUNKS)
         if not hits or max(hit.similarity for hit in hits) < self.min_similarity:
             return texts["dont_know"]
@@ -94,7 +95,7 @@ class Answerer:
         if not excerpts:
             return texts["dont_know"]
 
-        prompt = build_prompt(question, display_author(asker), [e.for_prompt() for e in excerpts])
+        prompt = build_prompt(question, display_author(asker), [e.for_prompt() for e in excerpts], language)
         try:
             generated = await self.llm.answer(SYSTEM, prompt)
         except LLMUnavailable:

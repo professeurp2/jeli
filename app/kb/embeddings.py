@@ -7,6 +7,7 @@ import time
 from collections import deque
 from collections.abc import Callable, Sequence
 
+import httpx
 from google import genai
 from google.genai import errors, types
 
@@ -96,9 +97,11 @@ class Embedder:
         for delay in (*RETRY_DELAYS, None):
             try:
                 return await self._client.aio.models.embed_content(model=MODEL, contents=batch, config=config)
-            except errors.APIError as error:
-                retryable = error.code == 429 or (error.code or 0) >= 500
+            except (errors.APIError, httpx.TransportError) as error:
+                # Rate limits, server errors and network drops are transient; a bad request is not.
+                code = getattr(error, "code", None)
+                retryable = isinstance(error, httpx.TransportError) or code == 429 or (code or 0) >= 500
                 if not retryable or delay is None:
                     raise
-                log.warning("Gemini embeddings returned %s, retrying in %s s", error.code, delay)
+                log.warning("Gemini embeddings failed (%s), retrying in %s s", code or type(error).__name__, delay)
                 await asyncio.sleep(delay)

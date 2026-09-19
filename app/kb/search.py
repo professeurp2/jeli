@@ -14,6 +14,8 @@ STOPWORDS = set(
     ont été sera nous vous ils elles leur cette ces aux du au en et la le un
     """.split()
 )
+# The chunks semantically closest to the question are always kept.
+GUARANTEED_SEMANTIC = 2
 
 
 def keyword_query(question: str) -> str | None:
@@ -22,6 +24,19 @@ def keyword_query(question: str) -> str | None:
     return " | ".join(dict.fromkeys(words)) or None
 
 
+def select(hits: list[SearchHit], limit: int) -> list[SearchHit]:
+    """The best `limit` hits in fused order, always including the semantically closest ones.
+
+    Keyword matches must not crowd out the best semantic match. Measured: a French question over
+    English transcripts matched only "module" as a keyword, which every recording chunk contains,
+    and pushed the one excerpt answering it (similarity 0.72, the highest) down to 10th place.
+    """
+    closest = sorted(hits, key=lambda hit: hit.similarity, reverse=True)[:GUARANTEED_SEMANTIC]
+    chosen = (closest + [hit for hit in hits if hit not in closest])[:limit]
+    return [hit for hit in hits if hit in chosen]
+
+
 async def search(store: Store, embedder: Embedder, question: str, limit: int = 5) -> list[SearchHit]:
     embedding = await embedder.embed_query(question)
-    return await store.search(embedding, keyword_query(question), limit=limit)
+    candidates = await store.search(embedding, keyword_query(question), limit=limit * 3)
+    return select(candidates, limit)

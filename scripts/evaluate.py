@@ -3,8 +3,9 @@
     python -m scripts.evaluate                 # evals/questions.json
     python -m scripts.evaluate --show-answers
 
-Each question either expects a grounded answer (with sources, containing one of `expect_any`)
-or expects Jeli to say it doesn't know (`"expect": "dont_know"`). Also reports the latency.
+Each question either expects a grounded answer (with sources, containing one of `expect_any`,
+and citing a call recording when `expect_recording` is true) or expects Jeli to say it doesn't
+know (`"expect": "dont_know"`). Also reports the latency.
 """
 
 import argparse
@@ -26,8 +27,9 @@ def check(case: dict, reply: str) -> bool:
     dont_know = TEXTS[detect_language(case["question"])]["dont_know"]
     if case.get("expect") == "dont_know":
         return reply == dont_know
-    answer = reply.split("📌")[0].lower()
-    return "📌" in reply and any(expected.lower() in answer for expected in case["expect_any"])
+    answer, _, sources = reply.partition("📌")
+    grounded = bool(sources) and any(expected.lower() in answer.lower() for expected in case["expect_any"])
+    return grounded and ("🎥" in sources if case.get("expect_recording") else True)
 
 
 async def main(path: Path, show_answers: bool, pause: float) -> None:

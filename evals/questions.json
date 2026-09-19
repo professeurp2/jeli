@@ -5,6 +5,10 @@
   {"question": "Combien de personnes au maximum dans une équipe pour le hackathon ?", "expect_any": ["5", "cinq"]},
   {"question": "Does a hackathon team need to include a woman?", "expect_any": ["woman", "women", "female"]},
   {"question": "What do we have to submit for the hackathon?", "expect_any": ["source code", "repository", "repo", "setup"]},
+  {"question": "In the Module 1 class, do all team members need to complete the course, or just one person?", "expect_any": ["all", "every", "each"], "expect_recording": true},
+  {"question": "How many mandatory activities are there after reading the Module 1 material?", "expect_any": ["three", "3"], "expect_recording": true},
+  {"question": "Combien d'activités obligatoires faut-il faire dans le module 1 ?", "expect_any": ["trois", "3"], "expect_recording": true},
+  {"question": "What is the maximum team size on the Wadhwani Ignite platform?", "expect_any": ["six", "6"], "expect_recording": true},
   {"question": "What is the capital of Japan?", "expect": "dont_know"},
   {"question": "Donne-moi une recette de riz au gras", "expect": "dont_know"},
   {"question": "Who won the 2022 football World Cup?", "expect": "dont_know"}

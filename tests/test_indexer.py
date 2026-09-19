@@ -78,6 +78,19 @@ def test_group_messages_are_remembered_but_direct_messages_are_not():
     assert message.id == "whatsapp:false_g@g.us_AAA" and message.source == "whatsapp_live"
 
 
+def test_the_semantically_closest_chunks_are_never_crowded_out():
+    from app.kb.search import select
+    from app.kb.store import SearchHit
+
+    def hit(chunk_id, similarity):
+        return SearchHit(chunk_id, "c", NOW, NOW, [], [], "", 0.0, similarity)
+
+    # Fused order (as the store returns it): keyword matches first, the best semantic match last.
+    fused = [hit(1, 0.67), hit(2, 0.68), hit(3, 0.66), hit(4, 0.69), hit(5, 0.65), hit(6, 0.66), hit(7, 0.72)]
+    chosen = select(fused, limit=4)
+    assert [h.chunk_id for h in chosen] == [1, 2, 4, 7]  # 7 and 4 are the two closest; fused order kept
+
+
 def test_keyword_query_keeps_meaningful_words():
     assert keyword_query("What was decided about the bootcamp dates?") == "decided | bootcamp | dates"
     assert keyword_query("Quand est le bootcamp ?") == "bootcamp"

@@ -92,6 +92,13 @@ def test_the_model_sees_chronological_excerpts_without_bots_or_full_phone_number
     assert "bootcamp moves" in prompt and "Pitch deck" in prompt
     assert "I am a bot" not in prompt
     assert "818 554 6555" not in prompt and "70 00 00 00" not in prompt
+    assert prompt.endswith("Write the answer in English.")
+
+
+def test_the_answer_language_follows_the_question_not_the_excerpts(monkeypatch):
+    llm = FakeLLM(GeneratedAnswer(answered=True, answer="ok", sources=[1]))
+    ask(make_answerer(llm, monkeypatch=monkeypatch), "Quand a lieu le bootcamp ?")
+    assert llm.prompts[0].endswith("Write the answer in French.")
 
 
 def test_unrelated_questions_get_i_dont_know_without_calling_the_model(monkeypatch):
