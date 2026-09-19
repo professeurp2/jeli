@@ -157,6 +157,11 @@ class Responder:
             return await self.deadlines.upcoming_reply(language), "deadlines"  # "and the deadlines?"
         if self.answerer is None:
             return texts["not_ready"], "question"
+        if self.recaps:
+            # "What questions were asked during the MIT call?": the whole call is read, not passages.
+            from_session = await self.recaps.answer(question, language)
+            if from_session:
+                return from_session, "question"
         answer = await self.answerer.answer(
             question, asker=message.author, chat_id=message.chat_id, asker_id=message.author_id, queries=understood.queries
         )

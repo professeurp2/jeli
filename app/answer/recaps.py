@@ -12,17 +12,19 @@ from datetime import timedelta, timezone
 
 from pydantic import BaseModel
 
-from app.answer.citations import timestamped_link
+from app.answer.citations import recording_quote, timestamped_link
+from app.answer.intents import SESSION_WORD
 from app.answer.language import TEXTS
 from app.answer.llm import LLM, LLMUnavailable
 from app.answer.prompts import LANGUAGES, PROGRAMMES
-from app.ingest.transcribe import format_offset, parse_timestamp
+from app.ingest.transcribe import format_offset, is_youtube, parse_timestamp
 from app.kb.store import Store
-from app.models import Recording
+from app.models import Recording, Reply
 
 log = logging.getLogger(__name__)
 
 TIMEOUT_SECONDS = 120
+SESSION_QUESTION_TIMEOUT = 25  # a whole call's transcript is read (about 20k tokens for an hour)
 MAX_KEY_MOMENTS = 6
 
 SYSTEM = f"""\
@@ -93,10 +95,70 @@ def match_recordings(text: str, recordings: list[Recording]) -> list[Recording]:
     return [recording for score, recording in scored if score == best]
 
 
+# A question about what happened in a session ("what questions were asked during the MIT call?"),
+# not about a session to come ("when is the next MIT session?").
+ABOUT_WHAT_WAS_SAID = re.compile(
+    r"\b(during|in the|at the|lors d[ue]s?|pendant|au cours d[ue]s?|dans (le|la|les))\b"
+    r"|\b(said|asked|explained|discussed|mentioned|answered|dit|parl[ée]|pos[ée]e?s?|expliqu[ée]|mentionn[ée]|[ée]voqu[ée]|abord[ée]|répondu)\b",
+    re.IGNORECASE,
+)
+MOMENTS_QUOTED = 3
+
+SESSION_QUESTION_SYSTEM = f"""\
+A member of a WhatsApp community asks about a recorded call. Answer from its transcript alone, as a
+colleague who attended would: directly, in a few sentences or a short list, in {{language}}.
+{PROGRAMMES}
+- answered: false when the transcript does not answer the question; never guess.
+- moments: the numbers [n] of the 1 to {MOMENTS_QUOTED} transcript lines that best support the answer.
+- Speaker names come from the screen and may be wrong (the host's name is often given to whoever
+  speaks): name a person only if they introduce themselves or are called by name.
+"""
+
+
+class SessionAnswer(BaseModel):
+    answered: bool
+    answer: str
+    moments: list[int]
+
+
 class Recaps:
     def __init__(self, store: Store, llm: LLM):
         self.store = store
         self.llm = llm
+
+    async def answer(self, question: str, language: str) -> Reply | None:
+        """A question about what was said in one recorded session, named by its title: answered from
+        the whole transcript (a search finds passages, not "the questions asked in the meeting"), with
+        the moments it comes from. None when the question is not one, or the call does not answer it."""
+        if not (SESSION_WORD.search(question) and ABOUT_WHAT_WAS_SAID.search(question)):
+            return None
+        recordings = [r for r in await self.store.all_recordings() if r.method != "link"]
+        matches = match_recordings(question, recordings) if recordings else []
+        if len(matches) != 1:
+            return None
+        recording = matches[0]
+        segments = await self.store.messages_of(recording.id)
+        if not segments:
+            return None
+        lines = "\n".join(
+            f"[{n}] {format_offset(s.sent_at - recording.recorded_at)} {s.author}: {s.text}" for n, s in enumerate(segments, 1)
+        )
+        prompt = f"Call: «{recording.title}», {recording.recorded_at:%d %B %Y}.\n\nTranscript:\n{lines}\n\nQuestion: {question}"
+        system = SESSION_QUESTION_SYSTEM.format(language=LANGUAGES[language])
+        try:
+            found = await self.llm.generate(prompt, SessionAnswer, system=system, timeout=SESSION_QUESTION_TIMEOUT, temperature=0.2)
+        except LLMUnavailable:
+            return None
+        if not found.answered or not found.answer.strip():
+            return None
+        moments = [segments[n - 1] for n in dict.fromkeys(found.moments) if 1 <= n <= len(segments)][:MOMENTS_QUOTED]
+        # A YouTube link starts at each moment; any other link is the same for all: given once, last.
+        per_moment = is_youtube(recording.source_url or "")
+        quoted = [
+            recording_quote(recording, s.sent_at - recording.recorded_at, s.author, s.text, link=per_moment or s is moments[-1])
+            for s in moments
+        ]
+        return Reply(found.answer.strip() + "".join(f"\n\n{q}" for q in quoted))
 
     async def generate(self, recording: Recording, language: str = "en") -> dict:
         """Write and store the recap of a recording in one language."""

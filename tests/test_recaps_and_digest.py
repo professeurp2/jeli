@@ -103,6 +103,50 @@ def test_ambiguous_or_bare_recap_requests_list_the_sessions():
     assert asyncio.run(recaps.reply("summary of the bootcamp session", "en")) is None
 
 
+MIT = Recording(
+    id="recording:mit", title="MIT Universal AI — Welcome and onboarding call", recorded_at=datetime(2026, 9, 16, 12, 2, tzinfo=timezone.utc),
+    method="gemini", source_url="https://drive.google.com/file/d/1E5RrwULX8zSjwxHFSxiQzCTtp20ulYQ8/view", duration_seconds=4380,
+)
+
+
+def test_a_question_about_what_was_said_in_a_session_is_answered_from_the_whole_call():
+    from app.answer.recaps import SessionAnswer
+
+    class Store(FakeStore):
+        async def messages_of(self, chat_id):
+            at = MIT.recorded_at
+            return [
+                StoredMessage("m1", chat_id, "recording", "Maria Segala", at + timedelta(minutes=3), "So, what is Universal AI?"),
+                StoredMessage("m2", chat_id, "recording", "Romeo", at + timedelta(minutes=42, seconds=55), "What if I fail an assignment?"),
+                StoredMessage("m3", chat_id, "recording", "Maria Segala", at + timedelta(minutes=49, seconds=7), "Each link is individualized and can only be used once."),
+            ]
+
+    class LLM:
+        def __init__(self, found):
+            self.found, self.prompts = found, []
+
+        async def generate(self, prompt, schema, **kwargs):
+            self.prompts.append((prompt, kwargs["system"]))
+            return self.found
+
+    found = SessionAnswer(answered=True, answer="Two questions stood out: failing an assignment, and expired enrolment links.", moments=[2, 3, 2, 99])
+    llm = LLM(found)
+    recaps = Recaps(Store([MIT, MODULE1, COACHING]), llm)
+    reply = asyncio.run(recaps.answer("Rappelle-moi les questions posées lors du dernier meeting sur la plateforme MIT", "fr"))
+    assert reply.startswith("Two questions stood out") and reply.unanswered is False
+    assert "> 🎥 *MIT Universal AI — Welcome and onboarding call* · Wed 16 Sep, at 42:55\n> Romeo: What if I fail an assignment?" in reply
+    assert reply.count("🎥") == 2  # each moment once, unknown numbers dropped
+    assert reply.count("drive.google.com") == 1 and reply.endswith("/view")  # the same link, given once
+    prompt, system = llm.prompts[0]
+    assert "[3] 49:07 Maria Segala: Each link is individualized" in prompt and "in French" in system
+    # Not about what was said in one named session: the ordinary search answers.
+    assert asyncio.run(recaps.answer("When is the next MIT session?", "en")) is None
+    assert asyncio.run(recaps.answer("What was said during the Module 1 session?", "en")) is None  # two sessions fit
+    assert asyncio.run(Recaps(Store([MIT]), LLM(SessionAnswer(answered=False, answer="", moments=[]))).answer(
+        "What was said in the MIT call about certificates?", "en")) is None
+    assert len(llm.prompts) == 1
+
+
 def test_next_daily_run():
     at = time(17, 0)
     assert next_run(datetime(2026, 9, 19, 9, 0, tzinfo=timezone.utc), at) == datetime(2026, 9, 19, 17, 0, tzinfo=timezone.utc)

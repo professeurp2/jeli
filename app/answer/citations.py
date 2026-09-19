@@ -118,11 +118,12 @@ def timestamped_link(url: str | None, offset: timedelta) -> str | None:
     return urlunsplit((parts.scheme, parts.netloc, parts.path, urlencode(query), ""))
 
 
-def recording_quote(recording: Recording, offset: timedelta, speaker: str, text: str) -> str:
+def recording_quote(recording: Recording, offset: timedelta, speaker: str, text: str, link: bool = True) -> str:
     """A moment of a call: its title, day and time within the call, what was said, and the link
-    that starts playing there."""
+    that starts playing there (`link=False`: not repeated under each moment of the same video)."""
     header = f"🎥 *{recording.title}* · {short_day(recording.recorded_at)}, at {format_offset(offset)}"
-    return quote(header, f"{speaker}: {snippet(text)}" if speaker else snippet(text), timestamped_link(recording.source_url, offset) or "")
+    url = timestamped_link(recording.source_url, offset) if link else None
+    return quote(header, f"{speaker}: {snippet(text)}" if speaker else snippet(text), url or "")
 
 
 POLL_MARK = "📊 Poll:"

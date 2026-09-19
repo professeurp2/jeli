@@ -94,6 +94,9 @@ class FakeRecaps:
         self.calls.append((text, language))
         return self.result
 
+    async def answer(self, question, language):
+        return None  # not about what was said in one named session
+
 
 def test_session_recaps_and_fallback_to_a_normal_question():
     found = Responder(FakeAnswerer(), recaps=FakeRecaps("🎥 recap"))
