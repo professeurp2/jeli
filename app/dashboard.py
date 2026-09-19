@@ -16,7 +16,7 @@ from datetime import date, datetime, time, timedelta, timezone
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Request
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 
 from app.config import get_settings
@@ -65,6 +65,11 @@ async def _authorise(credentials: HTTPBasicCredentials | None) -> str:
             return name
         log.warning("Dashboard: refused sign-in as %r", credentials.username[:40])
     raise HTTPException(status_code=401, headers={"WWW-Authenticate": 'Basic realm="Jeli dashboard"'})
+
+
+@router.get("/", include_in_schema=False)
+async def home() -> RedirectResponse:
+    return RedirectResponse("/dashboard")
 
 
 @router.get("/dashboard", response_class=HTMLResponse, include_in_schema=False)

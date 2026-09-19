@@ -16,6 +16,7 @@ NOW = datetime(2026, 9, 19, 12, 0, tzinfo=timezone.utc)
 def test_dashboard_is_off_without_accounts_and_each_member_has_a_password(monkeypatch):
     with TestClient(app) as client:
         assert client.get("/dashboard").status_code == 404
+        assert client.get("/", follow_redirects=False).headers["location"] == "/dashboard"
     monkeypatch.setenv("DASHBOARD_USERS", f"stanley:{hash_password('s3cret')}, Ede:{hash_password('other')}")
     get_settings.cache_clear()
     with TestClient(app) as client:
