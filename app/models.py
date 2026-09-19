@@ -35,13 +35,15 @@ class Recording:
 
 @dataclass(frozen=True)
 class UsageEvent:
-    """One interaction, counted for the dashboard (R13): never the text, never the author."""
+    """One interaction, counted for the dashboard (R13). Never the author; the text only for a
+    question asked in a group, which every member there has seen (phone numbers masked)."""
 
     kind: str  # question, catchup, recap, deadlines, search, already_answered, help
     outcome: str = ""  # for questions: answered, dont_know, sources_only, not_ready
     language: str = ""
     is_private: bool = False
     latency_ms: int | None = None
+    question: str = ""
 
 
 @dataclass(frozen=True)

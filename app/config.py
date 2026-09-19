@@ -45,8 +45,9 @@ class Settings(BaseSettings):
     duplicate_detection: bool = True
     duplicate_min_similarity: float = 0.70
     duplicate_replies_per_hour: int = 3
-    # R13: password of the web dashboard at /dashboard (user "admin"). Empty: no dashboard.
-    dashboard_password: str = ""
+    # R13: accounts of the web dashboard at /dashboard, one per team member: "name:salt:hash,…",
+    # made by `python -m scripts.dashboard_users` (passwords are never stored). Empty: no dashboard.
+    dashboard_users: str = ""
     # R10: "HH:MM" (UTC) to post a daily digest in each group of WHATSAPP_GROUP_IDS. Empty: off.
     daily_digest_time: str = ""
     daily_digest_language: str = "en"
@@ -75,6 +76,12 @@ class Settings(BaseSettings):
     @property
     def ignored_author_list(self) -> list[str]:
         return [author.strip() for author in self.ignored_authors.split(",") if author.strip()]
+
+    @property
+    def dashboard_accounts(self) -> dict[str, str]:
+        """Account name (lower case) → "salt:hash"."""
+        pairs = (item.strip().split(":", 1) for item in self.dashboard_users.split(",") if ":" in item)
+        return {name.strip().lower(): secret.strip() for name, secret in pairs if name.strip()}
 
     @property
     def chat_label_map(self) -> dict[str, str]:

@@ -29,7 +29,7 @@ Built for the **UniPods METI AI Innovation Programme — Cohort 1 Chatbot Hackat
 | R9 | Session recaps: summary, decisions, action items with owners, key moments linked to the video | ✅ Day 6 |
 | R10 | Daily digest in each group (opt-in) | ✅ Day 6 |
 | R11 | `/search <topic>`: where the group talked about it, without a model call | ✅ Day 6 |
-| R13 | Web dashboard: status, usage, knowledge — counts only, password-protected | ✅ |
+| R13 | Web dashboard for the team: status, usage, group questions, knowledge — one account per member | ✅ |
 | R14 | Deadline reminders: `/deadlines`, and "coming up" in every digest | ✅ |
 
 ---
@@ -84,7 +84,7 @@ It speaks up only when sure: the question must look like one, be very close to a
 
 **Deadlines (R14):** Jeli scans new messages and call transcripts every hour for deadlines a message states — resolving "Friday" or "tomorrow" from that message's date, skipping guesses, keeping an organiser's announcement over a member's contradicting claim, and merging two wordings of the same deadline. `/deadlines` (or *"what are the upcoming deadlines?"*) lists the next two weeks with who announced each and where; every catch-up and daily digest ends with what is due in the next three days. Reminders never come as extra messages of their own.
 
-**Dashboard (R13):** `https://<jeli-domain>/dashboard` (user `admin`, password `DASHBOARD_PASSWORD`; no password set = no dashboard). Status of WhatsApp, answers, background jobs and each Gemini model; usage over 7 days (questions, share answered with sources, "I don't know", reply times, catch-ups, recaps…); what Jeli knows (chats, recordings, indexing backlog, deadlines). Counts only: no message text and no member ever appears. Usage is counted as anonymous events (kind, outcome, language, reply time).
+**Dashboard (R13):** `https://<jeli-domain>/dashboard`, for the team: one account per member, each with its own password (`python -m scripts.dashboard_users --passwords <file> <names…>` writes the passwords to a file to hand out, and prints `DASHBOARD_USERS`, which keeps only salted scrypt hashes; no accounts = no dashboard). It shows the status of WhatsApp, answers, background jobs and each Gemini model; usage over 7 days (questions, share answered with sources, "I don't know", reply times, catch-ups, recaps…); the questions asked in the groups — those Jeli could not answer (knowledge gaps to fill) and all of them (what the community needs: material for the pitch and the next features); and what Jeli knows (chats, recordings, indexing backlog, deadlines). No member ever appears: usage is counted as anonymous events, group questions are kept without their author, mentions or phone numbers, and private questions are never kept. Jeli never messages the team about them: the dashboard is where they are read, which keeps the number's profile low.
 
 **Catch-up (R8):** `/catchup`, `/catchup 3 days`, *"@Jeli what did I miss since Monday?"*, *"Jeli, qu'est-ce que j'ai raté cette semaine ?"* → highlights, decisions, deadlines and dates, questions still unanswered, and the sessions recorded in that period with their links. Default period: the last 24 hours. The same digest is reused for 10 minutes, so a whole jury asking at once costs one model call.
 
@@ -335,7 +335,7 @@ Run **exactly one replica of WAHA**: two instances of the same WhatsApp session 
 | `DUPLICATE_DETECTION` | no | Point to earlier answers when the group re-asks a question (R7). Default `true` |
 | `DUPLICATE_MIN_SIMILARITY` | no | Similarity needed before even checking. Default 0.70 |
 | `DUPLICATE_REPLIES_PER_HOUR` | no | Uninvited replies per group per hour. Default 3 |
-| `DASHBOARD_PASSWORD` | no | Password of `/dashboard` (user `admin`). Empty: no dashboard |
+| `DASHBOARD_USERS` | no | Accounts of `/dashboard`, `name:salt:hash,…`, made by `python -m scripts.dashboard_users`. Empty: no dashboard |
 | `DAILY_DIGEST_TIME` | no | `HH:MM` (UTC) to post the daily digest in each group of `WHATSAPP_GROUP_IDS`. Empty: off |
 | `DAILY_DIGEST_LANGUAGE` | no | `en` or `fr`. Default `en` |
 | `CHAT_LABELS` | no | Readable chat names in sources: `chat-id=Name;other-id=Other name` |
@@ -368,7 +368,7 @@ app/
 ├── ingest/            # whatsapp_export.py, transcribe.py, chunker.py, live.py
 ├── kb/                # embeddings.py (Gemini), store.py (pgvector), indexer.py, search.py
 └── jobs/              # indexing.py, deadlines.py, daily_digest.py
-scripts/               # import_whatsapp_export, import_recording, recap_recording, extract_deadlines, search, ask, evaluate, forget
+scripts/               # import_whatsapp_export, import_recording, recap_recording, extract_deadlines, dashboard_users, search, ask, evaluate, forget
 evals/questions.json   # fixed question set for answer quality
 db/schema.sql          # knowledge base schema and least-privilege role
 tests/

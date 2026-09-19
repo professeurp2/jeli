@@ -1,10 +1,15 @@
-"""Web dashboard (R13): what Jeli knows and how it is used — counts only, never message text or members.
+"""Web dashboard (R13), for the team: what Jeli knows, how it is used, and what the groups ask it —
+never who asked.
 
-GET /dashboard with HTTP Basic auth (user "admin", password DASHBOARD_PASSWORD). Without a password
-set, the page does not exist. It refreshes itself every minute.
+GET /dashboard with HTTP Basic auth: one account per team member (DASHBOARD_USERS), each with its
+own password, stored as a scrypt hash. Without accounts, the page does not exist. It refreshes
+itself every minute.
 """
 
+import asyncio
+import hashlib
 import html
+import logging
 import math
 import secrets
 from datetime import date, datetime, time, timedelta, timezone
@@ -17,8 +22,10 @@ from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from app.config import get_settings
 from app.ingest.transcribe import format_offset
 
+log = logging.getLogger(__name__)
 router = APIRouter()
 basic = HTTPBasic(auto_error=False)
+SCRYPT = {"n": 2**14, "r": 8, "p": 1, "dklen": 32}
 
 DAYS = 7
 # Question outcomes, in the fixed categorical order of the chart (series 1, 2, 3).
@@ -28,28 +35,48 @@ ICONS = {"good": "✓", "warning": "!", "neutral": "–"}
 KINDS = [("catchup", "Catch-ups"), ("recap", "Session recaps"), ("deadlines", "Deadline lists"), ("search", "Searches"), ("already_answered", "“Already answered” pointers")]
 
 
-def _authorise(credentials: HTTPBasicCredentials | None) -> None:
-    password = get_settings().dashboard_password
-    if not password:
+def hash_password(password: str, salt: bytes | None = None) -> str:
+    """"salt:hash" in hex, the form an account keeps in DASHBOARD_USERS."""
+    salt = salt or secrets.token_bytes(16)
+    return f"{salt.hex()}:{hashlib.scrypt(password.encode(), salt=salt, **SCRYPT).hex()}"
+
+
+def check_password(password: str, stored: str) -> bool:
+    try:
+        salt = bytes.fromhex(stored.split(":", 1)[0])
+    except ValueError:
+        return False
+    return secrets.compare_digest(hash_password(password, salt), stored)
+
+
+# Checked against when the name is unknown, so a wrong name takes as long as a wrong password.
+_NOBODY = f"{'00' * 16}:{'00' * 32}"
+
+
+async def _authorise(credentials: HTTPBasicCredentials | None) -> str:
+    """The signed-in account name, or 404 without accounts / 401 without valid credentials."""
+    accounts = get_settings().dashboard_accounts
+    if not accounts:
         raise HTTPException(status_code=404)
-    valid = credentials is not None and (
-        secrets.compare_digest(credentials.username.encode(), b"admin")
-        & secrets.compare_digest(credentials.password.encode(), password.encode())
-    )
-    if not valid:
-        raise HTTPException(status_code=401, headers={"WWW-Authenticate": 'Basic realm="Jeli dashboard"'})
+    if credentials is not None:
+        name = credentials.username.strip().lower()
+        stored = accounts.get(name)
+        if await asyncio.to_thread(check_password, credentials.password, stored or _NOBODY) and stored:
+            return name
+        log.warning("Dashboard: refused sign-in as %r", credentials.username[:40])
+    raise HTTPException(status_code=401, headers={"WWW-Authenticate": 'Basic realm="Jeli dashboard"'})
 
 
 @router.get("/dashboard", response_class=HTMLResponse, include_in_schema=False)
 async def dashboard(request: Request, credentials: Annotated[HTTPBasicCredentials | None, Depends(basic)]) -> HTMLResponse:
-    _authorise(credentials)
+    viewer = await _authorise(credentials)
     state = request.app.state
     now = datetime.now(timezone.utc)
     store = getattr(state, "store", None)
     first_day = datetime.combine((now - timedelta(days=DAYS - 1)).date(), time.min, timezone.utc)
     usage = await store.usage_since(first_day) if store else None
     knowledge = await store.knowledge_overview() if store else None
-    page = render(now, status(state), usage, knowledge, get_settings().chat_label_map)
+    page = render(now, status(state), usage, knowledge, get_settings().chat_label_map, viewer)
     return HTMLResponse(page, headers={"Cache-Control": "no-store"})
 
 
@@ -141,7 +168,36 @@ def _pct(part: int, whole: int) -> str:
     return f"{round(100 * part / whole)}%" if whole else "—"
 
 
-def render(now: datetime, rows: list[tuple[str, str, str]], usage: dict | None, knowledge: dict | None, labels: dict[str, str]) -> str:
+SHOWN_QUESTIONS = 20
+OUTCOME_WORDS = {"answered": "answered", "dont_know": "“I don't know”", "sources_only": "sources only", "not_ready": "not ready"}
+
+
+def _questions(questions: list[tuple[datetime, str, str]]) -> str:
+    """What members asked Jeli in the groups, newest first: the ones it could not answer (gaps to
+    fill, in the group or with a source), then all of them (what the community needs)."""
+    esc = html.escape
+
+    def rows(items, with_outcome):
+        return "".join(
+            f"<tr><td>{at:%a %d %b %H:%M}</td><td>{esc(q)}</td>"
+            + (f"<td>{esc(OUTCOME_WORDS.get(o, o))}</td>" if with_outcome else "")
+            + "</tr>"
+            for at, o, q in items[:SHOWN_QUESTIONS]
+        )
+
+    unanswered = [q for q in questions if q[1] == "dont_know"]
+    return f"""
+        <div class="panel"><h3>Jeli could not answer ({len(unanswered)})</h3>
+          <p class="muted">Knowledge gaps: answer them in the group, or add the recording or document that does.</p>
+          <div class="table-wrap"><table><thead><tr><th>Asked (UTC)</th><th>Question</th></tr></thead>
+          <tbody>{rows(unanswered, False) or '<tr><td colspan="2" class="muted">None in the last 7 days</td></tr>'}</tbody></table></div></div>
+        <div class="panel"><h3>All questions ({len(questions)})</h3>
+          <p class="muted">What the community asks: material for the pitch, the FAQ and the next features.</p>
+          <div class="table-wrap"><table><thead><tr><th>Asked (UTC)</th><th>Question</th><th>Outcome</th></tr></thead>
+          <tbody>{rows(questions, True) or '<tr><td colspan="3" class="muted">No questions yet</td></tr>'}</tbody></table></div></div>"""
+
+
+def render(now: datetime, rows: list[tuple[str, str, str]], usage: dict | None, knowledge: dict | None, labels: dict[str, str], viewer: str = "") -> str:
     esc = html.escape
     chips = "".join(
         f'<li class="chip {level}"><span class="dot" aria-hidden="true">{ICONS[level]}</span>'
@@ -185,6 +241,8 @@ def render(now: datetime, rows: list[tuple[str, str, str]], usage: dict | None, 
         </div>
         <ul class="counters">{others}</ul>"""
 
+    questions_html = _questions(usage["group_questions"]) if usage else '<p class="muted">No knowledge base configured.</p>'
+
     if knowledge is None:
         knowledge_html = '<p class="muted">No knowledge base configured.</p>'
     else:
@@ -220,10 +278,11 @@ def render(now: datetime, rows: list[tuple[str, str, str]], usage: dict | None, 
 <body><main>
   <header>
     <h1>Jeli dashboard</h1>
-    <p class="muted">Updated {now:%a %d %b %Y, %H:%M} UTC · refreshes every minute · counts only: no message text, no member is shown.</p>
+    <p class="muted">Updated {now:%a %d %b %Y, %H:%M} UTC · refreshes every minute · no member is ever shown: questions asked in groups appear without their author, private questions never.{f" Signed in as {esc(viewer)}." if viewer else ""}</p>
   </header>
   <section><h2>Status</h2><ul class="chips">{chips}</ul></section>
   <section><h2>Usage</h2>{usage_html}</section>
+  <section><h2>Questions from the groups</h2>{questions_html}</section>
   <section><h2>Knowledge</h2>{knowledge_html}</section>
 </main></body></html>"""
 

@@ -101,6 +101,9 @@ create table if not exists jeli.events (
     latency_ms integer
 );
 create index if not exists events_at on jeli.events (at);
+-- The text of questions asked in groups (never private ones), without author or phone numbers:
+-- the team sees what members ask, and what Jeli could not answer.
+alter table jeli.events add column if not exists question text;
 
 -- Scheduled jobs that must run once a day at most (the daily digest), even across restarts.
 create table if not exists jeli.job_runs (

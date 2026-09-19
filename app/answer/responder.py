@@ -18,6 +18,15 @@ log = logging.getLogger(__name__)
 
 HELP_COMMANDS = {"/start", "/help", "/aide", "help", "aide"}
 SEARCH_COMMAND = re.compile(r"^/(?:search|cherche|chercher)\b(.*)$", re.IGNORECASE | re.DOTALL)
+MENTION = re.compile(r"@\d{6,}")  # WhatsApp mentions carry the member's number
+NUMBER = re.compile(r"\+?\d[\d\s().-]{7,}\d")
+
+
+def shareable_question(text: str) -> str:
+    """A group question as the team sees it on the dashboard: no mention, no phone number."""
+    text = MENTION.sub("", text)
+    text = NUMBER.sub(lambda m: "···" if sum(c.isdigit() for c in m.group()) >= 9 else m.group(), text)
+    return " ".join(text.split())[:300]
 
 
 def _outcome(kind: str, reply: str, language: str) -> str:
@@ -46,7 +55,8 @@ class Responder:
         deadlines: Deadlines | None = None,
         record: Callable[[UsageEvent], Awaitable[None]] | None = None,
     ):
-        # Usage counters for the dashboard (Store.record_event); never text or authors.
+        # Usage counters for the dashboard (Store.record_event); never authors, and no text
+        # but the questions asked in groups.
         self.record = record
         self.answerer = answerer
         self.catchup = catchup
@@ -72,6 +82,7 @@ class Responder:
                 language=language,
                 is_private=message.is_private,
                 latency_ms=int((time.monotonic() - started) * 1000),
+                question=shareable_question(message.text) if kind == "question" and not message.is_private else "",
             )
             try:
                 await self.record(event)

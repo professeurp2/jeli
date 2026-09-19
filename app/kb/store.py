@@ -224,8 +224,9 @@ class Store:
     async def record_event(self, event: UsageEvent) -> None:
         async with self._pool.connection() as conn:
             await conn.execute(
-                "insert into jeli.events (kind, outcome, language, is_private, latency_ms) values (%s, %s, %s, %s, %s)",
-                (event.kind, event.outcome, event.language, event.is_private, event.latency_ms),
+                "insert into jeli.events (kind, outcome, language, is_private, latency_ms, question) "
+                "values (%s, %s, %s, %s, %s, %s)",
+                (event.kind, event.outcome, event.language, event.is_private, event.latency_ms, event.question or None),
             )
 
     async def usage_since(self, since: datetime) -> dict:
@@ -251,11 +252,19 @@ class Store:
                     (since,),
                 )
             ).fetchone()
+            questions = await (
+                await conn.execute(
+                    "select at, outcome, question from jeli.events "
+                    "where at >= %s and kind = 'question' and question is not null order by at desc limit 200",
+                    (since,),
+                )
+            ).fetchall()
         return {
             "by_kind": {row["kind"]: row["n"] for row in by_kind},
             "questions_by_day": [(row["day"], row["outcome"], row["n"]) for row in by_day],
             "median_ms": latency["median"],
             "p95_ms": latency["p95"],
+            "group_questions": [(row["at"], row["outcome"], row["question"]) for row in questions],
         }
 
     async def knowledge_overview(self) -> dict:
