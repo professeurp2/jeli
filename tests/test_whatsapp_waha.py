@@ -77,6 +77,35 @@ def test_mention_in_text_addresses_bot_and_is_stripped():
     assert message.text == "what was decided about the dates?"
 
 
+def test_display_name_mention_is_stripped():
+    """GOWS engine puts '@Jeli_bot' in the body instead of the number."""
+    event = message_event("@Jeli_bot what time is the session?")
+    event["payload"]["_data"]["Message"] = {
+        "extendedTextMessage": {"contextInfo": {"mentionedJID": [f"{BOT_LID}@lid"]}}
+    }
+    message = parse_message(event, "Jeli")
+    assert message is not None
+    assert message.addressed_to_bot
+    assert message.text == "what time is the session?"
+
+
+def test_bare_mention_with_quoted_context_uses_quoted_body():
+    """'@Jeli_bot' alone (empty question) with a quoted message → quoted body becomes the question."""
+    event = message_event("@Jeli_bot")
+    event["payload"]["_data"]["Message"] = {
+        "extendedTextMessage": {"contextInfo": {"mentionedJID": [f"{BOT_LID}@lid"]}}
+    }
+    event["payload"]["replyTo"] = {
+        "id": "quoted-msg-1",
+        "participant": "22300000001@c.us",
+        "body": "Team declarations due: close of business, Thursday 17 September 2026.",
+    }
+    message = parse_message(event, "Jeli")
+    assert message is not None
+    assert message.addressed_to_bot
+    assert message.text == "Team declarations due: close of business, Thursday 17 September 2026."
+
+
 def test_mention_by_hidden_lid_in_raw_data_addresses_bot():
     event = message_event(f"@{BOT_LID} any news?")
     event["payload"]["_data"]["Message"] = {

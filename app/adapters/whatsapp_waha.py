@@ -166,6 +166,18 @@ def parse_message(event: dict, bot_name: str) -> IncomingMessage | None:
         text = text.replace(f"@{bot_id}", "")
     if named:
         text = text[named.end():]
+    # GOWS engine uses the display name in the body ("@Jeli_bot") instead of the number.
+    # Strip any remaining @BotName or @BotName_suffix so the question text is clean.
+    if bot_name:
+        text = re.sub(rf"@{re.escape(bot_name)}(?:_\w+)?", "", text, flags=re.IGNORECASE)
+
+    text = "\n".join(" ".join(line.split()) for line in text.splitlines()).strip()
+
+    # When the member's own text is empty or a bare punctuation mark after stripping the mention,
+    # fall back to the body of the quoted/replied-to message as the question context.
+    quoted_body = (reply_to.get("body") or "").strip()
+    if not text or (len(text) <= 2 and not text.startswith("/")):
+        text = quoted_body
 
     return IncomingMessage(
         platform="whatsapp",
@@ -173,7 +185,7 @@ def parse_message(event: dict, bot_name: str) -> IncomingMessage | None:
         message_id=payload["id"],
         author=_author(payload),
         author_id=payload.get("participant") or chat_id,
-        text="\n".join(" ".join(line.split()) for line in text.splitlines()).strip(),
+        text=text,
         sent_at=datetime.fromtimestamp(int(float(payload["timestamp"])), tz=timezone.utc),
         is_private=is_private,
         addressed_to_bot=is_private or mentioned or replied_to_bot or bool(named) or command,
