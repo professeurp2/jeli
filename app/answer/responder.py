@@ -59,7 +59,10 @@ class Responder:
         record: Callable[[UsageEvent], Awaitable[None]] | None = None,
         understander: Understander | None = None,
         conversations: Conversations | None = None,
+        documents=None,
     ):
+        # Sends the documents Jeli keeps, translated if asked (app/answer/documents.py).
+        self.documents = documents
         # Reads each message with the conversation so far (small talk, follow-ups, search queries).
         self.understander = understander or Understander(None)
         # What each member and Jeli just said to each other, to follow the thread.
@@ -132,6 +135,10 @@ class Responder:
         understood = await self.understander.understand(text, language, self.conversations.history(message))
         if understood.kind in ("social", "about_jeli"):
             return understood.reply, "social"
+        if understood.kind == "file" and self.documents:
+            reply = await self.documents.reply(text, language, self.conversations.history(message))
+            if reply is not None:
+                return reply, "file"
         if understood.kind == "catchup" and self.catchup:
             return await self.catchup.summarize(parse_since(text, datetime.now(timezone.utc)), language), "catchup"
         question = understood.standalone

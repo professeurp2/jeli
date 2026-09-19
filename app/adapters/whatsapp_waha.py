@@ -10,6 +10,7 @@ Jeli therefore never starts a conversation, only answers when addressed, and pac
 """
 
 import asyncio
+import base64
 import dataclasses
 import hashlib
 import hmac
@@ -29,7 +30,7 @@ from app.adapters.pacing import SendSpacer, SlidingWindowLimiter, reading_delay,
 from app.answer.citations import is_ignored
 from app.config import Settings
 from app.control.guard import Guard
-from app.models import IncomingMessage
+from app.models import Attachment, IncomingMessage
 
 log = logging.getLogger(__name__)
 
@@ -42,6 +43,9 @@ RESTRICTION_ERRORS = ("463", "475")
 # Status updates and channels are not conversations.
 IGNORED_CHAT_SUFFIXES = ("@broadcast", "@newsletter")
 TEXT_MENTION = re.compile(r"@(\d{5,})")
+# Documents Jeli keeps when a member shares them in a group.
+DOCUMENT_TYPES = (".pdf", ".docx", ".txt", ".md")
+MAX_DOCUMENT_BYTES = 15 * 1024 * 1024
 
 router = APIRouter()
 
@@ -133,6 +137,29 @@ def parse_message(event: dict, bot_name: str) -> IncomingMessage | None:
     )
 
 
+def parse_shared_document(event: dict) -> dict | None:
+    """A document a member shared (PDF, Word, text), with where to download it; None otherwise."""
+    if event.get("event") != "message":
+        return None
+    payload = event.get("payload") or {}
+    media = payload.get("media") or {}
+    chat_id = payload.get("from") or ""
+    filename = (media.get("filename") or "").strip()
+    if payload.get("fromMe") or not payload.get("hasMedia") or not media.get("url") or not chat_id.endswith("@g.us"):
+        return None
+    if not filename.lower().endswith(DOCUMENT_TYPES):
+        return None
+    return {
+        "chat_id": chat_id,
+        "url": media["url"],
+        "filename": filename,
+        "mimetype": media.get("mimetype") or "",
+        "author": _author(payload),
+        "sent_at": datetime.fromtimestamp(int(float(payload.get("timestamp") or time.time())), tz=timezone.utc),
+        "caption": (payload.get("body") or "").strip(),
+    }
+
+
 class Waha:
     def __init__(self, settings: Settings, respond: Respond, ingest: Ingest | None = None):
         self.session = settings.waha_session
@@ -161,6 +188,9 @@ class Waha:
         self.guard: Guard | None = None
         # Whether a group message continues a conversation with Jeli (set by the responder).
         self.follow_up = None
+        # Keeps a document shared in a group: (filename, data, mimetype, shared_by, shared_at, chat_id).
+        self.on_document = None
+        self._later: set[asyncio.Task] = set()
 
     def accepts(self, message: IncomingMessage) -> bool:
         """Direct messages are always accepted; groups only if listed in WHATSAPP_GROUP_IDS (when set)."""
@@ -250,6 +280,74 @@ class Waha:
             payload["mentions"] = list(mentions)
         await self._post("/api/sendText", payload)
 
+    async def send_file(self, chat_id: str, attachment: Attachment, reply_to: str | None = None) -> None:
+        payload = {
+            "chatId": chat_id,
+            "file": {
+                "mimetype": attachment.mimetype,
+                "filename": attachment.filename,
+                "data": base64.b64encode(attachment.data).decode(),
+            },
+            "caption": attachment.caption,
+        }
+        if reply_to:
+            payload["reply_to"] = reply_to
+        await self._post("/api/sendFile", payload)
+
+    async def _send_attachment(self, message: IncomingMessage, attachment: Attachment) -> None:
+        if self.suspended or self.paused or not self.hourly_limiter.allow("all"):
+            return
+        await self.spacer.wait_turn()
+        await self.send_file(message.chat_id, attachment, reply_to=message.message_id)
+
+    async def _send_later(self, message: IncomingMessage, pending) -> None:
+        """A file being made (a translation): sent when ready, or the reason it could not be."""
+        try:
+            result = await asyncio.wait_for(pending(), timeout=300)
+        except Exception:
+            log.exception("A file for message %s could not be made", message.message_id)
+            return
+        if isinstance(result, Attachment):
+            await self._send_attachment(message, result)
+        elif result and not self.suspended and self.hourly_limiter.allow("all"):
+            await self.spacer.wait_turn()
+            await self.send_text(message.chat_id, result, reply_to=message.message_id)
+
+    async def deliver_files(self, message: IncomingMessage, reply: str) -> None:
+        attachment = getattr(reply, "attachment", None)
+        if attachment:
+            await self._send_attachment(message, attachment)
+        pending = getattr(reply, "pending", None)
+        if pending:
+            task = asyncio.get_running_loop().create_task(self._send_later(message, pending))
+            self._later.add(task)
+            task.add_done_callback(self._later.discard)
+
+    async def keep_document(self, shared: dict) -> None:
+        """Download a document shared in a group, and give it to Jeli's documents."""
+        if self.on_document is None:
+            return
+        url = httpx.URL(shared["url"])
+        path = url.raw_path.decode()  # WAHA serves it itself: ask our WAHA, whatever host it names
+        try:
+            response = await self._http.get(path)
+            response.raise_for_status()
+        except httpx.HTTPError as error:
+            log.warning("Cannot download the shared document %s: %r", shared["filename"], error)
+            return
+        if len(response.content) > MAX_DOCUMENT_BYTES:
+            log.info("Shared document %s is too big to keep", shared["filename"])
+            return
+        try:
+            await self.on_document(
+                # A short caption names the document; a long one is a message about it.
+                shared["filename"], response.content, mimetype=shared["mimetype"],
+                title=shared["caption"] if 0 < len(shared["caption"]) <= 60 else "",
+                shared_by=shared["author"], shared_at=shared["sent_at"], chat_id=shared["chat_id"],
+            )
+        except ValueError as error:
+            log.info("Shared document %s not kept: %s", shared["filename"], error)
+
     async def send_reply(self, message: IncomingMessage, reply: str) -> None:
         """Jeli's reply, as WhatsApp shows it: quoting the member's message, or the source message
         itself (WhatsApp's own reference), with its mentions."""
@@ -293,6 +391,7 @@ class Waha:
             await self._post_quietly("/api/stopTyping", chat)
         if reply:
             await self.send_reply(message, reply)
+            await self.deliver_files(message, reply)
 
     async def _step_in_if_needed(self, message: IncomingMessage) -> None:
         """A message not addressed to Jeli: it speaks only when the responder finds that the group
@@ -448,6 +547,10 @@ async def receive_webhook(
     if event.get("event") == "session.status":
         adapter.set_status((event.get("payload") or {}).get("status"))
         return {"ok": True}
+
+    shared = parse_shared_document(event)
+    if shared and (not adapter.groups or shared["chat_id"] in adapter.groups):
+        background_tasks.add_task(adapter.keep_document, shared)
 
     message = parse_message(event, adapter.bot_name)
     # Acknowledge at once and handle in the background, so WAHA never times out and retries.

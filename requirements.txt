@@ -11,3 +11,7 @@ google-genai>=1.0
 tzdata
 # System certificate store on Windows/macOS (HTTPS-inspecting antivirus, corporate proxies)
 truststore
+# Documents: reading PDF and Word files, writing translated PDFs
+pypdf>=5
+python-docx>=1.1
+reportlab>=4.2

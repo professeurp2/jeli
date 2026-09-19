@@ -528,7 +528,7 @@ class Store:
             ).fetchall()
             recordings = await (
                 await conn.execute(
-                    "select r.title, r.recorded_at, r.duration_seconds, "
+                    "select r.id, r.title, r.recorded_at, r.duration_seconds, "
                     "coalesce((select array_agg(k order by k) from jsonb_object_keys(r.recap) as k), '{}') as recaps, "
                     "(select count(*) from jeli.messages m where m.chat_id = r.id) as segments "
                     "from jeli.recordings r order by r.recorded_at"

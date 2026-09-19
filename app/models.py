@@ -31,6 +31,7 @@ class Attachment:
     mimetype: str
     data: bytes
     caption: str = ""
+    document_id: str = ""  # the document Jeli keeps it as, if any
 
 
 class Reply(str):

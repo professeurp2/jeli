@@ -59,6 +59,15 @@ async def _on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     reply = await respond(to_incoming(message, context.bot.id, context.bot.username))
     if reply:
         await message.reply_text(reply)
+        attachment = getattr(reply, "attachment", None)
+        pending = getattr(reply, "pending", None)
+        if pending:
+            attachment = await pending()
+            if isinstance(attachment, str):
+                await message.reply_text(attachment)
+                attachment = None
+        if attachment:
+            await message.reply_document(attachment.data, filename=attachment.filename, caption=attachment.caption)
 
 
 async def _on_error(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:

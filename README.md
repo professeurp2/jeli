@@ -79,6 +79,10 @@ Submissions close on Thursday 24 September: a working chatbot, the code link and
 
 **Everyday messages** get a human reply without searching: greetings, thanks, *"who are you?"*, *"what can you do?"*; *"what happened today?"* is a catch-up. Measured before this change (19 Sep, production path): 19 of 22 real questions the group had answered got a correct, sourced answer, yet testers found Jeli "not intelligent" because these everyday messages got "I don't know". When the model finds no answer but the group discussed something close, Jeli shows the closest discussions instead of a flat "I don't know". A question is searched with several wordings when helpful (English and the member's language), and a French question is answered from English messages.
 
+**Documents and files:** Jeli keeps the documents members share in the groups (PDF, Word, text) and those the team adds on the dashboard. It learns them page by page — answers quote *"📄 Hackathon guidelines, page 1"* — and **sends the file** when a member asks for it (*"send me the guidelines"*), as a WhatsApp document replying to their message. Asked for it in another language (*"envoie-moi le guide en français"*), it answers at once that it is translating, then sends a translated PDF a minute later (machine translation, marked as such; English, French, Portuguese, Spanish, Swahili, German, Italian, Dutch), and keeps it for the next request.
+
+**Meetings:** a session recorded on YouTube is added from the dashboard (Knowledge → *Add a recorded session*: link, title, day) or on its own when someone shares its YouTube link in a group with words like "recording" or "session" (Settings). Jeli watches and transcribes it in the background — about ten minutes per hour of video — writes its recap, and then quotes it to the minute with a link to that moment. Teams or Zoom recordings behind a sign-in must first be posted on YouTube (unlisted is fine); Jeli cannot join a live call.
+
 **One exception (R7):** when a member asks *the group* a question that the group already answered — a reply to someone who asked before, or an announcement that states it — Jeli points to that answer, uninvited, replying to it when it can.
 It speaks up only when sure: the question must look like one, be very close to an indexed conversation (`DUPLICATE_MIN_SIMILARITY`, 0.70), and the model must confirm that an excerpt answers *this* question — same topic is not enough, and a question left unanswered stays unanswered. At most `DUPLICATE_REPLIES_PER_HOUR` (3) such replies per group; `DUPLICATE_DETECTION=false` turns it off.
 
@@ -99,7 +103,7 @@ It speaks up only when sure: the question must look like one, be very close to a
 | Try Jeli | Talk to Jeli as a member would, in the group of your choice or in private, shown exactly as on WhatsApp (bubbles, quoted message, formatting). Each member's conversation is kept. Nothing reaches WhatsApp; works while paused |
 | Questions | What the groups asked and what Jeli couldn't answer (7 or 30 days), copy or download — for the FAQ, the pitch, the next features |
 | Deadlines | Remove a wrong one (it is never found again), add one announced elsewhere |
-| Knowledge | Add old conversations from WhatsApp's "Export chat" (.txt or .zip): a summary to check first, then Jeli learns them; rename how a conversation is cited |
+| Knowledge | Documents (add, download, remove), recorded sessions (add from a YouTube link, follow the transcription, remove), old conversations from WhatsApp's "Export chat" (.txt or .zip, checked before adding), how conversations are cited |
 | Activities | Switch on/off, run now or stop: memory updates, deadline finding, the daily summary (time, language), the weekly team report (day, time) |
 | Watchlist | Members who misuse Jeli (see below): block, unblock, forgive |
 | Exceptions | People Jeli never quotes (other bots), people it doesn't answer, the groups it works in |

@@ -5,6 +5,7 @@ written to the activity log with their name. Pages show no technical detail: no 
 thresholds as numbers, no ids — what Jeli does, for whom, and what needs attention.
 """
 
+import asyncio
 import csv
 import dataclasses
 import hashlib
@@ -15,6 +16,7 @@ import secrets
 import time
 from datetime import date, datetime, timedelta, timezone
 from typing import Annotated
+from urllib.parse import quote
 from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -29,7 +31,7 @@ from app.control.schedule import WEEKDAY_NAMES, WEEKDAYS, parse_schedule
 from app.control.words import KINDS, OUTCOME_WORDS, OUTCOMES, pct
 from app.ingest.whatsapp_export import message_ids, parse_export, read_export_bytes
 from app.kb.indexer import RECORDING_PREFIX
-from app.models import Deadline, IncomingMessage, StoredMessage
+from app.models import Attachment, Deadline, IncomingMessage, StoredMessage
 from app.web import ui
 from app.web.auth import SESSION_COOKIE, allowed_change, auth_of, client_address, is_https, safe_next, signed_in
 from app.web.chart import questions_chart
@@ -527,7 +529,12 @@ document.addEventListener('DOMContentLoaded', function () {{
   const csrf = {_js(_csrf(request))}, me = {_js(member.capitalize())};
   try {{ const saved = localStorage.getItem('jeli-try-chat'); if (saved && [...chat.options].some(o => o.value === saved)) chat.value = saved; }} catch (e) {{}}
   chat.addEventListener('change', () => {{ try {{ localStorage.setItem('jeli-try-chat', chat.value); }} catch (e) {{}} }});
-  function show(entry) {{ log.appendChild(window.jeliBubble(entry, me)); log.scrollTop = log.scrollHeight; }}
+  function one(entry) {{ log.appendChild(window.jeliBubble(entry, me)); log.scrollTop = log.scrollHeight; }}
+  function show(entry) {{
+    one(entry);
+    (entry.files || []).forEach(file => one({{ role: 'jeli', file, at: entry.at }}));
+    if (entry.after) one({{ role: 'jeli', text: entry.after, at: entry.at }});
+  }}
   {_data(history)}.forEach(show);
   if (!log.children.length) show({{ role: 'jeli', text: 'Hello ' + me + '! 👋 Write to me as a member would. I answer here exactly as I would on WhatsApp.', at: new Date().toISOString() }});
   document.querySelectorAll('[data-example]').forEach(c => c.addEventListener('click', () => {{ text.value = c.dataset.example; text.focus(); }}));
@@ -592,6 +599,20 @@ async def try_ask(request: Request, member: Change) -> JSONResponse:
         message = dataclasses.replace(message, addressed_to_bot=True)
     started = time.monotonic()
     reply = await state.responder.respond(message)
+    files, after = [], None
+    attachment, pending = getattr(reply, "attachment", None), getattr(reply, "pending", None)
+    if pending:
+        try:
+            result = await asyncio.wait_for(pending(), timeout=170)
+        except Exception:
+            result = None
+        if isinstance(result, Attachment):
+            attachment = result
+        elif result:
+            after = result
+    if attachment and attachment.document_id:
+        files.append({"name": attachment.filename, "size": _size(len(attachment.data)),
+                      "url": f"/dashboard/documents/download?id={quote(attachment.document_id)}"})
     seconds = round(time.monotonic() - started, 1)
     if reply:
         quoted = getattr(reply, "quoted", None) or ("You", text)
@@ -600,6 +621,10 @@ async def try_ask(request: Request, member: Change) -> JSONResponse:
             jeli["note"] = "Replies to the source message itself: WhatsApp shows it above, a tap jumps to it."
         if followed:
             jeli["note"] = "Followed the conversation: no need to call Jeli again."
+        if files:
+            jeli["files"] = files
+        if after:
+            jeli["after"] = after
     else:
         note = (
             "Jeli stays silent: the group hasn't answered this before, and you are not in a conversation with it."
@@ -850,14 +875,154 @@ async def knowledge_page(request: Request, member: Member, preview: str = "") ->
         <div class="actions" style="margin-top:14px">{ui.button("Read the file", kind="primary", icon_name="upload")}</div>""",
         upload=True,
     )
+    documents = await store.list_documents() if hasattr(store, "list_documents") else []
+    languages_long = {"en": "English", "fr": "French"}
+    document_rows = [
+        [
+            f'<span class="strong">{esc(d.title)}</span><br><span class="muted small">{esc(d.filename)} · {_size(d.size_bytes)}</span>',
+            str(d.pages),
+            esc(languages_long.get(d.language, d.language)),
+            f'<span class="small">{esc(display_author(d.shared_by))}<br><span class="muted">{esc(_chat_name(d.chat_id, labels)) if d.chat_id else "on the dashboard"}, {d.shared_at:%d %b}</span></span>',
+            '<div class="actions">'
+            + f'<a class="btn small" href="/dashboard/documents/download?id={esc(d.id)}">{icon("download", 16)}<span>Download</span></a>'
+            + ui.form("/dashboard/documents/remove", csrf, ui.hidden("id", d.id) + ui.button("Remove", kind="small danger", icon_name="trash"),
+                      confirm=f"Remove “{d.title}”? Jeli forgets it and can no longer send it.", cls="inline")
+            + "</div>",
+        ]
+        for d in documents
+    ]
+    add_document = ui.form(
+        "/dashboard/documents/upload",
+        csrf,
+        f"""<div class="fields two">
+          <label>Document (PDF, Word or text, 15 MB at most)<input type="file" name="file" accept=".pdf,.docx,.txt,.md" required></label>
+          <label>Title (optional)<input name="title" maxlength="120" placeholder="Hackathon guidelines"></label>
+        </div><div class="actions" style="margin-top:14px">{ui.button("Add the document", kind="primary", icon_name="upload")}</div>""",
+        upload=True,
+    )
+    sessions_state = getattr(_state(request), "sessions", None)
+    jobs = sorted(sessions_state.imports.values(), key=lambda j: j.started_at, reverse=True) if sessions_state else []
+    state_pills = {"waiting": ("neutral", "Waiting"), "transcribing": ("info", "Transcribing"), "learning": ("info", "Learning"),
+                   "done": ("good", "Added"), "failed": ("bad", "Failed")}
+    job_rows = [[f'<span class="strong">{esc(j.title)}</span><br><span class="muted small">{esc(j.url)}</span>', ui.pill(*state_pills[j.state]),
+                 esc(j.progress), when(j.started_at, "ago")] for j in jobs[:8]]
+    add_session = ui.form(
+        "/dashboard/sessions/add",
+        csrf,
+        f"""<div class="fields four">
+          <label>YouTube link of the recording<input name="url" type="url" required placeholder="https://youtu.be/…"></label>
+          <label>Title<input name="title" required maxlength="120" placeholder="Wadhwani Ignite — Module 2 class"></label>
+          <label>Day of the session<input name="day" type="date" required></label>
+          <label>Start (GMT)<input name="at" type="time" value="13:00"></label>
+        </div>
+        <p class="hint" style="margin-top:8px">Jeli watches the video and transcribes it — about ten minutes for an hour of video — then members can ask about it and get a link to the exact moment. A Teams or Zoom recording must first be posted on YouTube (unlisted is fine). Recordings shared in the groups as a YouTube link are added on their own (Settings).</p>
+        <div class="actions" style="margin-top:14px">{ui.button("Add the session", kind="primary", icon_name="plus")}</div>""",
+    )
+    session_rows = [
+        row + [ui.form("/dashboard/sessions/remove", csrf, ui.hidden("id", r["id"]) + ui.button("Remove", kind="small danger", icon_name="trash"),
+                       confirm=f"Remove the session “{r['title']}”? Jeli forgets what was said in it.", cls="inline") if r.get("id") else ""]
+        for row, r in zip(session_rows, recordings)
+    ]
     body = (
         preview_html
         + f'<div class="stats">{stats}</div>'
+        + ui.card("Documents", ui.table(["Document", "Pages", "Language", "Shared by", ""], document_rows, numeric={1},
+                                        empty_text="No document yet. Documents shared in the groups are kept on their own."),
+                  icon_name="book", description="Jeli answers from them page by page, and sends them — translated if asked — when members ask for them.")
+        + ui.card("Add a document", add_document, icon_name="upload", description="Guidelines, rules, forms: anything members may ask about or ask for.")
+        + ui.card("Sessions", ui.table(["Session", "Date", "Length", "Summaries", ""], session_rows, empty_text="No session yet."),
+                  icon_name="clock", description="Recorded calls Jeli can quote to the minute.")
+        + ui.card("Add a recorded session", add_session + (ui.table(["Session", "State", "Progress", "Started"], job_rows) if job_rows else ""),
+                  icon_name="plus", description="From its YouTube link.")
         + ui.card("Add old conversations", upload, icon_name="upload", description="Give Jeli a group's history from before it joined, from WhatsApp's “Export chat”.")
         + ui.card("Conversations", ui.table(["Name shown in sources", "Messages", "Latest", ""], chat_rows, numeric={1}, empty_text="No conversation yet."), icon_name="chat", description="Rename a conversation to change how Jeli cites it.")
-        + ui.card("Sessions", ui.table(["Session", "Date", "Length", "Summaries"], session_rows, empty_text="No session yet."), icon_name="book", description="Recorded calls Jeli can quote to the minute. New ones are added by the team's engineer for now.")
     )
     return _page(request, member, title="Knowledge", subtitle="What Jeli remembers and can quote", active="knowledge", body=body, live=True)
+
+
+def _size(size: int) -> str:
+    return f"{size / 1024 / 1024:.1f} MB" if size >= 1024 * 1024 else f"{max(1, round(size / 1024))} KB"
+
+
+@router.post("/dashboard/documents/upload")
+async def documents_upload(request: Request, member: Change) -> RedirectResponse:
+    documents = getattr(_state(request), "documents", None)
+    if documents is None:
+        return _done(request, "/dashboard/knowledge", "Documents need the knowledge base and Jeli's AI.", "bad")
+    form = await request.form()
+    upload = form.get("file")
+    if upload is None or not getattr(upload, "filename", ""):
+        return _done(request, "/dashboard/knowledge", "Choose the document first.", "bad")
+    data = await upload.read(MAX_UPLOAD_BYTES + 1)
+    try:
+        document, new = await documents.add(
+            upload.filename, data, title=str(form.get("title", "")), shared_by=member.capitalize(), mimetype=upload.content_type or ""
+        )
+    except ValueError as error:
+        return _done(request, "/dashboard/knowledge", f"This document cannot be added: {error}.", "bad")
+    if not new:
+        return _done(request, "/dashboard/knowledge", f"“{document.title}” is already known.", "info")
+    await _store(request).add_audit(member, f"Added the document “{document.title}”")
+    memory = getattr(_state(request), "activities", {}).get("memory")
+    if memory:
+        memory.run_now(member)
+    return _done(request, "/dashboard/knowledge", f"“{document.title}” added ({document.pages} pages). Jeli is learning it now.")
+
+
+@router.get("/dashboard/documents/download")
+async def documents_download(request: Request, member: Member, id: str) -> Response:
+    store = _store(request)
+    document = (await store.documents([id])).get(id)
+    data = await store.document_content(id) if document else None
+    if not document or data is None:
+        raise HTTPException(status_code=404)
+    safe = re.sub(r'[^\w .()-]+', "_", document.filename)[:150] or "document"
+    return Response(data, media_type=document.mimetype, headers={"Content-Disposition": f'attachment; filename="{safe}"', "Cache-Control": "no-store"})
+
+
+@router.post("/dashboard/documents/remove")
+async def documents_remove(request: Request, member: Change) -> RedirectResponse:
+    form = await request.form()
+    store = _store(request)
+    document_id = str(form.get("id", ""))
+    document = (await store.documents([document_id])).get(document_id)
+    if not document:
+        return _done(request, "/dashboard/knowledge", "That document was already removed.", "info")
+    await store.remove_document(document_id)
+    await store.add_audit(member, f"Removed the document “{document.title}”")
+    return _done(request, "/dashboard/knowledge", f"Removed “{document.title}”.")
+
+
+@router.post("/dashboard/sessions/add")
+async def sessions_add(request: Request, member: Change) -> RedirectResponse:
+    sessions = getattr(_state(request), "sessions", None)
+    if sessions is None:
+        return _done(request, "/dashboard/knowledge", "Sessions need the knowledge base and Jeli's AI.", "bad")
+    form = await request.form()
+    try:
+        day = date.fromisoformat(str(form.get("day", "")))
+        hours, minutes = (int(x) for x in str(form.get("at") or "13:00").split(":")[:2])
+        recorded_at = datetime(day.year, day.month, day.day, hours, minutes, tzinfo=timezone.utc)
+        job = sessions.start(str(form.get("url", "")).strip(), str(form.get("title", "")), recorded_at, member.capitalize())
+    except ValueError as error:
+        return _done(request, "/dashboard/knowledge", f"This session cannot be added: {error}.", "bad")
+    if job is None:
+        return _done(request, "/dashboard/knowledge", "This session is already being added.", "info")
+    await _store(request).add_audit(member, f"Started adding the session “{job.title}”")
+    return _done(request, "/dashboard/knowledge", f"Jeli is transcribing “{job.title}”. Follow its progress below.")
+
+
+@router.post("/dashboard/sessions/remove")
+async def sessions_remove(request: Request, member: Change) -> RedirectResponse:
+    form = await request.form()
+    recording_id = str(form.get("id", ""))
+    if not recording_id.startswith(RECORDING_PREFIX):
+        return _done(request, "/dashboard/knowledge", "Unknown session.", "bad")
+    store = _store(request)
+    recording = (await store.recordings([recording_id])).get(recording_id)
+    await store.forget(recording_id)
+    await store.add_audit(member, f"Removed the session “{recording.title if recording else recording_id}”")
+    return _done(request, "/dashboard/knowledge", "Session removed.")
 
 
 @router.post("/dashboard/knowledge/upload")
@@ -1248,6 +1413,11 @@ async def settings_page(request: Request, member: Member) -> HTMLResponse:
              _segmented("care", care, [("careful", "Careful"), ("balanced", "Balanced"), ("relaxed", "Relaxed")]))
         + _row("Name members can call it by", "A message starting with this name is for Jeli, like an @mention.",
                f'<input name="bot_name" value="{esc(runtime["bot_name"])}" maxlength="60" style="width:180px">')
+        + _row("Follow the conversation", "After answering someone, Jeli takes their next questions for a few minutes without them repeating its name.",
+               f'<label class="check"><input type="checkbox" name="follow_up"{" checked" if runtime["follow_up"] else ""}> On</label>'
+               + number("follow_up_minutes", 1, 15) + '<span class="muted small">minutes</span>')
+        + _row("Add recorded sessions shared in the groups", "When someone shares a session's YouTube recording in a group, Jeli transcribes it and learns it.",
+               f'<label class="check"><input type="checkbox" name="auto_sessions"{" checked" if runtime["auto_sessions"] else ""}> On</label>')
     )
     pointers = (
         _row("Point to earlier answers", "When someone asks the group a question it already answered, Jeli replies with a link to that answer, without being called.",
@@ -1278,6 +1448,9 @@ async def settings_page(request: Request, member: Member) -> HTMLResponse:
 SETTING_WORDS = {
     "answer_min_similarity": "how sure Jeli must be",
     "bot_name": "Jeli's name",
+    "follow_up": "following the conversation",
+    "follow_up_minutes": "how long Jeli follows a conversation",
+    "auto_sessions": "adding shared recordings",
     "duplicate_detection": "pointing to earlier answers",
     "duplicate_min_similarity": "how similar a repeated question must be",
     "duplicate_replies_per_hour": "earlier answers per hour",
@@ -1293,6 +1466,9 @@ async def settings_change(request: Request, member: Change) -> RedirectResponse:
     changes = {
         "answer_min_similarity": CARE.get(str(form.get("care")), 0.60),
         "bot_name": form.get("bot_name", ""),
+        "follow_up": bool(form.get("follow_up")),
+        "follow_up_minutes": form.get("follow_up_minutes", "5"),
+        "auto_sessions": bool(form.get("auto_sessions")),
         "duplicate_detection": bool(form.get("duplicate_detection")),
         "duplicate_min_similarity": POINTER_CARE.get(str(form.get("pointer_care")), 0.70),
         "duplicate_replies_per_hour": form.get("duplicate_replies_per_hour", ""),

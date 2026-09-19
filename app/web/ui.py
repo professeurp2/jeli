@@ -558,6 +558,11 @@ details summary { cursor: pointer; color: var(--ink-2); font-weight: 500; margin
 .wa-ticks { color: #53bdeb; letter-spacing: -3px; margin-left: 2px; }
 .wa-note { font-size: 11.5px; color: var(--wa-muted); font-style: italic; margin-top: 3px; border-top: 1px dashed var(--wa-bar); padding-top: 3px; }
 .wa-system { align-self: center; background: var(--wa-system); color: var(--wa-muted); font-size: 12.5px; padding: 5px 12px; border-radius: 8px; max-width: 85%; text-align: center; box-shadow: 0 1px .5px rgba(11,20,26,.1); }
+.wa-doc { display: flex; align-items: center; gap: 10px; background: var(--wa-reply); border-radius: 6px; padding: 10px; text-decoration: none; color: var(--wa-ink); min-width: 240px; }
+.wa-doc-icon { width: 34px; height: 40px; border-radius: 4px; background: #e2574c; color: #fff; font-size: 10px; font-weight: 700; display: grid; place-items: center; flex: none; }
+.wa-doc-name { display: grid; min-width: 0; }
+.wa-doc-name b { font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.wa-doc-name small { color: var(--wa-muted); font-size: 11.5px; }
 .wa-compose { display: grid; gap: 10px; padding: 12px 14px; background: var(--wa-compose); }
 .wa-row { display: flex; gap: 10px; align-items: flex-end; }
 .wa-row textarea { min-height: 44px; height: 44px; border-radius: 22px; padding: 11px 16px; border: none; background: var(--surface); }
@@ -689,6 +694,14 @@ JS = r"""
     const at = m.at ? new Date(m.at) : new Date(), clock = pad(at.getHours()) + ':' + pad(at.getMinutes());
     const div = document.createElement('div');
     if (m.role === 'system') { div.className = 'wa-system'; div.textContent = m.text; return div; }
+    if (m.file) {
+      const kind = (m.file.name.split('.').pop() || 'file').toUpperCase().slice(0, 4);
+      div.className = 'wa-msg in';
+      div.innerHTML = '<div class="wa-sender">Jeli</div><a class="wa-doc" href="' + esc(m.file.url) + '"><span class="wa-doc-icon">' + esc(kind) + '</span>'
+        + '<span class="wa-doc-name"><b>' + esc(m.file.name) + '</b><small>' + esc(kind) + ' · ' + esc(m.file.size) + '</small></span></a>'
+        + '<div class="wa-meta">' + clock + '</div>';
+      return div;
+    }
     const mine = m.role === 'member';
     div.className = 'wa-msg ' + (mine ? 'out' : 'in');
     let html = mine ? '' : '<div class="wa-sender">Jeli</div>';

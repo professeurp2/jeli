@@ -8,6 +8,7 @@ from fastapi import FastAPI
 from app.adapters import telegram, whatsapp_waha
 from app.answer.catchup import Catchup
 from app.answer.deadlines import DeadlineExtractor, Deadlines
+from app.answer.documents import Documents
 from app.answer.llm import LLM
 from app.answer.rag import Answerer
 from app.answer.recaps import Recaps
@@ -19,6 +20,7 @@ from app.control.guard import Guard
 from app.control.runtime import Runtime
 from app.control.setup import build_activities
 from app.ingest.live import LiveIngestor
+from app.ingest.sessions import Sessions
 from app.kb.embeddings import Embedder
 from app.kb.store import Store
 from app.models import IncomingMessage
@@ -51,6 +53,7 @@ async def lifespan(app: FastAPI):
 
     # Grounded answers need the knowledge base and a Gemini key; without them Jeli says it isn't ready.
     state.llm = state.answerer = state.catchup = state.recaps = state.deadlines = state.extractor = None
+    state.documents = state.sessions = None
     if store and state.embedder:
         state.llm = LLM(settings.gemini_api_key, settings.answer_models)
         state.answerer = Answerer(store, state.embedder, state.llm, min_similarity=runtime["answer_min_similarity"])
@@ -58,6 +61,14 @@ async def lifespan(app: FastAPI):
         state.catchup = Catchup(store, state.llm, deadlines=state.deadlines)
         state.recaps = Recaps(store, state.llm)
         state.extractor = DeadlineExtractor(store, state.llm)
+        state.documents = Documents(store, state.llm)
+
+        async def learn_now() -> None:
+            memory = state.activities.get("memory")
+            if memory:
+                memory.run_now("Jeli")
+
+        state.sessions = Sessions(store, LLM(settings.gemini_api_key, settings.transcription_model_list), state.recaps, learn_now)
     state.responder = Responder(
         state.answerer,
         state.catchup,
@@ -65,6 +76,7 @@ async def lifespan(app: FastAPI):
         deadlines=state.deadlines,
         record=store.record_event if store else None,
         understander=Understander(state.llm),
+        documents=state.documents,
     )
     state.guard = Guard(record=store.record_incident if store else None)
 
@@ -77,15 +89,29 @@ async def lifespan(app: FastAPI):
             message = dataclasses.replace(message, addressed_to_bot=True)
         return await state.responder.respond(message)
 
+    live = LiveIngestor(store) if store else None
+
+    async def ingest(message: IncomingMessage) -> None:
+        """Remember every group message; a session's recording shared in a group is added too."""
+        await live.ingest(message)
+        if state.sessions and runtime["auto_sessions"]:
+            try:
+                state.sessions.from_group(message)
+            except ValueError:
+                pass
+
     # Each adapter runs when its environment variables are set; WhatsApp is the target channel.
-    state.whatsapp = whatsapp_waha.start(settings, respond, ingest=LiveIngestor(store).ingest if store else None)
+    state.whatsapp = whatsapp_waha.start(settings, respond, ingest=ingest if store else None)
     if state.whatsapp:
         state.whatsapp.guard = state.guard
         state.whatsapp.follow_up = state.responder.is_follow_up
+        if state.documents:
+            state.whatsapp.on_document = state.documents.add
         await state.whatsapp.sync_status()
     state.telegram = await telegram.start(settings, respond)
 
     # Background activities, then the team's settings applied to everything, now and after each change.
+    state.activities = {}
     state.activities = build_activities(state, settings, runtime)
     apply(state, runtime)
     runtime.listeners.append(lambda changed: apply(state, runtime))

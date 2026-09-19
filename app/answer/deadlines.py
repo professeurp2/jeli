@@ -17,7 +17,7 @@ from app.answer.citations import display_author, ignored_keys, is_ignored
 from app.answer.language import TEXTS
 from app.answer.llm import LLM
 from app.answer.prompts import PROGRAMMES
-from app.kb.indexer import RECORDING_PREFIX
+from app.kb.indexer import DOCUMENT_PREFIX, RECORDING_PREFIX
 from app.kb.store import Store
 from app.models import Deadline, StoredMessage
 
@@ -152,6 +152,8 @@ class DeadlineExtractor:
     def _where(self, message: StoredMessage) -> str:
         if message.chat_id.startswith(RECORDING_PREFIX):
             return "call recording"
+        if message.chat_id.startswith(DOCUMENT_PREFIX):
+            return "shared document"
         return self.chat_labels.get(message.chat_id, message.chat_id)
 
 
@@ -164,11 +166,12 @@ class Deadlines:
         when = _day(datetime.combine(deadline.due_date, datetime.min.time(), timezone.utc), language)
         if deadline.due_time:
             when += f", {deadline.due_time}"
-        source = (
-            TEXTS[language]["deadline_in_call"]
-            if deadline.chat_id.startswith(RECORDING_PREFIX)
-            else self.chat_labels.get(deadline.chat_id, deadline.chat_id)
-        )
+        if deadline.chat_id.startswith(RECORDING_PREFIX):
+            source = TEXTS[language]["deadline_in_call"]
+        elif deadline.chat_id.startswith(DOCUMENT_PREFIX):
+            source = TEXTS[language]["deadline_in_document"]
+        else:
+            source = self.chat_labels.get(deadline.chat_id, deadline.chat_id)
         announced = _day(deadline.announced_at, language)
         return f"• {when} — {deadline.what} ({source}, {display_author(deadline.author)}, {announced})"
 
