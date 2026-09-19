@@ -11,6 +11,7 @@ from fastapi.testclient import TestClient
 from app.adapters import whatsapp_waha
 from app.adapters.whatsapp_waha import WEBHOOK_PATH, Waha, parse_message, verify_signature
 from app.answer.language import TEXTS
+from app.answer.react import emotion_emoji, is_correction
 from app.config import Settings, get_settings
 from app.main import app
 
@@ -313,3 +314,101 @@ def test_private_messages_go_only_to_numbers_on_whatsapp(monkeypatch):
     assert asyncio.run(waha.post_private("2347069310683", "Weekly report"))
     assert not asyncio.run(waha.post_private("2340000000000", "Weekly report"))
     assert [(m["chatId"], m["text"]) for m in sent] == [("2347069310683@c.us", "Weekly report")]
+
+
+# --- Emoji reaction tests ---
+
+def test_emotion_emoji_detects_funny_messages():
+    assert emotion_emoji("hahaha c'est trop drôle 😂") == "😄"
+    assert emotion_emoji("MDR j'y crois pas") == "😄"
+    assert emotion_emoji("lol that was unexpected 🤣") == "😄"
+
+
+def test_emotion_emoji_detects_sad_messages():
+    assert emotion_emoji("Notre collègue est décédé hier soir 😢") == "😢"
+    assert emotion_emoji("He passed away this morning. RIP") == "😢"
+    assert emotion_emoji("Condoléances à sa famille") == "😢"
+
+
+def test_emotion_emoji_returns_none_for_neutral_messages():
+    assert emotion_emoji("The deadline is on Friday.") is None
+    assert emotion_emoji("When does registration close?") is None
+
+
+def test_sad_takes_priority_over_funny():
+    # A sad message that also contains 😂 is still treated as sad.
+    assert emotion_emoji("He passed away 😂") == "😢"
+
+
+def test_is_correction_detects_corrections_in_french():
+    assert is_correction("Jeli tu t'es trompé, c'est pas ça")
+    assert is_correction("C'est faux ce que tu as dit")
+    assert is_correction("Non Jeli, mauvaise réponse")
+
+
+def test_is_correction_detects_corrections_in_english():
+    assert is_correction("That's wrong, the date is the 25th")
+    assert is_correction("You made a mistake, jeli")
+    assert is_correction("Incorrect answer!")
+
+
+def test_is_correction_ignores_neutral_messages():
+    assert not is_correction("When is the deadline?")
+    assert not is_correction("Thank you Jeli!")
+
+
+def test_jeli_reacts_to_funny_group_messages(waha_env, calls):
+    """A funny message in the group gets a 😄 reaction from Jeli."""
+    event = message_event("haha trop drôle 😂")
+    with TestClient(app) as client:
+        post_event(client, event)
+    reactions = [(path, payload) for path, payload in calls if path == "/api/sendReaction"]
+    assert len(reactions) == 1
+    _, react_payload = reactions[0]
+    assert react_payload["reaction"] == "😄"
+    assert react_payload["messageId"] == event["payload"]["id"]
+
+
+def test_jeli_reacts_to_sad_group_messages(waha_env, calls):
+    """A sad message (condolences/death) gets a 😢 reaction."""
+    event = message_event("Notre ami est décédé hier. Condoléances à sa famille.")
+    with TestClient(app) as client:
+        post_event(client, event)
+    reactions = [p for path, p in calls if path == "/api/sendReaction"]
+    assert len(reactions) == 1
+    assert reactions[0]["reaction"] == "😢"
+
+
+def test_jeli_does_not_react_to_ordinary_chatter(waha_env, calls):
+    """No reaction to a neutral message."""
+    with TestClient(app) as client:
+        post_event(client, message_event("The pitch deck is due Friday."))
+    assert not any(path == "/api/sendReaction" for path, _ in calls)
+
+
+def test_correction_triggers_reaction_and_deletes_wrong_message(waha_env, calls):
+    """When someone corrects Jeli, it reacts 🙏 and tries to delete its wrong message."""
+    wrong_message_id = "jeli-sent-msg-001"
+
+    async def respond_then_correct(message):
+        return "The bootcamp is on Monday." if message.addressed_to_bot else None
+
+    with TestClient(app) as client:
+        waha = app.state.whatsapp
+        waha.respond = respond_then_correct
+        # Jeli replies to a question; fake the stored sent message ID directly.
+        post_event(client, message_event(f"@{BOT_PHONE} when is the bootcamp?", message_id="q1"))
+        waha._last_sent[GROUP] = wrong_message_id
+        # Someone corrects Jeli.
+        post_event(client, message_event(f"@{BOT_PHONE} c'est faux, c'est mardi", message_id="correction-1"))
+
+    paths = [path for path, _ in calls]
+    assert "/api/sendReaction" in paths
+    assert "/api/deleteMessage" in paths
+
+    react = next((p for path, p in calls if path == "/api/sendReaction"), None)
+    assert react["reaction"] == "🙏"
+    assert react["messageId"] == "correction-1"
+
+    delete = next((p for path, p in calls if path == "/api/deleteMessage"), None)
+    assert delete["messageId"] == wrong_message_id

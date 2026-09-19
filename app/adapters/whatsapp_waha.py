@@ -28,6 +28,7 @@ from fastapi import APIRouter, BackgroundTasks, Header, HTTPException, Request
 from app.adapters import Ingest, Respond
 from app.adapters.pacing import SendSpacer, SlidingWindowLimiter, reading_delay, typing_duration
 from app.answer.citations import is_ignored, poll_text
+from app.answer.react import emotion_emoji, is_correction
 from app.answer.voice import asks_for_voice, sources, spoken, without_voice_request
 from app.config import Settings
 from app.control.guard import Guard
@@ -236,6 +237,8 @@ class Waha:
         self.guard: Guard | None = None
         # Whether a group message continues a conversation with Jeli (set by the responder).
         self.follow_up = None
+        # Last message Jeli sent per chat, so it can delete it if a correction comes in.
+        self._last_sent: dict[str, str] = {}  # chat_id → message_id
         # Keeps a document shared in a group: (filename, data, mimetype, shared_by, shared_at, chat_id).
         self.on_document = None
         # Records a vote in a poll: (poll_id, voter, options).
@@ -312,7 +315,7 @@ class Waha:
             return False
         return True
 
-    async def _post(self, path: str, payload: dict) -> None:
+    async def _post(self, path: str, payload: dict) -> dict:
         response = await self._http.post(path, json={"session": self.session, **payload})
         if response.is_error:
             log.error("WAHA %s failed with %s: %s", path, response.status_code, response.text)
@@ -322,6 +325,10 @@ class Waha:
                     "the session: the restriction lifts on its own."
                 )
         response.raise_for_status()
+        try:
+            return response.json() or {}
+        except ValueError:
+            return {}
 
     async def _post_quietly(self, path: str, payload: dict) -> None:
         """For cosmetic calls (read receipts, typing): a failure must not prevent the answer."""
@@ -330,13 +337,15 @@ class Waha:
         except httpx.HTTPError:
             log.warning("WAHA %s failed, continuing", path)
 
-    async def send_text(self, chat_id: str, text: str, reply_to: str | None = None, mentions: list[str] = ()) -> None:
+    async def send_text(self, chat_id: str, text: str, reply_to: str | None = None, mentions: list[str] = ()) -> str | None:
+        """Send a text message; returns the WAHA message id (for later deletion if needed)."""
         payload = {"chatId": chat_id, "text": text, "linkPreview": False}
         if reply_to:
             payload["reply_to"] = reply_to
         if mentions:
             payload["mentions"] = list(mentions)
-        await self._post("/api/sendText", payload)
+        result = await self._post("/api/sendText", payload)
+        return result.get("id")
 
     async def send_voice(self, chat_id: str, audio: bytes, reply_to: str | None = None) -> None:
         """A voice note: WAHA turns the audio (WAV) into the OGG/Opus that WhatsApp plays."""
@@ -417,15 +426,33 @@ class Waha:
         except ValueError as error:
             log.info("Shared document %s not kept: %s", shared["filename"], error)
 
+    async def send_reaction(self, chat_id: str, message_id: str, emoji: str) -> None:
+        """React to a message with an emoji. Non-critical: never raises."""
+        await self._post_quietly("/api/sendReaction", {
+            "chatId": chat_id,
+            "messageId": message_id,
+            "reaction": emoji,
+        })
+
+    async def delete_message(self, chat_id: str, message_id: str) -> None:
+        """Delete one of Jeli's own messages (e.g. a wrong answer). Non-critical: never raises."""
+        await self._post_quietly("/api/deleteMessage", {
+            "chatId": chat_id,
+            "messageId": message_id,
+        })
+
     async def send_reply(self, message: IncomingMessage, reply: str) -> None:
         """Jeli's reply, as WhatsApp shows it: quoting the member's message, or the source message
         itself (WhatsApp's own reference), with its mentions."""
-        await self.send_text(
+        sent_id = await self.send_text(
             message.chat_id,
             reply,
             reply_to=getattr(reply, "reply_to", None) or message.message_id,
             mentions=getattr(reply, "mentions", ()),
         )
+        # Track Jeli's own message so a subsequent correction can delete it.
+        if sent_id:
+            self._last_sent[message.chat_id] = sent_id
 
     async def handle(self, message: IncomingMessage) -> None:
         if self.suspended:
@@ -441,6 +468,12 @@ class Waha:
                 await self._converse(message)
             else:
                 await self._step_in_if_needed(message)
+                # Emotional reaction for group messages not addressed to Jeli (and not silent groups).
+                if (not message.is_private and not self.paused
+                        and message.chat_id not in self.silent_groups):
+                    emoji = emotion_emoji(message.text)
+                    if emoji:
+                        await self.send_reaction(message.chat_id, message.message_id, emoji)
         except Exception:
             log.exception("Failed to handle WhatsApp message %s", message.message_id)
 
@@ -471,6 +504,12 @@ class Waha:
         recommended sequence). Asked by voice, or asked for a voice reply: a voice note."""
         if not self.may_reply(message):
             return
+        # When someone corrects Jeli, acknowledge immediately and delete the wrong message.
+        if is_correction(message.text) and message.chat_id in self._last_sent:
+            wrong_id = self._last_sent.pop(message.chat_id)
+            await self.send_reaction(message.chat_id, message.message_id, "🙏")
+            await self.delete_message(message.chat_id, wrong_id)
+            log.info("Deleted Jeli's wrong message %s after correction in %s", wrong_id, message.chat_id)
         chat = {"chatId": message.chat_id}
         by_voice = self.voice is not None and message.reply_by_voice
         if by_voice:
