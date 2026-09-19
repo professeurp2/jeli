@@ -42,6 +42,7 @@ def apply(state, runtime) -> None:
     if whatsapp is not None:
         whatsapp.suspended = runtime.paused
         whatsapp.groups = set(runtime["groups"])
+        whatsapp.silent_groups = set(runtime["silent_groups"])
         whatsapp.bot_name = runtime["bot_name"]
         whatsapp.user_limiter.limit = runtime["whatsapp_user_limit"]
         whatsapp.hourly_limiter.limit = runtime["whatsapp_hourly_limit"]

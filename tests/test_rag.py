@@ -98,7 +98,7 @@ def test_a_source_said_in_this_chat_is_replied_to(monkeypatch):
     # mentions the member who asked.
     assert reply.reply_to == "wa-1" and reply.quoted == ("Diane", live.text)
     assert reply == "@22370000000 The build phase ends on Thursday 24 September."
-    assert reply.mentions == ["22370000000@c.us"]
+    assert reply.mentions == ["22370000000@s.whatsapp.net"]
 
 
 def test_the_model_sees_chronological_excerpts_without_bots_or_full_phone_numbers(monkeypatch):

@@ -32,6 +32,7 @@ from app.answer.citations import (
     ignored_keys,
     is_ignored,
     mention_tag,
+    mention_jid,
     best_snippet,
     quote,
     recording_quote,
@@ -284,7 +285,7 @@ class Answerer:
                 text,
                 reply_to=source.id,
                 quoted=(first.name(source), source.text),
-                mentions=[asker_id] if mention else [],
+                mentions=[mention_jid(asker_id)] if mention else [],
             )
         quotes = [e.quote(words) for e in ordered[:QUOTES_SHOWN]]
         return Reply(lead + answer + "".join(f"\n\n{q}" for q in quotes))

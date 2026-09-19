@@ -47,6 +47,8 @@ FIELDS = {
         Field("ignored_authors", "list", lambda s: s.ignored_author_list),
         # Groups Jeli works in; empty: every group its number is in.
         Field("groups", "list", lambda s: sorted(s.whatsapp_groups)),
+        # Groups where Jeli reads and remembers everything, but never replies.
+        Field("silent_groups", "list", lambda s: []),
         Field("chat_labels", "map", lambda s: s.chat_label_map),
         Field("bot_name", "text", lambda s: s.bot_name),
         # Follow the thread: after an answer, the member's next messages are for Jeli for a while.

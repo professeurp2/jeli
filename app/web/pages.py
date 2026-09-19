@@ -1419,7 +1419,30 @@ async def exceptions_page(request: Request, member: Member) -> HTMLResponse:
           <div class="fields" style="padding-left:28px">{boxes}</div>
         </div><div class="actions" style="margin-top:14px">{ui.button("Save", kind="primary")}</div>""",
     )
-    body = "".join(cards) + ui.card("Groups Jeli works in", groups, icon_name="users", description="In the other groups, Jeli reads nothing and answers nobody. Private messages always reach it.")
+    silent = set(runtime["silent_groups"])
+    silent_rows = "".join(
+        f'<div class="row"><div class="row-text"><b>{esc(name)}</b>'
+        f'<span class="muted small">{esc(g)}</span></div>'
+        f'<div class="row-side">'
+        + ui.switch(
+            "/dashboard/groups/silent",
+            csrf,
+            on=g not in silent,
+            name="action",
+            label=f"Jeli replies in {name}",
+            fields=ui.hidden("group", g),
+        )
+        + f'<span class="muted small" style="margin-left:8px">{"Replies" if g not in silent else "Listens only"}</span>'
+        + f'</div></div>'
+        for g, name in sorted(known.items(), key=lambda item: item[1].lower())
+    ) or ui.empty("Groups appear here once Jeli's WhatsApp is connected and it has joined at least one group.")
+    silent_card = ui.card(
+        "How Jeli behaves in each group",
+        f'<div class="rows">{silent_rows}</div>',
+        icon_name="chat",
+        description='Switch a group to "Listens only" and Jeli reads every message there but never replies. Useful for a test group or a group you want Jeli to learn from first.',
+    )
+    body = "".join(cards) + ui.card("Groups Jeli works in", groups, icon_name="users", description="In the other groups, Jeli reads nothing and answers nobody. Private messages always reach it.") + silent_card
     return _page(request, member, title="Exceptions", subtitle="Who Jeli ignores, and where it works", active="exceptions", body=body)
 
 
@@ -1437,6 +1460,29 @@ async def exceptions_change(request: Request, member: Change) -> RedirectRespons
         return _done(request, "/dashboard/exceptions", f"Added {display_author(value)}.")
     await runtime.update({key: [v for v in current if v != value]}, member, f"Removed {display_author(value)} from {title}")
     return _done(request, "/dashboard/exceptions", f"Removed {display_author(value)}.")
+
+
+@router.post("/dashboard/groups/silent")
+async def groups_silent(request: Request, member: Change) -> RedirectResponse:
+    form = await request.form()
+    group = str(form.get("group", "")).strip()
+    action = str(form.get("action", ""))  # "off" = listen only, "on" = reply
+    if not group.endswith("@g.us"):
+        return _done(request, "/dashboard/exceptions", "Unknown group.", "bad")
+    runtime = _state(request).runtime
+    silent = list(runtime["silent_groups"])
+    whatsapp = getattr(_state(request), "whatsapp", None)
+    names = await whatsapp.group_names() if whatsapp and whatsapp.status == "WORKING" else {}
+    group_name = names.get(group) or _labels(request).get(group) or "the group"
+    if action == "off":
+        if group not in silent:
+            silent.append(group)
+        await runtime.update({"silent_groups": silent}, member, f"Set {group_name} to listen-only mode")
+        return _done(request, "/dashboard/exceptions", f"Jeli now reads {group_name} but stays silent there.")
+    else:
+        silent = [g for g in silent if g != group]
+        await runtime.update({"silent_groups": silent}, member, f"Set {group_name} back to reply mode")
+        return _done(request, "/dashboard/exceptions", f"Jeli now replies in {group_name} again.")
 
 
 @router.post("/dashboard/groups")

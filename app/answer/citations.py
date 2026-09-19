@@ -106,6 +106,13 @@ def mention_tag(member_id: str) -> str:
     return "@" + member_id.split("@", 1)[0].split(":", 1)[0]
 
 
+def mention_jid(member_id: str) -> str:
+    """JID for the mentions array: device suffix stripped so WhatsApp links @Name correctly.
+    '22360557761:12@s.whatsapp.net' → '22360557761@s.whatsapp.net'"""
+    user = member_id.split("@", 1)[0].split(":", 1)[0]
+    return f"{user}@s.whatsapp.net"
+
+
 def timestamped_link(url: str | None, offset: timedelta) -> str | None:
     """A YouTube link that starts playing at `offset`; a Drive recording's link as it is (the time is
     in the quote's header); None for other sources."""

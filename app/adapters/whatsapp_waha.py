@@ -230,6 +230,8 @@ class Waha:
         self.status: str | None = None
         # Set by the team from the dashboard: Jeli keeps remembering the groups but sends nothing.
         self.suspended = False
+        # Groups where Jeli listens and ingests, but never replies (listen-only / silent mode).
+        self.silent_groups: set[str] = set()
         # Spots and silences members who misuse Jeli (floods, repeats, manipulation attempts).
         self.guard: Guard | None = None
         # Whether a group message continues a conversation with Jeli (set by the responder).
@@ -280,6 +282,9 @@ class Waha:
     def may_reply(self, message: IncomingMessage) -> bool:
         """Anti-ban guards: never answer while paused by the team or the session is unhealthy, nor
         late, too often, or to a member who misuses Jeli."""
+        if message.chat_id in self.silent_groups:
+            log.info("Group %s is in silent mode: Jeli listens but does not reply", message.chat_id)
+            return False
         if self.suspended:
             log.info("Jeli is paused by the team: not answering message %s", message.message_id)
             return False
