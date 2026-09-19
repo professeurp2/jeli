@@ -6,7 +6,6 @@ from app.config import Settings
 from app.control.activities import Activity, every
 from app.control.runtime import Runtime
 from app.control.schedule import next_daily, next_weekly, parse_clock, parse_schedule
-from app.ingest.chunker import MAX_GAP
 from app.jobs.daily_digest import post_daily_digests
 from app.jobs.team_report import send_team_reports
 from app.kb.indexer import index_pending
@@ -14,6 +13,9 @@ from app.kb.indexer import index_pending
 # The scan shares the Gemini quota with answers: a backlog (a fresh import) is drained a few
 # batches an hour rather than in one burst that would leave members without answers.
 MAX_DEADLINE_BATCHES_PER_RUN = 10
+# A live conversation is learned once quiet for this long. Measured: with 30 minutes, a question
+# about something said 10 minutes earlier got "I don't know".
+SETTLE = timedelta(minutes=3)
 
 
 def _plural(n: int, word: str) -> str:
@@ -33,7 +35,7 @@ def build_activities(state, settings: Settings, runtime: Runtime) -> dict[str, A
     if store and embedder:
 
         async def learn() -> str:
-            created = await index_pending(store, embedder, settle=MAX_GAP)
+            created = await index_pending(store, embedder, settle=SETTLE)
             return f"learned {_plural(created, 'new conversation')}" if created else "nothing new to learn"
 
         activities["memory"] = Activity(

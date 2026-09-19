@@ -26,14 +26,14 @@ class FakeAnswerer:
         self.already = already
         self.ignored = set(ignored)
 
-    async def answer(self, question, asker):
+    async def answer(self, question, asker, **context):
         self.questions.append((question, asker))
         return "answer"
 
     async def where_discussed(self, topic):
         return f"sources for {topic}"
 
-    async def already_answered(self, question, min_similarity):
+    async def already_answered(self, question, min_similarity, **context):
         self.checked.append(question)
         return self.already
 

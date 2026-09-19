@@ -1,3 +1,4 @@
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import date, datetime
 
@@ -18,6 +19,58 @@ class IncomingMessage:
     link: str | None = None
     # Stable platform id of the author (rate limits, and later storage); the display name can change.
     author_id: str | None = None
+    # Replies to, or mentions, another member: this message is not for Jeli, even in a conversation.
+    talks_to_someone_else: bool = False
+
+
+@dataclass(frozen=True)
+class Attachment:
+    """A file Jeli sends: a document it keeps, or one it made (a translation)."""
+
+    filename: str
+    mimetype: str
+    data: bytes
+    caption: str = ""
+
+
+class Reply(str):
+    """Jeli's reply as WhatsApp shows it: the text, and
+
+    - reply_to: the message it answers, quoted above it — by default the member's question, or the
+      source message itself, WhatsApp's own way to point at what was said (quoted: its author and
+      text, for previews);
+    - mentions: members @mentioned in the text (as "@<number>");
+    - a file: at once (attachment), or once it is made (pending, e.g. a translation) — the channel
+      sends the text first and the file when ready, or the text pending returns instead."""
+
+    reply_to: str | None
+    quoted: tuple[str, str] | None
+    mentions: list[str]
+    attachment: Attachment | None
+    pending: Callable[[], Awaitable[Attachment | str]] | None
+
+    def __new__(cls, text: str, *, reply_to=None, quoted=None, mentions=(), attachment=None, pending=None):
+        reply = super().__new__(cls, text)
+        reply.reply_to, reply.quoted, reply.mentions = reply_to, quoted, list(mentions)
+        reply.attachment, reply.pending = attachment, pending
+        return reply
+
+
+@dataclass(frozen=True)
+class Document:
+    """A document Jeli keeps (PDF, Word, text); its text is StoredMessages with chat_id = id."""
+
+    id: str
+    title: str
+    filename: str
+    mimetype: str
+    size_bytes: int
+    pages: int
+    language: str
+    shared_by: str
+    shared_at: datetime
+    chat_id: str = ""
+    translation_of: str | None = None
 
 
 @dataclass(frozen=True)
@@ -43,7 +96,9 @@ class UsageEvent:
     language: str = ""
     is_private: bool = False
     latency_ms: int | None = None
-    question: str = ""
+    question: str = ""  # the message, for group messages and tries on the dashboard (never private ones)
+    channel: str = ""  # whatsapp, telegram, dashboard (a try by the team)
+    chat_id: str = ""  # the group; "" for private messages
 
 
 @dataclass(frozen=True)

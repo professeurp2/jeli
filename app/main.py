@@ -1,4 +1,5 @@
 import contextlib
+import dataclasses
 import logging
 from contextlib import asynccontextmanager
 
@@ -11,6 +12,7 @@ from app.answer.llm import LLM
 from app.answer.rag import Answerer
 from app.answer.recaps import Recaps
 from app.answer.responder import Responder
+from app.answer.understand import Understander
 from app.config import get_settings
 from app.control.apply import apply
 from app.control.guard import Guard
@@ -62,19 +64,24 @@ async def lifespan(app: FastAPI):
         recaps=state.recaps,
         deadlines=state.deadlines,
         record=store.record_event if store else None,
+        understander=Understander(state.llm),
     )
     state.guard = Guard(record=store.record_incident if store else None)
 
     async def respond(message: IncomingMessage) -> str | None:
-        """What the channels call: nothing at all while the team has paused Jeli."""
+        """What the channels call: nothing at all while the team has paused Jeli. A group message
+        continuing a conversation with Jeli is for Jeli, without repeating its name."""
         if runtime.paused:
             return None
+        if not message.addressed_to_bot and state.responder.is_follow_up(message):
+            message = dataclasses.replace(message, addressed_to_bot=True)
         return await state.responder.respond(message)
 
     # Each adapter runs when its environment variables are set; WhatsApp is the target channel.
     state.whatsapp = whatsapp_waha.start(settings, respond, ingest=LiveIngestor(store).ingest if store else None)
     if state.whatsapp:
         state.whatsapp.guard = state.guard
+        state.whatsapp.follow_up = state.responder.is_follow_up
         await state.whatsapp.sync_status()
     state.telegram = await telegram.start(settings, respond)
 

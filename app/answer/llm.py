@@ -79,7 +79,10 @@ class LLM:
         timeout: float = TIMEOUT_SECONDS,
         temperature: float = 0.2,
         media_resolution: types.MediaResolution | None = None,
+        attempts: int | None = None,
     ) -> Schema:
+        """`attempts`: how many models to try at most (all by default) — one for optional steps,
+        so that a busy model never doubles the wait."""
         config = types.GenerateContentConfig(
             system_instruction=system,
             response_mime_type="application/json",
@@ -89,7 +92,7 @@ class LLM:
             thinking_config=types.ThinkingConfig(thinking_level=THINKING_LEVEL),
             automatic_function_calling=types.AutomaticFunctionCallingConfig(disable=True),
         )
-        for model in self._available():
+        for model in self._available()[:attempts]:
             try:
                 response = await asyncio.wait_for(
                     self._client.aio.models.generate_content(model=model, contents=contents, config=config),

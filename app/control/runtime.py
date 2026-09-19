@@ -49,6 +49,9 @@ FIELDS = {
         Field("groups", "list", lambda s: sorted(s.whatsapp_groups)),
         Field("chat_labels", "map", lambda s: s.chat_label_map),
         Field("bot_name", "text", lambda s: s.bot_name),
+        # Follow the thread: after an answer, the member's next messages are for Jeli for a while.
+        Field("follow_up", "bool", lambda s: True),
+        Field("follow_up_minutes", "int", lambda s: 5, 1, 15),
         Field("answer_min_similarity", "float", lambda s: s.answer_min_similarity, 0.5, 0.8),
         Field("duplicate_detection", "bool", lambda s: s.duplicate_detection),
         Field("duplicate_min_similarity", "float", lambda s: s.duplicate_min_similarity, 0.6, 0.9),

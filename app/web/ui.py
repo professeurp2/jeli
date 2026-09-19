@@ -196,7 +196,7 @@ def layout(
     paused: bool,
     path: str,
     flash: tuple[str, str] | None = None,
-    refresh: bool = False,
+    live: bool = False,
 ) -> str:
     nav = "".join(
         f'<a href="{href}" class="nav-item{" active" if key == active else ""}"'
@@ -218,6 +218,8 @@ def layout(
         cls="inline",
     )
     flash_html = notice(flash[0], esc(flash[1])) if flash else ""
+    live_dot = '<span class="live-dot" id="live-status" data-state="on"><i></i><span>Live</span></span>' if live else ""
+    content = f'<div id="live-body" data-live>{body}</div>' if live else body
     return f"""<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="robots" content="noindex"><title>{esc(title)} · Jeli</title>
@@ -225,7 +227,7 @@ def layout(
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
 <link rel="icon" href="/dashboard/avatar">
 <style>{CSS}</style></head>
-<body{' data-refresh="60"' if refresh else ""}>
+<body>
 <input type="checkbox" id="nav-toggle" class="nav-toggle" aria-hidden="true">
 <aside class="sidebar">
   <div class="brand"><img src="/dashboard/avatar" alt="" class="avatar"><div><b>Jeli</b><span>Group memory</span></div>
@@ -238,9 +240,9 @@ def layout(
   <header class="topbar">
     <label for="nav-toggle" class="menu-button" aria-label="Menu">{icon("menu", 22)}</label>
     <div class="titles"><h1>{esc(title)}</h1><p>{esc(subtitle)}</p></div>
-    <div class="top-actions">{state}{toggle}</div>
+    <div class="top-actions"><span class="top-state">{state}</span>{live_dot}{toggle}</div>
   </header>
-  <main class="content">{flash_html}{body}</main>
+  <main class="content">{flash_html}{content}</main>
 </div>
 <script>{JS}</script>
 </body></html>"""
@@ -278,6 +280,8 @@ CSS = """
   --series-1: #2a78d6; --series-2: #eb6834; --series-3: #1baf7a; --grid: #ebe8e0;
   --shadow: 0 1px 2px rgba(20,20,20,.04), 0 2px 8px rgba(20,20,20,.04);
   --radius: 14px;
+  --wa-bg: #efeae2; --wa-dots: rgba(11,20,26,.05); --wa-in: #ffffff; --wa-out: #d9fdd3; --wa-ink: #111b21; --wa-muted: #667781;
+  --wa-reply: rgba(11,20,26,.05); --wa-bar: rgba(11,20,26,.18); --wa-head: #008069; --wa-head-ink: #ffffff; --wa-compose: #f0f2f5; --wa-system: #ffffff;
 }
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
@@ -290,6 +294,8 @@ CSS = """
     --info: #7aa7ff; --info-bg: #15243f; --neutral-bg: #24262c;
     --series-1: #3987e5; --series-2: #d95926; --series-3: #199e70; --grid: #2a2c32;
     --shadow: none;
+    --wa-bg: #0b141a; --wa-dots: rgba(255,255,255,.035); --wa-in: #202c33; --wa-out: #005c4b; --wa-ink: #e9edef; --wa-muted: #8696a0;
+    --wa-reply: rgba(255,255,255,.07); --wa-bar: rgba(255,255,255,.25); --wa-head: #202c33; --wa-head-ink: #e9edef; --wa-compose: #111b21; --wa-system: #182229;
   }
 }
 * { box-sizing: border-box; }
@@ -503,6 +509,61 @@ details summary { cursor: pointer; color: var(--ink-2); font-weight: 500; margin
 .login-form { display: grid; gap: 14px; }
 .login-foot { margin: 0; text-align: center; color: var(--muted); font-size: 12.5px; }
 
+/* Live */
+.live-dot { display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; font-weight: 600; color: var(--good); }
+.live-dot i { width: 8px; height: 8px; border-radius: 50%; background: var(--good); box-shadow: 0 0 0 0 color-mix(in srgb, var(--good) 60%, transparent); animation: pulse 2s infinite; }
+.live-dot[data-state="off"] { color: var(--muted); }
+.live-dot[data-state="off"] i { background: var(--muted); animation: none; }
+@keyframes pulse { 0% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--good) 55%, transparent); } 70% { box-shadow: 0 0 0 7px transparent; } 100% { box-shadow: 0 0 0 0 transparent; } }
+#live-body { display: grid; gap: 20px; }
+#live-body.flash { animation: flash 1.2s ease-out; }
+@keyframes flash { from { filter: brightness(1.04); } to { filter: none; } }
+@media (prefers-reduced-motion: reduce) { .live-dot i, #live-body.flash { animation: none; } }
+
+/* The live feed */
+.feed { display: grid; }
+.feed-item { display: grid; grid-template-columns: auto 1fr auto; gap: 12px; padding: 11px 0; border-top: 1px solid var(--border); align-items: start; }
+.feed-item:first-child { border-top: none; padding-top: 0; }
+.feed-where { font-size: 12px; color: var(--muted); }
+.feed-text { overflow-wrap: anywhere; }
+.feed-icon { width: 30px; height: 30px; border-radius: 50%; display: grid; place-items: center; background: var(--neutral-bg); color: var(--ink-2); }
+.feed-icon.test { background: var(--brand-soft); color: var(--brand-text); }
+.today { display: flex; flex-wrap: wrap; gap: 8px 22px; color: var(--ink-2); font-size: 13px; margin-top: 8px; }
+.today b { color: var(--ink); }
+
+/* WhatsApp, as on a phone */
+.wa { border: 1px solid var(--border); border-radius: 14px; overflow: hidden; background: var(--wa-bg); }
+.wa-head { display: flex; align-items: center; gap: 12px; padding: 10px 14px; background: var(--wa-head); color: var(--wa-head-ink); flex-wrap: wrap; }
+.wa-avatar { width: 38px; height: 38px; border-radius: 50%; object-fit: cover; background: #2a2c32; }
+.wa-who { display: grid; line-height: 1.25; flex: 1; min-width: 120px; }
+.wa-who span { font-size: 12.5px; opacity: .8; }
+.wa-where { display: flex; align-items: center; gap: 8px; color: inherit; font-size: 12.5px; }
+.wa-where select { width: auto; min-height: 32px; padding: 4px 8px; font-size: 13px; }
+.wa-chat { min-height: 340px; max-height: 62vh; overflow-y: auto; padding: 16px 5%; display: flex; flex-direction: column; gap: 6px;
+  background-color: var(--wa-bg); background-image: radial-gradient(var(--wa-dots) 1px, transparent 1px); background-size: 18px 18px; }
+.wa-msg { max-width: min(78%, 560px); padding: 6px 9px 6px; border-radius: 8px; font-size: 14.2px; line-height: 1.42; color: var(--wa-ink); box-shadow: 0 1px .5px rgba(11,20,26,.13); position: relative; overflow-wrap: anywhere; }
+.wa-msg.in { align-self: flex-start; background: var(--wa-in); border-top-left-radius: 0; }
+.wa-msg.out { align-self: flex-end; background: var(--wa-out); border-top-right-radius: 0; }
+.wa-sender { font-size: 12.8px; font-weight: 600; color: #d97706; margin-bottom: 2px; }
+.wa-reply { display: grid; gap: 1px; background: var(--wa-reply); border-left: 4px solid #06cf9c; border-radius: 6px; padding: 5px 8px; margin: 2px 0 5px; font-size: 13px; }
+.wa-reply b { color: #06a37e; font-weight: 600; }
+.wa-reply span { color: var(--wa-muted); display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+.wa-quote { border-left: 3px solid var(--wa-bar); padding: 1px 0 1px 9px; margin: 3px 0; color: var(--wa-muted); }
+.wa-li { padding-left: 2px; }
+.wa-gap { height: 6px; }
+.wa-mention { color: #027eb5; }
+.wa-mono, .wa-msg code { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 13px; background: var(--wa-reply); padding: 0 3px; border-radius: 3px; }
+.wa-msg a { color: #027eb5; }
+.wa-meta { font-size: 11px; color: var(--wa-muted); text-align: right; margin-top: 2px; }
+.wa-ticks { color: #53bdeb; letter-spacing: -3px; margin-left: 2px; }
+.wa-note { font-size: 11.5px; color: var(--wa-muted); font-style: italic; margin-top: 3px; border-top: 1px dashed var(--wa-bar); padding-top: 3px; }
+.wa-system { align-self: center; background: var(--wa-system); color: var(--wa-muted); font-size: 12.5px; padding: 5px 12px; border-radius: 8px; max-width: 85%; text-align: center; box-shadow: 0 1px .5px rgba(11,20,26,.1); }
+.wa-compose { display: grid; gap: 10px; padding: 12px 14px; background: var(--wa-compose); }
+.wa-row { display: flex; gap: 10px; align-items: flex-end; }
+.wa-row textarea { min-height: 44px; height: 44px; border-radius: 22px; padding: 11px 16px; border: none; background: var(--surface); }
+.wa-send { width: 44px; height: 44px; border-radius: 50%; border: none; background: #00a884; color: #fff; display: grid; place-items: center; cursor: pointer; flex: none; }
+.wa-send:hover { background: #008f72; }
+
 /* Phone and tablet */
 @media (max-width: 1100px) {
   .stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
@@ -545,19 +606,99 @@ JS = r"""
     let t = a < 60 ? 'a few seconds' : a < 3600 ? Math.round(a / 60) + ' min' : a < 86400 ? Math.round(a / 3600) + ' h' : Math.round(a / 86400) + ' days';
     return future ? 'in ' + t : t + ' ago';
   }
-  document.querySelectorAll('time[datetime]').forEach(el => {
-    const d = new Date(el.getAttribute('datetime'));
-    if (isNaN(d)) return;
-    const style = el.dataset.style, date = days[d.getDay()] + ' ' + d.getDate() + ' ' + months[d.getMonth()], clock = pad(d.getHours()) + ':' + pad(d.getMinutes());
-    el.textContent = style === 'ago' ? ago(d) : style === 'date' ? date : style === 'time' ? clock : date + ', ' + clock;
-    el.title = d.toLocaleString();
-  });
-  document.querySelectorAll('form[data-confirm]').forEach(f => f.addEventListener('submit', e => { if (!confirm(f.dataset.confirm)) e.preventDefault(); }));
-  document.querySelectorAll('[data-copy]').forEach(b => b.addEventListener('click', () => {
-    const text = document.getElementById(b.dataset.copy).innerText;
-    navigator.clipboard.writeText(text).then(() => { b.querySelector('span').textContent = 'Copied'; });
-  }));
-  const refresh = document.body.dataset.refresh;
-  if (refresh) setInterval(() => { if (!document.querySelector('input:focus, textarea:focus, select:focus')) location.reload(); }, refresh * 1000);
+  function times(root) {
+    root.querySelectorAll('time[datetime]').forEach(el => {
+      const d = new Date(el.getAttribute('datetime'));
+      if (isNaN(d)) return;
+      const style = el.dataset.style, date = days[d.getDay()] + ' ' + d.getDate() + ' ' + months[d.getMonth()], clock = pad(d.getHours()) + ':' + pad(d.getMinutes());
+      el.textContent = style === 'ago' ? ago(d) : style === 'date' ? date : style === 'time' ? clock : date + ', ' + clock;
+      el.title = d.toLocaleString();
+    });
+  }
+  function enhance(root) {
+    times(root);
+    root.querySelectorAll('form[data-confirm]').forEach(f => f.addEventListener('submit', e => { if (!confirm(f.dataset.confirm)) e.preventDefault(); }));
+    root.querySelectorAll('form').forEach(f => f.addEventListener('input', () => { f.dataset.dirty = '1'; }));
+    root.querySelectorAll('[data-copy]').forEach(b => b.addEventListener('click', () => {
+      const text = document.getElementById(b.dataset.copy).innerText;
+      navigator.clipboard.writeText(text).then(() => { b.querySelector('span').textContent = 'Copied'; });
+    }));
+  }
+  enhance(document);
+  setInterval(() => times(document), 30000);
+
+  // Live: the page asks every few seconds whether anything changed (a cheap check), and swaps in
+  // the fresh content only then — never while someone is typing in it.
+  const live = document.getElementById('live-body'), dot = document.getElementById('live-status');
+  if (live && dot) {
+    let etag = null, busy = false;
+    const say = (state, text) => { dot.dataset.state = state; dot.querySelector('span').textContent = text; };
+    async function poll() {
+      if (document.hidden || busy) return;
+      const typing = document.activeElement && live.contains(document.activeElement) && document.activeElement.matches('input, textarea, select');
+      if (typing || live.querySelector('form[data-dirty]')) return;
+      busy = true;
+      try {
+        const headers = { 'X-Live': '1' };
+        if (etag) headers['If-None-Match'] = etag;
+        const r = await fetch(location.href, { headers, cache: 'no-store' });
+        if (r.status === 200) {
+          const changed = etag !== null;
+          etag = r.headers.get('ETag');
+          const doc = new DOMParser().parseFromString(await r.text(), 'text/html');
+          const fresh = doc.getElementById('live-body'), top = doc.querySelector('.top-state');
+          if (fresh && changed) { live.innerHTML = fresh.innerHTML; enhance(live); live.classList.remove('flash'); void live.offsetWidth; live.classList.add('flash'); }
+          if (top) document.querySelector('.top-state').innerHTML = top.innerHTML;
+        }
+        if (r.status === 200 || r.status === 304) say('on', 'Live');
+        else say('off', 'Reconnecting…');
+      } catch (e) { say('off', 'Reconnecting…'); }
+      busy = false;
+    }
+    poll();
+    setInterval(poll, 4000);
+    document.addEventListener('visibilitychange', poll);
+  }
+
+  // WhatsApp's own formatting, for Jeli's replies shown as on a phone.
+  const esc = t => String(t).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  function inline(t) {
+    return t
+      .replace(/```([\s\S]+?)```/g, '<code class="wa-mono">$1</code>')
+      .replace(/`([^`\n]+)`/g, '<code>$1</code>')
+      .replace(/(https?:\/\/[^\s<]+)/g, '<a href="$1" target="_blank" rel="noopener">$1</a>')
+      .replace(/(^|[\s(>])\*([^*\n]+?)\*(?=[\s).,!?:;<]|$)/g, '$1<b>$2</b>')
+      .replace(/(^|[\s(>])_([^_\n]+?)_(?=[\s).,!?:;<]|$)/g, '$1<i>$2</i>')
+      .replace(/(^|[\s(>])~([^~\n]+?)~(?=[\s).,!?:;<]|$)/g, '$1<s>$2</s>')
+      .replace(/(^|\s)@(\d{5,})/g, '$1<span class="wa-mention">@$2</span>');
+  }
+  function format(text) {
+    const lines = esc(text).split('\n'); let html = '', quote = [];
+    const flush = () => { if (quote.length) { html += '<div class="wa-quote">' + quote.map(inline).join('<br>') + '</div>'; quote = []; } };
+    for (const line of lines) {
+      if (line.startsWith('&gt; ')) { quote.push(line.slice(5)); continue; }
+      flush();
+      if (/^[-*] /.test(line)) html += '<div class="wa-li">•&nbsp;' + inline(line.slice(2)) + '</div>';
+      else if (/^• /.test(line)) html += '<div class="wa-li">' + inline(line) + '</div>';
+      else html += (line ? '<div>' + inline(line) + '</div>' : '<div class="wa-gap"></div>');
+    }
+    flush();
+    return html;
+  }
+  window.jeliBubble = function (m, me) {
+    const at = m.at ? new Date(m.at) : new Date(), clock = pad(at.getHours()) + ':' + pad(at.getMinutes());
+    const div = document.createElement('div');
+    if (m.role === 'system') { div.className = 'wa-system'; div.textContent = m.text; return div; }
+    const mine = m.role === 'member';
+    div.className = 'wa-msg ' + (mine ? 'out' : 'in');
+    let html = mine ? '' : '<div class="wa-sender">Jeli</div>';
+    if (m.quoted) html += '<div class="wa-reply"><b>' + esc(m.quoted[0] === 'You' ? 'You' : m.quoted[0]) + '</b><span>' + esc(String(m.quoted[1]).slice(0, 180)) + '</span></div>';
+    const called = mine && m.called ? '<span class="wa-mention">@Jeli</span> ' : '';
+    html += '<div class="wa-text">' + (called ? '<div>' + called + '</div>' : '') + format(m.text) + '</div>';
+    html += '<div class="wa-meta">' + (m.seconds ? m.seconds + ' s · ' : '') + clock + (mine ? ' <span class="wa-ticks">✓✓</span>' : '') + '</div>';
+    if (m.note) html += '<div class="wa-note">' + esc(m.note) + '</div>';
+    div.innerHTML = html;
+    return div;
+  };
 })();
 """

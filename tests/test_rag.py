@@ -77,12 +77,28 @@ def ask(answerer, question="When is the bootcamp?"):
     return asyncio.run(answerer.answer(question, asker="+223 70 00 00 00"))
 
 
-def test_grounded_answer_cites_only_the_sources_it_used(monkeypatch):
+def test_grounded_answer_quotes_its_source_the_whatsapp_way(monkeypatch):
     llm = FakeLLM(GeneratedAnswer(answered=True, answer="It moved to 25 September.", sources=[1]))
     reply = ask(make_answerer(llm, monkeypatch=monkeypatch))
-    assert reply.startswith("It moved to 25 September.")
-    assert "📌 Sources\n[1] METI cohort · 12 Sep 2026, 14:00 UTC · Awa Traoré, +234 ···55" in reply
-    assert "[2]" not in reply
+    # A WhatsApp quote block: who said it, where and when, and what they said.
+    assert reply == "It moved to 25 September.\n\n> *Awa Traoré* · METI cohort, Sat 12 Sep\n> The bootcamp moves to 25 September."
+    assert reply.reply_to is None and not reply.mentions  # a reply to the member's own question
+
+
+def test_a_source_said_in_this_chat_is_replied_to(monkeypatch):
+    live = StoredMessage("wa-1", "g@g.us", "whatsapp_live", "Diane", T0, "Build phase: Friday 18 to Thursday 24 September.")
+    MESSAGES.append(live)
+    try:
+        llm = FakeLLM(GeneratedAnswer(answered=True, answer="The build phase ends on Thursday 24 September.", sources=[1]))
+        answerer = make_answerer(llm, hits=[SearchHit(5, "g@g.us", T0, T0, [], ["wa-1"], "", 0.0, 0.8)], monkeypatch=monkeypatch)
+        reply = asyncio.run(answerer.answer("When does the build phase end?", asker="Awa", chat_id="g@g.us", asker_id="22370000000@c.us"))
+    finally:
+        MESSAGES.remove(live)
+    # WhatsApp's own reference: the answer replies to Diane's message, quoted above it, and
+    # mentions the member who asked.
+    assert reply.reply_to == "wa-1" and reply.quoted == ("Diane", live.text)
+    assert reply == "@22370000000 The build phase ends on Thursday 24 September."
+    assert reply.mentions == ["22370000000@c.us"]
 
 
 def test_the_model_sees_chronological_excerpts_without_bots_or_full_phone_numbers(monkeypatch):
@@ -119,15 +135,20 @@ def test_unrelated_questions_get_i_dont_know_without_calling_the_model(monkeypat
     ],
 )
 def test_answers_without_real_sources_become_i_dont_know(monkeypatch, generated):
-    assert ask(make_answerer(FakeLLM(generated), monkeypatch=monkeypatch)) == TEXTS["en"]["dont_know"]
+    far = [hit(1, ["m1"], 0.64, T0)]
+    assert ask(make_answerer(FakeLLM(generated), hits=far, monkeypatch=monkeypatch)) == TEXTS["en"]["dont_know"]
+    # When the group discussed something close, Jeli shows it rather than a flat "I don't know".
+    near = ask(make_answerer(FakeLLM(generated), monkeypatch=monkeypatch))
+    assert near.startswith(TEXTS["en"]["dont_know_near"]) and "> *Moussa* · METI cohort, Sun 13 Sep" in near
 
 
 def test_when_no_model_is_available_jeli_points_to_the_most_relevant_sources(monkeypatch):
     reply = ask(make_answerer(FakeLLM(error=LLMUnavailable()), monkeypatch=monkeypatch))
     assert reply.startswith(TEXTS["en"]["fallback"])
     # The most relevant excerpt comes first, even though it is the more recent one.
-    assert reply.index("13 Sep 2026") < reply.index("12 Sep 2026")
-    assert "« Moussa: Pitch deck due Friday 6 pm. »" in reply
+    assert reply.index("Sun 13 Sep") < reply.index("Sat 12 Sep")
+    assert "> *Moussa* · METI cohort, Sun 13 Sep\n> Pitch deck due Friday 6 pm." in reply
+    assert "UTC" not in reply and "[1]" not in reply
 
 
 def test_answers_from_a_call_link_to_the_moment_it_was_said(monkeypatch):
@@ -135,10 +156,10 @@ def test_answers_from_a_call_link_to_the_moment_it_was_said(monkeypatch):
     llm = FakeLLM(GeneratedAnswer(answered=True, answer="Everyone in the team must complete it.", sources=[1]))
     reply = ask(make_answerer(llm, hits=[recording_hit], monkeypatch=monkeypatch), "Must every member do the course?")
     [prompt] = llm.prompts
-    assert "Call recording «Module 1 class session» (15 September 2026), from 12:34" in prompt
+    assert "Call recording «Module 1 class session» (15 September 2026)" in prompt
     assert "[12:34] Charles Botom: Every team member" in prompt
-    assert "[1] 🎥 Module 1 class session · 15 Sep 2026 · at 12:34 · Charles Botom" in reply
-    assert "https://youtu.be/6q4uPBO_sDc?t=754" in reply
+    assert "> 🎥 *Module 1 class session* · Tue 15 Sep, at 12:34\n> Charles Botom: Every team member needs" in reply
+    assert "> https://youtu.be/6q4uPBO_sDc?t=754" in reply
 
 
 class FakeDuplicateLLM:
@@ -153,8 +174,8 @@ class FakeDuplicateLLM:
 def test_a_question_already_answered_in_the_group_gets_the_earlier_answer(monkeypatch):
     llm = FakeDuplicateLLM(AlreadyAnswered(already_answered=True, answer="It moved to 25 September.", sources=[1]))
     reply = asyncio.run(make_answerer(llm, monkeypatch=monkeypatch).already_answered("When is the bootcamp?", 0.7))
-    assert reply.startswith(TEXTS["en"]["already_covered"] + "\nIt moved to 25 September.")
-    assert "[1] METI cohort · 12 Sep 2026, 14:00 UTC" in reply
+    assert reply.startswith(TEXTS["en"]["already_covered"] + " It moved to 25 September.")
+    assert "> *Awa Traoré* · METI cohort, Sat 12 Sep" in reply
 
 
 @pytest.mark.parametrize(

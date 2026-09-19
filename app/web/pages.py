@@ -6,6 +6,7 @@ thresholds as numbers, no ids — what Jeli does, for whom, and what needs atten
 """
 
 import csv
+import dataclasses
 import hashlib
 import io
 import json
@@ -83,7 +84,7 @@ def _done(request: Request, path: str, text: str, kind: str = "good") -> Redirec
     return RedirectResponse(path, status_code=303)
 
 
-def _page(request: Request, member: str, *, title: str, subtitle: str, active: str, body: str, refresh: bool = False) -> HTMLResponse:
+def _page(request: Request, member: str, *, title: str, subtitle: str, active: str, body: str, live: bool = False) -> HTMLResponse:
     runtime = _state(request).runtime
     session = request.cookies.get(SESSION_COOKIE, "")
     page = ui.layout(
@@ -95,10 +96,33 @@ def _page(request: Request, member: str, *, title: str, subtitle: str, active: s
         body=body,
         paused=runtime.paused,
         path=request.url.path,
-        flash=_flash(request),
-        refresh=refresh,
+        flash=None if request.headers.get("x-live") else _flash(request),
+        live=live,
     )
-    return HTMLResponse(page, headers={"Cache-Control": "no-store"})
+    headers = {"Cache-Control": "no-store"}
+    if getattr(request.state, "marker", None):
+        headers["ETag"] = request.state.marker
+    return HTMLResponse(page, headers=headers)
+
+
+async def _marker(request: Request) -> str:
+    """Changes whenever anything a page shows may have changed."""
+    state = _state(request)
+    store = getattr(state, "store", None)
+    whatsapp = getattr(state, "whatsapp", None)
+    parts = [await store.change_marker() if store else "", str(state.runtime.paused), str(getattr(whatsapp, "status", ""))]
+    parts += [f"{a.key}:{a.enabled}:{a.running}:{a.last_finished}:{a.last_ok}" for a in getattr(state, "activities", {}).values()]
+    return hashlib.sha256("|".join(parts).encode()).hexdigest()[:20]
+
+
+async def _unchanged(request: Request) -> Response | None:
+    """For a page's live check: 304 when nothing changed since the version the browser has."""
+    if request.headers.get("x-live") != "1":
+        return None
+    request.state.marker = await _marker(request)
+    if request.headers.get("if-none-match") == request.state.marker:
+        return Response(status_code=304, headers={"ETag": request.state.marker})
+    return None
 
 
 def _csrf(request: Request) -> str:
@@ -256,7 +280,9 @@ async def pause(request: Request, member: Change) -> RedirectResponse:
 
 
 @router.get("/dashboard", response_class=HTMLResponse)
-async def overview(request: Request, member: Member) -> HTMLResponse:
+async def overview(request: Request, member: Member) -> Response:
+    if (unchanged := await _unchanged(request)) is not None:
+        return unchanged
     state = _state(request)
     store = getattr(state, "store", None)
     now = _now()
@@ -264,14 +290,24 @@ async def overview(request: Request, member: Member) -> HTMLResponse:
     usage = await store.usage_since(first_day) if store else None
     upcoming = await store.deadlines_between(now.date(), now.date() + timedelta(days=WEEK)) if store else []
     watch = await store.incidents_since(now - timedelta(days=WEEK)) if store else []
+    midnight = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    today = await store.activity_today(midnight) if store else None
+    recent = await store.recent_events(12) if store else []
     paused = state.runtime.paused
     level, headline, explanation = whatsapp_state(state)
 
     hero = (
         f'<section class="card hero{" paused" if paused else ""}"><img src="/dashboard/avatar" alt="" class="avatar">'
         f'<div class="hero-text"><h2>{"Jeli is paused" if paused else "Jeli is on duty"}</h2>'
-        f'<p>{"Members get no answers and nothing is posted. Jeli keeps remembering the groups." if paused else "Members can ask it anything about the groups, the sessions and the deadlines."}</p></div>'
-        f'<div class="actions">{ui.pill(level, "WhatsApp: " + headline)}</div></section>'
+        f'<p>{"Members get no answers and nothing is posted. Jeli keeps remembering the groups." if paused else "Members can ask it anything about the groups, the sessions and the deadlines."}</p>'
+        + (
+            f'<div class="today"><span>Today: <b>{today["read"]:,}</b> messages read in the groups</span>'
+            f'<span><b>{today["exchanges"]:,}</b> exchanges with Jeli</span>'
+            f'<span>Latest message: <b>{when(today["last_message"], "ago") if today["last_message"] else "none yet"}</b></span></div>'
+            if today
+            else ""
+        )
+        + f'</div><div class="actions">{ui.pill(level, "WhatsApp: " + headline)}</div></section>'
     )
 
     attention = []
@@ -344,15 +380,60 @@ async def overview(request: Request, member: Member) -> HTMLResponse:
         f'<div class="row-side">{_activity_pill(a)}</div></div>'
         for a in getattr(state, "activities", {}).values()
     ) or ui.empty("No background activity.")
+    feed = ui.card(
+        "Live conversations",
+        _feed(recent, labels),
+        icon_name="chat",
+        description="The latest exchanges with Jeli, as they happen — in the groups, in private, and your tries.",
+    )
     side = ui.card("Coming up", f'<div class="rows">{coming}</div>', icon_name="calendar", actions="<a class='btn small' href='/dashboard/deadlines'>All deadlines</a>") + ui.card(
         "Activities", f'<div class="rows">{activities}</div>', icon_name="activity", actions="<a class='btn small' href='/dashboard/activities'>Manage</a>"
     )
     body = (
         hero
         + f'<div class="attention">{"".join(attention)}</div>'
-        + f'<div class="grid side"><div class="grid">{usage_html}</div><div class="grid">{side}</div></div>'
+        + f'<div class="grid side"><div class="grid">{feed}{usage_html}</div><div class="grid">{side}</div></div>'
     )
-    return _page(request, member, title="Overview", subtitle="How Jeli is doing, at a glance", active="home", body=body, refresh=True)
+    return _page(request, member, title="Overview", subtitle="How Jeli is doing, at a glance", active="home", body=body, live=True)
+
+
+FEED_KINDS = {
+    "question": ("question", "Question"),
+    "catchup": ("activity", "Catch-up"),
+    "recap": ("book", "Session recap"),
+    "deadlines": ("calendar", "Deadlines"),
+    "search": ("list", "Search"),
+    "already_answered": ("sparkle", "Pointed to an earlier answer"),
+    "social": ("chat", "Chat"),
+    "help": ("info", "Help"),
+    "file": ("download", "File"),
+}
+FEED_OUTCOMES = {"answered": ("good", "Answered"), "dont_know": ("warn", "Couldn't answer"), "sources_only": ("info", "Sources only"), "not_ready": ("neutral", "Not ready")}
+
+
+def _feed(events: list[dict], labels: dict[str, str]) -> str:
+    if not events:
+        return ui.empty("No exchange yet. They appear here the moment members talk to Jeli — try it on the Try Jeli page.", "chat")
+    items = []
+    for event in events:
+        glyph, kind = FEED_KINDS.get(event["kind"], ("chat", event["kind"].capitalize()))
+        test = event["channel"] == "dashboard"
+        if test:
+            where = "Try on the dashboard"
+        elif event["is_private"]:
+            where = "Private chat"
+        else:
+            where = _chat_name(event["chat_id"], labels) if event["chat_id"] else "A group"
+        text = esc(event["question"]) if event["question"] else f'<span class="muted">{"A private message" if event["is_private"] else esc(kind)}</span>'
+        outcome = FEED_OUTCOMES.get(event["outcome"])
+        pill = ui.pill(*outcome) if outcome else ""
+        speed = f'<span class="muted small">{event["latency_ms"] / 1000:.1f} s</span>' if event["latency_ms"] else ""
+        items.append(
+            f'<div class="feed-item"><span class="feed-icon{" test" if test else ""}">{icon(glyph, 15)}</span>'
+            f'<div><div class="feed-text">{text}</div><div class="feed-where">{esc(kind)} · {esc(where)} · {when(event["at"], "ago")}</div></div>'
+            f'<div class="actions">{pill}{speed}</div></div>'
+        )
+    return f'<div class="feed">{"".join(items)}</div>'
 
 
 def _activity_pill(activity) -> str:
@@ -383,67 +464,102 @@ def _activity_line(activity) -> str:
 
 EXAMPLES = [
     "When is the hackathon submission deadline?",
-    "/catchup 24h",
+    "What happened today in the group?",
     "/deadlines",
     "/recap module 1",
-    "/search pitch",
+    "Who are you?",
 ]
+PRIVATE = "private"
+
+
+def _try_chats(labels: dict[str, str], chats: list[dict]) -> list[tuple[str, str]]:
+    """Where the tester writes from: a group Jeli knows, or a private chat with Jeli."""
+    return [(c["chat_id"], _chat_name(c["chat_id"], labels)) for c in chats] + [(PRIVATE, "Private chat with Jeli")]
+
+
+def _try_entry(row: dict) -> dict:
+    details = row["details"] or {}
+    role = "system" if details.get("system") else row["role"]
+    return {**details, "role": role, "text": row["text"], "at": row["at"].isoformat()}
 
 
 @router.get("/dashboard/try", response_class=HTMLResponse)
 async def try_page(request: Request, member: Member) -> HTMLResponse:
+    store = getattr(_state(request), "store", None)
+    history = [_try_entry(row) for row in await store.tries(member)] if store else []
+    chats = (await store.knowledge_overview())["chats"] if store else []
+    options = "".join(f'<option value="{esc(value)}">{esc(name)}</option>' for value, name in _try_chats(_labels(request), chats))
     chips = "".join(f'<button type="button" class="chip" data-example="{esc(e)}">{esc(e)}</button>' for e in EXAMPLES)
+    clear = ui.form(
+        "/dashboard/try/clear",
+        _csrf(request),
+        ui.button("New conversation", kind="small", icon_name="plus"),
+        confirm="Start a new conversation? This one is deleted from your history.",
+        cls="inline",
+    )
     body = ui.card(
-        "Ask Jeli",
-        f"""<div class="chat" id="chat" aria-live="polite">
-          <div class="bubble jeli">Hello {esc(member.capitalize())}! Ask me what a member would ask. Nothing is sent on WhatsApp, and I answer here even while I'm paused.</div>
-        </div>
-        <form class="composer" id="composer">
-          <div class="chips">{chips}</div>
-          <div class="segmented" role="radiogroup" aria-label="How the message is sent">
-            <label><input type="radio" name="mode" value="ask" checked><span>Asked to Jeli</span></label>
-            <label><input type="radio" name="mode" value="group"><span>Said in a group, without calling Jeli</span></label>
-          </div>
-          <div class="composer-row"><textarea name="text" id="text" placeholder="Type a question or a command…" required maxlength="2000"></textarea>
-          {ui.button("Send", kind="primary", icon_name="send")}</div>
-          <p class="hint">“Said in a group” shows whether Jeli would step in on its own, to point to an earlier answer.</p>
-        </form>""",
+        "Try Jeli",
+        f"""<div class="wa">
+          <div class="wa-head"><img src="/dashboard/avatar" class="wa-avatar" alt="">
+            <div class="wa-who"><b>Jeli</b><span id="wa-status">online</span></div>
+            <label class="wa-where">Writing in<select id="chat">{options}</select></label></div>
+          <div class="wa-chat" id="chat-log" aria-live="polite"></div>
+          <form class="wa-compose" id="composer">
+            <div class="chips">{chips}</div>
+            <div class="segmented" role="radiogroup" aria-label="How the message is sent">
+              <label><input type="radio" name="mode" value="ask" checked><span>Calling Jeli</span></label>
+              <label><input type="radio" name="mode" value="group"><span>Without calling Jeli</span></label>
+            </div>
+            <div class="wa-row"><textarea name="text" id="text" placeholder="Type a message" required maxlength="2000" rows="1"></textarea>
+            <button type="submit" class="wa-send" aria-label="Send">{icon("send", 20)}</button></div>
+            <p class="hint">Shown exactly as on WhatsApp. Nothing is sent there, and Jeli answers here even while paused.
+            “Without calling Jeli” shows whether it would step in on its own, or follow the conversation.</p>
+          </form>
+        </div>""",
         icon_name="chat",
-        description="Try questions and commands exactly as members would, and see Jeli's answer with its sources.",
+        description="Your conversation with Jeli is kept, for you only. Every try also appears on the Overview.",
+        actions=clear,
     )
     script = f"""<script>
-(function () {{
-  const chat = document.getElementById('chat'), form = document.getElementById('composer'), text = document.getElementById('text');
-  const csrf = {_js(_csrf(request))};
-  function format(t) {{
-    const e = t.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
-    return e.replace(/(https?:\\/\\/[^\\s<]+)/g, '<a href="$1" target="_blank" rel="noopener">$1</a>')
-            .replace(/\\*([^*\\n]+)\\*/g, '<b>$1</b>').replace(/(^|\\s)_([^_\\n]+)_/g, '$1<i>$2</i>');
-  }}
-  function bubble(cls, html) {{ const d = document.createElement('div'); d.className = 'bubble ' + cls; d.innerHTML = html; chat.appendChild(d); chat.scrollTop = chat.scrollHeight; return d; }}
+document.addEventListener('DOMContentLoaded', function () {{
+  const log = document.getElementById('chat-log'), form = document.getElementById('composer'), text = document.getElementById('text');
+  const chat = document.getElementById('chat'), status = document.getElementById('wa-status');
+  const csrf = {_js(_csrf(request))}, me = {_js(member.capitalize())};
+  try {{ const saved = localStorage.getItem('jeli-try-chat'); if (saved && [...chat.options].some(o => o.value === saved)) chat.value = saved; }} catch (e) {{}}
+  chat.addEventListener('change', () => {{ try {{ localStorage.setItem('jeli-try-chat', chat.value); }} catch (e) {{}} }});
+  function show(entry) {{ log.appendChild(window.jeliBubble(entry, me)); log.scrollTop = log.scrollHeight; }}
+  {_data(history)}.forEach(show);
+  if (!log.children.length) show({{ role: 'jeli', text: 'Hello ' + me + '! 👋 Write to me as a member would. I answer here exactly as I would on WhatsApp.', at: new Date().toISOString() }});
   document.querySelectorAll('[data-example]').forEach(c => c.addEventListener('click', () => {{ text.value = c.dataset.example; text.focus(); }}));
   text.addEventListener('keydown', e => {{ if (e.key === 'Enter' && !e.shiftKey) {{ e.preventDefault(); form.requestSubmit(); }} }});
   form.addEventListener('submit', async e => {{
     e.preventDefault();
     const message = text.value.trim(); if (!message) return;
     const mode = form.querySelector('input[name=mode]:checked').value;
-    bubble('me', format(message)); text.value = '';
-    const wait = bubble('silent', 'Jeli is typing…');
+    text.value = '';
+    show({{ role: 'member', text: message, at: new Date().toISOString(), called: mode === 'ask' }});
+    status.textContent = 'typing…';
     try {{
-      const r = await fetch('/dashboard/try', {{ method: 'POST', headers: {{ 'Content-Type': 'application/json', 'X-CSRF-Token': csrf }}, body: JSON.stringify({{ text: message, mode }}) }});
-      const data = await r.json(); wait.remove();
-      if (!r.ok) {{ bubble('silent', format(data.error || 'Something went wrong.')); return; }}
-      if (data.reply) bubble('jeli', format(data.reply) + '<span class="meta">' + data.seconds + ' s</span>');
-      else bubble('silent', format(data.note));
-    }} catch (err) {{ wait.remove(); bubble('silent', 'Jeli could not be reached. Try again.'); }}
+      const r = await fetch('/dashboard/try', {{ method: 'POST', headers: {{ 'Content-Type': 'application/json', 'X-CSRF-Token': csrf }},
+        body: JSON.stringify({{ text: message, mode, chat: chat.value }}) }});
+      const data = await r.json();
+      if (!r.ok) show({{ role: 'system', text: data.error || 'Something went wrong.' }});
+      else show(data.jeli);
+    }} catch (err) {{ show({{ role: 'system', text: 'Jeli could not be reached. Try again.' }}); }}
+    status.textContent = 'online';
   }});
-}})();
+}});
 </script>"""
-    return _page(request, member, title="Try Jeli", subtitle="Test Jeli safely, without anything reaching WhatsApp", active="try", body=body + script)
+    return _page(request, member, title="Try Jeli", subtitle="Talk to Jeli as a member would, exactly as on WhatsApp", active="try", body=body + script)
 
 
-def _js(value: str) -> str:
-    return json.dumps(value)
+def _js(value) -> str:
+    return _data(value)
+
+
+def _data(value) -> str:
+    """A value for a <script>: JSON that cannot close the script tag."""
+    return json.dumps(value).replace("<", "\\u003c").replace(">", "\\u003e").replace("&", "\\u0026")
 
 
 @router.post("/dashboard/try")
@@ -457,34 +573,63 @@ async def try_ask(request: Request, member: Change) -> JSONResponse:
     data = await request.json()
     text = " ".join(str(data.get("text", "")).split())[:2000]
     if not text:
-        return JSONResponse({"error": "Type a question first."}, status_code=400)
-    asked = data.get("mode") != "group"
+        return JSONResponse({"error": "Type a message first."}, status_code=400)
+    chat = str(data.get("chat", PRIVATE))
+    private = chat == PRIVATE
+    called = data.get("mode") != "group" or private
     message = IncomingMessage(
         platform="dashboard",
-        chat_id="dashboard",
+        chat_id=f"dashboard:{member}" if private else chat,
         message_id=secrets.token_hex(8),
         author=member.capitalize(),
         text=text,
         sent_at=_now(),
-        is_private=False,
-        addressed_to_bot=asked,
+        is_private=private,
+        addressed_to_bot=called,
     )
+    followed = not called and state.responder.is_follow_up(message)
+    if followed:
+        message = dataclasses.replace(message, addressed_to_bot=True)
     started = time.monotonic()
     reply = await state.responder.respond(message)
-    seconds = f"{time.monotonic() - started:.1f}"
-    note = (
-        "Jeli stays silent: the group hasn't answered this before, so it would not step in."
-        if not asked
-        else "Jeli has nothing to say to this."
-    )
-    return JSONResponse({"reply": reply, "note": note, "seconds": seconds})
+    seconds = round(time.monotonic() - started, 1)
+    if reply:
+        quoted = getattr(reply, "quoted", None) or ("You", text)
+        jeli = {"role": "jeli", "text": str(reply), "at": _now().isoformat(), "quoted": list(quoted), "seconds": seconds}
+        if getattr(reply, "reply_to", None):
+            jeli["note"] = "Replies to the source message itself: WhatsApp shows it above, a tap jumps to it."
+        if followed:
+            jeli["note"] = "Followed the conversation: no need to call Jeli again."
+    else:
+        note = (
+            "Jeli stays silent: the group hasn't answered this before, and you are not in a conversation with it."
+            if not called
+            else "Jeli has nothing to say to this."
+        )
+        jeli = {"role": "system", "text": note, "at": _now().isoformat()}
+    store = getattr(state, "store", None)
+    if store:
+        await store.add_try(member, "member", text, {"called": called, "chat": chat})
+        await store.add_try(member, "jeli", jeli["text"], {k: v for k, v in jeli.items() if k not in ("role", "text", "at")} | {"system": jeli["role"] == "system"})
+    return JSONResponse({"jeli": jeli})
+
+
+@router.post("/dashboard/try/clear")
+async def try_clear(request: Request, member: Change) -> RedirectResponse:
+    store = getattr(_state(request), "store", None)
+    if store:
+        await store.clear_tries(member)
+    _state(request).responder.conversations.forget_member(member.capitalize())
+    return _done(request, "/dashboard/try", "New conversation started.")
 
 
 # --- Questions ------------------------------------------------------------------------------------
 
 
 @router.get("/dashboard/questions", response_class=HTMLResponse)
-async def questions_page(request: Request, member: Member, show: str = "all", days: int = 7) -> HTMLResponse:
+async def questions_page(request: Request, member: Member, show: str = "all", days: int = 7) -> Response:
+    if (unchanged := await _unchanged(request)) is not None:
+        return unchanged
     days = 30 if days == 30 else 7
     asked = await _store(request).questions_since(_now() - timedelta(days=days))
     unanswered = [q for q in asked if q[1] == "dont_know"]
@@ -517,7 +662,7 @@ async def questions_page(request: Request, member: Member, show: str = "all", da
     )
     if show == "unanswered":
         body = ui.notice("info", "These are Jeli's knowledge gaps: answer them in the group, or add the conversation or session that does on the Knowledge page.") + body
-    return _page(request, member, title="Questions", subtitle="What the community asks, and what Jeli couldn't answer", active="questions", body=body)
+    return _page(request, member, title="Questions", subtitle="What the community asks, and what Jeli couldn't answer", active="questions", body=body, live=True)
 
 
 @router.get("/dashboard/questions.csv")
@@ -541,7 +686,9 @@ async def questions_csv(request: Request, member: Member, days: int = 30) -> Res
 
 
 @router.get("/dashboard/deadlines", response_class=HTMLResponse)
-async def deadlines_page(request: Request, member: Member) -> HTMLResponse:
+async def deadlines_page(request: Request, member: Member) -> Response:
+    if (unchanged := await _unchanged(request)) is not None:
+        return unchanged
     today = _now().date()
     items = await _store(request).deadlines_between(today - timedelta(days=14), today + timedelta(days=180))
     labels, csrf = _labels(request), _csrf(request)
@@ -586,7 +733,7 @@ async def deadlines_page(request: Request, member: Member) -> HTMLResponse:
         + ui.card("Add a deadline", add, icon_name="plus", description="For a deadline announced elsewhere (e-mail, website).")
         + ui.card("Past two weeks", ui.table(["Due", "What", "Announced by", ""], rows(past), empty_text="Nothing in the past two weeks."), icon_name="clock")
     )
-    return _page(request, member, title="Deadlines", subtitle="What members must not miss", active="deadlines", body=body)
+    return _page(request, member, title="Deadlines", subtitle="What members must not miss", active="deadlines", body=body, live=True)
 
 
 @router.post("/dashboard/deadlines/add")
@@ -629,7 +776,9 @@ async def deadlines_remove(request: Request, member: Change) -> RedirectResponse
 
 
 @router.get("/dashboard/knowledge", response_class=HTMLResponse)
-async def knowledge_page(request: Request, member: Member, preview: str = "") -> HTMLResponse:
+async def knowledge_page(request: Request, member: Member, preview: str = "") -> Response:
+    if (unchanged := await _unchanged(request)) is not None:
+        return unchanged
     store = _store(request)
     overview = await store.knowledge_overview()
     labels, csrf = _labels(request), _csrf(request)
@@ -708,7 +857,7 @@ async def knowledge_page(request: Request, member: Member, preview: str = "") ->
         + ui.card("Conversations", ui.table(["Name shown in sources", "Messages", "Latest", ""], chat_rows, numeric={1}, empty_text="No conversation yet."), icon_name="chat", description="Rename a conversation to change how Jeli cites it.")
         + ui.card("Sessions", ui.table(["Session", "Date", "Length", "Summaries"], session_rows, empty_text="No session yet."), icon_name="book", description="Recorded calls Jeli can quote to the minute. New ones are added by the team's engineer for now.")
     )
-    return _page(request, member, title="Knowledge", subtitle="What Jeli remembers and can quote", active="knowledge", body=body)
+    return _page(request, member, title="Knowledge", subtitle="What Jeli remembers and can quote", active="knowledge", body=body, live=True)
 
 
 @router.post("/dashboard/knowledge/upload")
@@ -803,7 +952,9 @@ async def knowledge_rename(request: Request, member: Change) -> RedirectResponse
 
 
 @router.get("/dashboard/activities", response_class=HTMLResponse)
-async def activities_page(request: Request, member: Member) -> HTMLResponse:
+async def activities_page(request: Request, member: Member) -> Response:
+    if (unchanged := await _unchanged(request)) is not None:
+        return unchanged
     state, csrf = _state(request), _csrf(request)
     runtime = state.runtime
     items = []
@@ -860,7 +1011,7 @@ async def activities_page(request: Request, member: Member) -> HTMLResponse:
         icon_name="activity",
         description="What Jeli does on its own. Switch an activity off, run it now, or stop it while it runs.",
     ) + ui.notice("info", "Times are in GMT (Bamako, Dakar); the equivalents in the team's cities are shown next to them.")
-    return _page(request, member, title="Activities", subtitle="What Jeli does on its own, and when", active="activities", body=body, refresh=True)
+    return _page(request, member, title="Activities", subtitle="What Jeli does on its own, and when", active="activities", body=body, live=True)
 
 
 RUN_LABELS = {"daily_summary": "Post now", "team_report": "Send now"}
@@ -915,7 +1066,9 @@ async def activities_change(request: Request, member: Change) -> RedirectRespons
 
 
 @router.get("/dashboard/watchlist", response_class=HTMLResponse)
-async def watchlist_page(request: Request, member: Member) -> HTMLResponse:
+async def watchlist_page(request: Request, member: Member) -> Response:
+    if (unchanged := await _unchanged(request)) is not None:
+        return unchanged
     state, csrf = _state(request), _csrf(request)
     people = await _store(request).incidents_since(_now() - timedelta(days=WEEK))
     blocked = ignored_keys(state.runtime["muted_members"])
@@ -951,7 +1104,7 @@ async def watchlist_page(request: Request, member: Member) -> HTMLResponse:
         icon_name="shield",
         description="Members who tried to wear Jeli out or turn it against its rules, over the last 7 days.",
     ) + ui.card("How Jeli protects itself", how, icon_name="info")
-    return _page(request, member, title="Watchlist", subtitle="Spot and stop misuse", active="watch", body=body)
+    return _page(request, member, title="Watchlist", subtitle="Spot and stop misuse", active="watch", body=body, live=True)
 
 
 @router.post("/dashboard/watchlist")
@@ -1228,7 +1381,9 @@ async def whatsapp_restart(request: Request, member: Change) -> RedirectResponse
 
 
 @router.get("/dashboard/team", response_class=HTMLResponse)
-async def team_page(request: Request, member: Member) -> HTMLResponse:
+async def team_page(request: Request, member: Member) -> Response:
+    if (unchanged := await _unchanged(request)) is not None:
+        return unchanged
     state, csrf = _state(request), _csrf(request)
     auth = auth_of(request)
     members = "".join(
@@ -1258,7 +1413,7 @@ async def team_page(request: Request, member: Member) -> HTMLResponse:
     password_card = ui.card("My password", password, icon_name="key", description="At least 10 characters. Nobody else sees it, not even the team.")
     log_card = ui.card("Activity log", ui.table(["When", "Who", "What"], log_rows, empty_text="Nothing yet."), icon_name="list", description="Every change made on this dashboard, and by whom.")
     body = f'<div class="grid two">{members_card}{password_card}</div>{log_card}'
-    return _page(request, member, title="Team", subtitle="Who runs Jeli, and who did what", active="team", body=body)
+    return _page(request, member, title="Team", subtitle="Who runs Jeli, and who did what", active="team", body=body, live=True)
 
 
 @router.post("/dashboard/team/password")

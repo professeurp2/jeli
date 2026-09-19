@@ -67,13 +67,19 @@ In the group, Jeli reads everything but only replies when a message:
 
 In a direct message, it answers everything.
 
-**One exception (R7):** when a member asks *the group* a question that the group already answered — a reply to someone who asked before, or an announcement that states it — Jeli points to that answer, uninvited. Illustrative output (name made up):
-```
-💡 This was already answered in the group: submissions close on Thursday 24 September.
+**It follows the conversation:** after Jeli answers a member, their next messages in that chat are for Jeli for a few minutes (Settings → "Follow the conversation") when they read like a follow-up — *"and what do we submit?"*, *"send me the guide"* — without repeating "Jeli"; not when they reply to or mention someone else, and "thanks" closes the conversation. A follow-up is rewritten with the conversation before Jeli searches (*"and what do we submit?"* → *"what do we submit for the hackathon?"*).
 
-📌 Sources
-[1] METI cohort · 17 Sep 2026, 20:53 UTC · Awa T.
+**Sources, the WhatsApp way:** WhatsApp references a message by replying to it. When the source was said in the same chat (and Jeli received it live), Jeli **replies to that message** — WhatsApp quotes it above the answer and a tap jumps to it — and @mentions the member who asked. Otherwise (history imported from an export, another group, a session, a document) it **quotes** it with WhatsApp's quote block. Illustrative output (name made up):
 ```
+Submissions close on Thursday 24 September: a working chatbot, the code link and setup notes.
+
+> *Awa T.* · METI cohort, Thu 17 Sep
+> Build Phase: Friday 18 Sept to Thursday 24 Sept…
+```
+
+**Everyday messages** get a human reply without searching: greetings, thanks, *"who are you?"*, *"what can you do?"*; *"what happened today?"* is a catch-up. Measured before this change (19 Sep, production path): 19 of 22 real questions the group had answered got a correct, sourced answer, yet testers found Jeli "not intelligent" because these everyday messages got "I don't know". When the model finds no answer but the group discussed something close, Jeli shows the closest discussions instead of a flat "I don't know". A question is searched with several wordings when helpful (English and the member's language), and a French question is answered from English messages.
+
+**One exception (R7):** when a member asks *the group* a question that the group already answered — a reply to someone who asked before, or an announcement that states it — Jeli points to that answer, uninvited, replying to it when it can.
 It speaks up only when sure: the question must look like one, be very close to an indexed conversation (`DUPLICATE_MIN_SIMILARITY`, 0.70), and the model must confirm that an excerpt answers *this* question — same topic is not enough, and a question left unanswered stays unanswered. At most `DUPLICATE_REPLIES_PER_HOUR` (3) such replies per group; `DUPLICATE_DETECTION=false` turns it off.
 
 **Session recaps (R9):** `/recap` lists the recorded sessions; `/recap 2`, *"summary of the coaching session"* or *"de quoi a-t-on parlé pendant la session d'accueil ?"* give that session's summary, decisions, action items (owner, due date) and key moments, each with a link to that second of the video. A recap is written once from the whole transcript (one model call) and stored per language: English at import, French on first request — then it answers instantly.
@@ -88,9 +94,9 @@ It speaks up only when sure: the question must look like one, be very close to a
 
 | Page | What the team does there |
 |---|---|
-| Overview | Jeli's state, what needs attention, questions per day, coming deadlines, activities |
+| Overview | **Live**: Jeli's state, today's activity, the live feed of exchanges (groups, private, tries), what needs attention, questions per day, coming deadlines, activities. Pages update by themselves within seconds when something changes |
 | **Pause Jeli** (every page) | One click: Jeli answers nobody and posts nothing, but keeps remembering the groups |
-| Try Jeli | Ask as a member would (questions, `/catchup`, `/recap`, `/deadlines`, `/search`), or say something in a "group" to see whether Jeli would step in. Nothing reaches WhatsApp; works while paused |
+| Try Jeli | Talk to Jeli as a member would, in the group of your choice or in private, shown exactly as on WhatsApp (bubbles, quoted message, formatting). Each member's conversation is kept. Nothing reaches WhatsApp; works while paused |
 | Questions | What the groups asked and what Jeli couldn't answer (7 or 30 days), copy or download — for the FAQ, the pitch, the next features |
 | Deadlines | Remove a wrong one (it is never found again), add one announced elsewhere |
 | Knowledge | Add old conversations from WhatsApp's "Export chat" (.txt or .zip): a summary to check first, then Jeli learns them; rename how a conversation is cited |
@@ -366,7 +372,7 @@ Run **exactly one replica of WAHA**: two instances of the same WhatsApp session 
 | `DAILY_DIGEST_LANGUAGE` | no | `en` or `fr`. Default `en` |
 | `CHAT_LABELS` | no | Readable chat names in sources: `chat-id=Name;other-id=Other name` |
 | `EXPORT_TIMEZONE` | no | Default timezone of imported exports. Default `UTC` |
-| `INDEX_INTERVAL_SECONDS` | no | How often live messages are indexed. Default 300 |
+| `INDEX_INTERVAL_SECONDS` | no | How often live messages are indexed (once quiet for 3 minutes). Default 120 |
 | `LOG_LEVEL` | no | Default `INFO` |
 
 <details>

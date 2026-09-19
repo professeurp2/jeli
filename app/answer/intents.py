@@ -13,8 +13,13 @@ URL = re.compile(r"https?://\S+")
 # /recap is a session recap (R9), not a catch-up.
 CATCHUP_COMMAND = re.compile(r"^/(catchup|catch-up|rattrapage)\b", re.IGNORECASE)
 CATCHUP_PHRASE = re.compile(
-    r"what (did|have) i miss(ed)?|catch me up|fill me in|what('s| has| is) new|quoi de neuf"
-    r"|qu.est.ce que j.ai (raté|manqué|loupé)|j.ai (raté|manqué|loupé) quoi|ce que j.ai (raté|manqué|loupé)",
+    r"what (did|have) i miss(ed)?|catch me up|fill me in|what('s| has| is) new|quoi de neuf|quoi de nouveau"
+    r"|what (happened|has happened|went on|'s been happening|is going on|'s going on)"
+    r" (today|yesterday|this week|lately|recently|here|in (the|this|our) (group|chat))"
+    r"|any news (today|in the group)|what did (they|people|the group) (say|discuss) (today|yesterday|this week)"
+    r"|qu.est.ce que j.ai (raté|manqué|loupé)|j.ai (raté|manqué|loupé) quoi|ce que j.ai (raté|manqué|loupé)"
+    r"|qu.est.ce qui s.est passé (aujourd.hui|hier|cette semaine|dans le groupe|ici)|que s.est.il passé"
+    r"|résume(-moi)? (la journée|aujourd.hui|les échanges|le groupe|la discussion)",
     re.IGNORECASE,
 )
 RECAP_WORD = re.compile(r"\b(recap|summary|summari[sz]e|digest|résumé|résume|récap|synthèse)\b", re.IGNORECASE)

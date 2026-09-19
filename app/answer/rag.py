@@ -1,46 +1,58 @@
 """Grounded answers (R4) that say "I don't know" rather than invent (R6).
 
-1. Retrieve the conversation chunks closest to the question (hybrid search).
+1. Retrieve the conversation chunks closest to the question — searched with each of its queries
+   (the question, its standalone rewording, English and member-language search queries), merged.
 2. If even the best one is not similar enough, answer "I don't know" without calling the model.
 3. Otherwise give the model the chunks, rebuilt from their messages (minus ignored authors such as
    other bots, with phone numbers masked), and ask for an answer that cites them.
-4. Keep only answers that cite at least one real excerpt; show those as sources.
-5. If every model is down or out of quota, still point to where the group talked about it.
+4. Keep only answers that cite at least one real excerpt, and point to the source the WhatsApp way:
+   reply to the source message itself when it was said in this chat (WhatsApp quotes it above the
+   answer; a tap jumps to it), otherwise quote it (a "> " block with its author and day).
+5. If every model is down or out of quota, still quote where the group talked about it.
 
-Call recordings are searched like conversations; their excerpts are timestamped within the call,
-and their sources link to the exact moment when the recording is on YouTube.
+Call recordings and documents are searched like conversations; their quotes give the moment in the
+call (with a link that plays from there) or the page of the document.
 """
 
+import asyncio
 import logging
+import re
+import time
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import datetime
 
-from app.answer.citations import (
-    display_author,
-    format_recording_source,
-    format_source,
-    format_time,
-    ignored_keys,
-    is_ignored,
-)
-from app.answer.language import TEXTS, detect_language
 from pydantic import BaseModel
 
+from app.answer.citations import (
+    author_key,
+    display_author,
+    ignored_keys,
+    is_ignored,
+    mention_tag,
+    quote,
+    recording_quote,
+    short_day,
+    snippet,
+)
+from app.answer.language import TEXTS, detect_language
 from app.answer.llm import LLM, LLMUnavailable
 from app.answer.prompts import DUPLICATE_SYSTEM, SYSTEM, build_prompt
 from app.ingest.transcribe import format_offset
 from app.kb.embeddings import Embedder
-from app.kb.indexer import RECORDING_PREFIX
+from app.kb.indexer import DOCUMENT_PREFIX, RECORDING_PREFIX, document_page
 from app.kb.search import GUARANTEED_SEMANTIC, search
-from app.kb.store import Store
-from app.models import IncomingMessage, Recording, StoredMessage
+from app.kb.store import SearchHit, Store
+from app.models import Document, IncomingMessage, Recording, Reply, StoredMessage
 
 log = logging.getLogger(__name__)
 
 RETRIEVED_CHUNKS = 6  # excerpts given to the model
 CANDIDATE_CHUNKS = 12  # retrieved, before leaving out ignored authors
-SOURCES_SHOWN = 3
-FALLBACK_SNIPPET_CHARS = 160
+QUOTES_SHOWN = 2
+# The model found nothing, yet the group discussed something this close: show it rather than a
+# flat "I don't know".
+NEAR_SIMILARITY = 0.68
+NAMES_TTL_SECONDS = 600
 
 
 class AlreadyAnswered(BaseModel):
@@ -49,32 +61,78 @@ class AlreadyAnswered(BaseModel):
     sources: list[int]
 
 
+def _words(text: str) -> set[str]:
+    return {w for w in re.findall(r"\w+", text.lower()) if len(w) > 3}
+
+
 @dataclass(frozen=True)
 class Excerpt:
-    number: int  # chronological: how the model and the member see it
+    number: int  # chronological: how the model sees it
     relevance_rank: int  # 0 = closest to the question
+    chat_id: str
     chat_label: str
     started_at: datetime
-    authors: list[str]
-    lines: list[str]  # "Author: text" (phone numbers masked), or "[12:34] Speaker: text" for recordings
+    messages: tuple[StoredMessage, ...]
+    names: dict  # phone number digits → WhatsApp name
     recording: Recording | None = None
+    document: Document | None = None
 
     @property
-    def offset(self) -> timedelta:
-        return self.started_at - self.recording.recorded_at if self.recording else timedelta()
+    def authors(self) -> list[str]:
+        return list(dict.fromkeys(m.author for m in self.messages))
+
+    def name(self, message: StoredMessage) -> str:
+        return self.names.get(author_key(message.author)) or display_author(message.author)
+
+    def _line(self, message: StoredMessage) -> str:
+        if self.recording:
+            return f"[{format_offset(message.sent_at - self.recording.recorded_at)}] {message.author}: {message.text}"
+        if self.document:
+            return f"[page {document_page(message.sent_at, self.document.shared_at)}] {message.text}"
+        return f"{self.name(message)}: {message.text}"
+
+    @property
+    def lines(self) -> list[str]:
+        return [self._line(m) for m in self.messages]
 
     def for_prompt(self) -> str:
         if self.recording:
-            day = f"{self.recording.recorded_at.astimezone(timezone.utc):%d %B %Y}"
-            header = f"[{self.number}] Call recording «{self.recording.title}» ({day}), from {format_offset(self.offset)}"
+            day = f"{self.recording.recorded_at:%d %B %Y}"
+            header = f"[{self.number}] Call recording «{self.recording.title}» ({day})"
+        elif self.document:
+            header = f"[{self.number}] Document «{self.document.title}», shared by {display_author(self.document.shared_by)}"
         else:
-            header = f"[{self.number}] {self.chat_label} · {format_time(self.started_at)}"
+            header = f"[{self.number}] {self.chat_label} · {self.started_at:%d %B %Y}"
         return header + "\n" + "\n".join(self.lines)
 
-    def source(self) -> str:
+    def best_message(self, words: set[str]) -> StoredMessage:
+        """The message that says what the answer says: most words in common."""
+        return max(self.messages, key=lambda m: len(words & _words(m.text)))
+
+    def quote(self, words: set[str]) -> str:
+        message = self.best_message(words)
         if self.recording:
-            return format_recording_source(self.number, self.recording, self.offset, self.authors)
-        return format_source(self.number, self.chat_label, self.started_at, self.authors)
+            return recording_quote(self.recording, message.sent_at - self.recording.recorded_at, message.author, message.text)
+        if self.document:
+            page = document_page(message.sent_at, self.document.shared_at)
+            return quote(f"📄 *{self.document.title}*, page {page}", snippet(message.text))
+        return quote(f"*{self.name(message)}* · {self.chat_label}, {short_day(message.sent_at)}", snippet(message.text))
+
+
+def merge(results: list[list[SearchHit]], limit: int) -> list[SearchHit]:
+    """Hits of several queries in one list: a chunk found by several queries ranks higher (fused
+    ranks), and keeps its best similarity."""
+    scores: dict[int, float] = {}
+    best: dict[int, SearchHit] = {}
+    for hits in results:
+        for rank, hit in enumerate(hits):
+            scores[hit.chunk_id] = scores.get(hit.chunk_id, 0) + 1 / (60 + rank)
+            if hit.chunk_id not in best or hit.similarity > best[hit.chunk_id].similarity:
+                best[hit.chunk_id] = hit
+    ordered = sorted(best.values(), key=lambda hit: scores[hit.chunk_id], reverse=True)
+    closest = sorted(ordered, key=lambda hit: hit.similarity, reverse=True)[:GUARANTEED_SEMANTIC]
+    chosen = (closest + [hit for hit in ordered if hit not in closest])[:limit]
+    return [hit for hit in ordered if hit in chosen]
 
 
 class Answerer:
@@ -93,11 +151,24 @@ class Answerer:
         self.min_similarity = min_similarity
         self.ignored = ignored_keys(ignored_authors)
         self.chat_labels = chat_labels or {}
+        self._names: tuple[float, dict[str, str]] | None = None
 
-    async def answer(self, question: str, asker: str) -> str:
+    async def _search(self, queries: list[str]) -> list[SearchHit]:
+        queries = list(dict.fromkeys(q for q in queries if q.strip()))[:4]
+        results = await asyncio.gather(*(search(self.store, self.embedder, q, limit=CANDIDATE_CHUNKS) for q in queries))
+        return merge(list(results), CANDIDATE_CHUNKS)
+
+    async def answer(
+        self,
+        question: str,
+        asker: str,
+        chat_id: str | None = None,
+        asker_id: str | None = None,
+        queries: list[str] = (),
+    ) -> str:
         language = detect_language(question)
         texts = TEXTS[language]
-        hits = await search(self.store, self.embedder, question, limit=CANDIDATE_CHUNKS)
+        hits = await self._search([question, *queries])
         if not hits or max(hit.similarity for hit in hits) < self.min_similarity:
             return texts["dont_know"]
 
@@ -109,15 +180,19 @@ class Answerer:
         try:
             generated = await self.llm.answer(SYSTEM, prompt)
         except LLMUnavailable:
-            log.error("No answer model available: sending the closest sources instead")
-            return self._fallback(texts, excerpts)
+            log.error("No answer model available: quoting the closest sources instead")
+            return self._quotes(texts["fallback"], excerpts, question)
 
         cited = [e for e in excerpts if e.number in set(generated.sources)]
         if not generated.answered or not cited or not generated.answer.strip():
+            if max(hit.similarity for hit in hits) >= NEAR_SIMILARITY:
+                return self._quotes(texts["dont_know_near"], excerpts, question)
             return texts["dont_know"]
-        return self._with_sources(generated.answer, cited, texts)
+        return self._reply(generated.answer.strip(), cited, chat_id, asker_id)
 
-    async def already_answered(self, question: str, min_similarity: float) -> str | None:
+    async def already_answered(
+        self, question: str, min_similarity: float, chat_id: str | None = None, asker_id: str | None = None
+    ) -> str | None:
         """For a question asked in the group (not to Jeli): the group's earlier answer, or None.
 
         Jeli speaks uninvited only when sure: a stricter similarity gate, a model asked to confirm
@@ -138,16 +213,44 @@ class Answerer:
         cited = [e for e in excerpts if e.number in set(generated.sources)]
         if not generated.already_answered or not cited or not generated.answer.strip():
             return None
-        texts = TEXTS[language]
-        return self._with_sources(f"{texts['already_covered']}\n{generated.answer.strip()}", cited, texts)
+        return self._reply(generated.answer.strip(), cited, chat_id, asker_id, lead=TEXTS[language]["already_covered"] + " ")
 
     def is_ignored(self, message: StoredMessage | IncomingMessage) -> bool:
         return is_ignored(message, self.ignored)
 
-    @staticmethod
-    def _with_sources(answer: str, cited: list[Excerpt], texts: dict[str, str]) -> str:
-        sources = "\n".join(e.source() for e in cited[:SOURCES_SHOWN])
-        return f"{answer.strip()}\n\n📌 {texts['sources']}\n{sources}"
+    def _reply(self, answer: str, cited: list[Excerpt], chat_id: str | None, asker_id: str | None, lead: str = "") -> Reply:
+        """The answer with its sources, as WhatsApp does it."""
+        words = _words(answer)
+        ordered = sorted(cited, key=lambda e: e.relevance_rank)
+        first = ordered[0]
+        source = first.best_message(words)
+        if chat_id and source.chat_id == chat_id and source.source == "whatsapp_live":
+            # Said in this very chat: reply to that message, which WhatsApp quotes above the answer
+            # (a tap jumps to it), and mention the member who asked so they get it.
+            mention = f"{mention_tag(asker_id)} " if asker_id and "@" in asker_id else ""
+            others = [e.quote(words) for e in ordered[1:QUOTES_SHOWN]]
+            text = mention + lead + answer + "".join(f"\n\n{q}" for q in others)
+            return Reply(
+                text,
+                reply_to=source.id,
+                quoted=(first.name(source), source.text),
+                mentions=[asker_id] if mention else [],
+            )
+        quotes = [e.quote(words) for e in ordered[:QUOTES_SHOWN]]
+        return Reply(lead + answer + "".join(f"\n\n{q}" for q in quotes))
+
+    def _quotes(self, header: str, excerpts: list[Excerpt], question: str, shown: int = QUOTES_SHOWN) -> str:
+        words = _words(question)
+        best = sorted(excerpts, key=lambda e: e.relevance_rank)[:shown]
+        return header + "".join(f"\n\n{e.quote(words)}" for e in best)
+
+    async def _member_names(self) -> dict[str, str]:
+        if self._names and time.monotonic() - self._names[0] < NAMES_TTL_SECONDS:
+            return self._names[1]
+        lookup = getattr(self.store, "member_names", None)
+        names = await lookup() if lookup else {}
+        self._names = (time.monotonic(), names)
+        return names
 
     async def _excerpts(self, hits, keep: int = RETRIEVED_CHUNKS) -> list[Excerpt]:
         """Rebuild the best `keep` chunks from their messages, without ignored authors, oldest first.
@@ -159,6 +262,9 @@ class Answerer:
         recordings = await self.store.recordings(
             sorted({hit.chat_id for hit in hits if hit.chat_id.startswith(RECORDING_PREFIX)})
         )
+        document_ids = sorted({hit.chat_id for hit in hits if hit.chat_id.startswith(DOCUMENT_PREFIX)})
+        documents = await self.store.documents(document_ids) if document_ids else {}
+        names = await self._member_names()
         by_id = {m.id: m for m in messages}
         usable = []  # (fused rank, hit, messages kept), in fused order
         for position, hit in enumerate(hits):
@@ -171,39 +277,29 @@ class Answerer:
 
         excerpts = []
         for position, hit, kept in sorted(chosen, key=lambda item: item[1].started_at):
-            recording = recordings.get(hit.chat_id)
-            if recording:
-                lines = [f"[{format_offset(m.sent_at - recording.recorded_at)}] {m.author}: {m.text}" for m in kept]
-            else:
-                lines = [f"{display_author(m.author)}: {m.text}" for m in kept]
+            document = documents.get(hit.chat_id)
             excerpts.append(
                 Excerpt(
                     number=len(excerpts) + 1,
                     relevance_rank=position,
-                    chat_label=self.chat_labels.get(hit.chat_id, hit.chat_id),
+                    chat_id=hit.chat_id,
+                    chat_label=document.title if document else self.chat_labels.get(hit.chat_id, hit.chat_id),
                     started_at=kept[0].sent_at,
-                    authors=list(dict.fromkeys(m.author for m in kept)),
-                    lines=lines,
-                    recording=recording,
+                    messages=tuple(kept),
+                    names=names,
+                    recording=recordings.get(hit.chat_id),
+                    document=document,
                 )
             )
         return excerpts
 
     async def where_discussed(self, topic: str) -> str:
-        """R11, /search: where the group talked about a topic — sources and snippets, no model call,
-        so it keeps working when every model is out of quota."""
+        """R11, /search: where the group talked about a topic — quotes, no model call, so it keeps
+        working when every model is out of quota."""
         texts = TEXTS[detect_language(topic)]
         hits = await search(self.store, self.embedder, topic, limit=CANDIDATE_CHUNKS)
         if not hits or max(hit.similarity for hit in hits) < self.min_similarity:
             return texts["search_nothing"]
         excerpts = await self._excerpts(hits)
-        return self._fallback(texts, excerpts, header="search_header") if excerpts else texts["search_nothing"]
+        return self._quotes(texts["search_header"], excerpts, topic, shown=3) if excerpts else texts["search_nothing"]
 
-    def _fallback(self, texts: dict[str, str], excerpts: list[Excerpt], header: str = "fallback") -> str:
-        lines = []
-        for excerpt in sorted(excerpts, key=lambda e: e.relevance_rank)[:SOURCES_SHOWN]:
-            snippet = excerpt.lines[0]
-            if len(snippet) > FALLBACK_SNIPPET_CHARS:
-                snippet = snippet[:FALLBACK_SNIPPET_CHARS].rsplit(" ", 1)[0] + " …"
-            lines.append(f"{excerpt.source()}\n   « {snippet} »")
-        return f"{texts[header]}\n\n" + "\n".join(lines)

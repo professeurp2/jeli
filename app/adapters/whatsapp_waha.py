@@ -10,6 +10,7 @@ Jeli therefore never starts a conversation, only answers when addressed, and pac
 """
 
 import asyncio
+import dataclasses
 import hashlib
 import hmac
 import json
@@ -103,9 +104,13 @@ def parse_message(event: dict, bot_name: str) -> IncomingMessage | None:
     bot_ids = {user_part(me.get("id")), user_part(me.get("lid"))} - {""}
     is_private = not chat_id.endswith("@g.us")
 
-    mentioned = bool(bot_ids & (_mentioned_ids(payload.get("_data")) | set(TEXT_MENTION.findall(text))))
+    mentions = _mentioned_ids(payload.get("_data")) | set(TEXT_MENTION.findall(text))
+    mentioned = bool(bot_ids & mentions)
     reply_to = payload.get("replyTo") or {}
     replied_to_bot = user_part(reply_to.get("participant")) in bot_ids
+    # A reply to, or a mention of, another member: not for Jeli, even in a conversation with it.
+    replied_to_other = bool(reply_to.get("participant")) and not replied_to_bot
+    talks_to_someone_else = replied_to_other or bool(mentions - bot_ids)
     named = re.match(rf"\s*{re.escape(bot_name)}\b[\s,:!?.-]*", text, flags=re.IGNORECASE) if bot_name else None
     command = text.startswith("/")
 
@@ -124,6 +129,7 @@ def parse_message(event: dict, bot_name: str) -> IncomingMessage | None:
         sent_at=datetime.fromtimestamp(int(float(payload["timestamp"])), tz=timezone.utc),
         is_private=is_private,
         addressed_to_bot=is_private or mentioned or replied_to_bot or bool(named) or command,
+        talks_to_someone_else=talks_to_someone_else,
     )
 
 
@@ -153,6 +159,8 @@ class Waha:
         self.suspended = False
         # Spots and silences members who misuse Jeli (floods, repeats, manipulation attempts).
         self.guard: Guard | None = None
+        # Whether a group message continues a conversation with Jeli (set by the responder).
+        self.follow_up = None
 
     def accepts(self, message: IncomingMessage) -> bool:
         """Direct messages are always accepted; groups only if listed in WHATSAPP_GROUP_IDS (when set)."""
@@ -234,15 +242,29 @@ class Waha:
         except httpx.HTTPError:
             log.warning("WAHA %s failed, continuing", path)
 
-    async def send_text(self, chat_id: str, text: str, reply_to: str | None = None) -> None:
+    async def send_text(self, chat_id: str, text: str, reply_to: str | None = None, mentions: list[str] = ()) -> None:
         payload = {"chatId": chat_id, "text": text, "linkPreview": False}
         if reply_to:
             payload["reply_to"] = reply_to
+        if mentions:
+            payload["mentions"] = list(mentions)
         await self._post("/api/sendText", payload)
+
+    async def send_reply(self, message: IncomingMessage, reply: str) -> None:
+        """Jeli's reply, as WhatsApp shows it: quoting the member's message, or the source message
+        itself (WhatsApp's own reference), with its mentions."""
+        await self.send_text(
+            message.chat_id,
+            reply,
+            reply_to=getattr(reply, "reply_to", None) or message.message_id,
+            mentions=getattr(reply, "mentions", ()),
+        )
 
     async def handle(self, message: IncomingMessage) -> None:
         if self.suspended:
             return  # the message is still remembered (ingested separately)
+        if not message.addressed_to_bot and self.follow_up and self.follow_up(message):
+            message = dataclasses.replace(message, addressed_to_bot=True)
         try:
             if message.addressed_to_bot:
                 await self._converse(message)
@@ -270,7 +292,7 @@ class Waha:
         finally:
             await self._post_quietly("/api/stopTyping", chat)
         if reply:
-            await self.send_text(message.chat_id, reply, reply_to=message.message_id)
+            await self.send_reply(message, reply)
 
     async def _step_in_if_needed(self, message: IncomingMessage) -> None:
         """A message not addressed to Jeli: it speaks only when the responder finds that the group
@@ -286,7 +308,7 @@ class Waha:
             await self.spacer.wait_turn()
         finally:
             await self._post_quietly("/api/stopTyping", chat)
-        await self.send_text(message.chat_id, reply, reply_to=message.message_id)
+        await self.send_reply(message, reply)
 
     async def post(self, chat_id: str, text: str) -> bool:
         """A message Jeli sends on its own schedule (daily digest, weekly report), within the same limits.

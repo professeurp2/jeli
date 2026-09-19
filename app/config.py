@@ -67,7 +67,7 @@ class Settings(BaseSettings):
     # WhatsApp exports carry local times without a timezone: the exporting phone's zone.
     export_timezone: str = "UTC"
     # How often live messages are chunked and embedded.
-    index_interval_seconds: int = 300
+    index_interval_seconds: int = 120
     log_level: str = "INFO"
 
     @property

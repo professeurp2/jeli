@@ -42,16 +42,25 @@ def is_ignored(message, keys: set[str]) -> bool:
     return bool(candidates & keys)
 
 
-def format_time(moment: datetime) -> str:
-    return f"{moment.astimezone(timezone.utc):%d %b %Y, %H:%M} UTC"
+def short_day(moment: datetime) -> str:
+    """"Thu 17 Sep": the day, as members read it; no time zone to decode."""
+    return f"{moment.astimezone(timezone.utc):%a %d %b}"
 
 
-def _authors(authors: list[str]) -> str:
-    return ", ".join(display_author(a) for a in authors[:2]) + (" …" if len(authors) > 2 else "")
+def snippet(text: str, limit: int = 180) -> str:
+    """One line of a message, cut at a word."""
+    line = " ".join(text.split())
+    return line if len(line) <= limit else line[:limit].rsplit(" ", 1)[0] + " …"
 
 
-def format_source(number: int, chat_label: str, started_at: datetime, authors: list[str]) -> str:
-    return f"[{number}] {chat_label} · {format_time(started_at)} · {_authors(authors)}"
+def quote(header: str, *lines: str) -> str:
+    """WhatsApp's own way to cite text that cannot be replied to: a quote block ("> " lines)."""
+    return "\n".join(f"> {line}" for line in (header, *lines) if line)
+
+
+def mention_tag(member_id: str) -> str:
+    """"@2348012345678": what a WhatsApp message carries to mention a member (shown as @Name)."""
+    return "@" + member_id.split("@", 1)[0].split(":", 1)[0]
 
 
 def timestamped_link(url: str | None, offset: timedelta) -> str | None:
@@ -63,10 +72,8 @@ def timestamped_link(url: str | None, offset: timedelta) -> str | None:
     return urlunsplit((parts.scheme, parts.netloc, parts.path, urlencode(query), ""))
 
 
-def format_recording_source(number: int, recording: Recording, offset: timedelta, authors: list[str]) -> str:
-    source = (
-        f"[{number}] 🎥 {recording.title} · {recording.recorded_at.astimezone(timezone.utc):%d %b %Y} · "
-        f"at {format_offset(offset)} · {_authors(authors)}"
-    )
-    link = timestamped_link(recording.source_url, offset)
-    return f"{source}\n    {link}" if link else source
+def recording_quote(recording: Recording, offset: timedelta, speaker: str, text: str) -> str:
+    """A moment of a call: its title, day and time within the call, what was said, and the link
+    that starts playing there."""
+    header = f"🎥 *{recording.title}* · {short_day(recording.recorded_at)}, at {format_offset(offset)}"
+    return quote(header, f"{speaker}: {snippet(text)}" if speaker else snippet(text), timestamped_link(recording.source_url, offset) or "")

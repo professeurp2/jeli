@@ -4,14 +4,17 @@ import logging
 import re
 import time
 from collections.abc import Awaitable, Callable
+from datetime import datetime, timezone
 
 from app.adapters.pacing import SlidingWindowLimiter
 from app.answer.catchup import Catchup
+from app.answer.conversation import Conversations
 from app.answer.deadlines import Deadlines
-from app.answer.intents import catchup_since, is_deadlines_request, is_recap_request, looks_like_question
+from app.answer.intents import catchup_since, is_deadlines_request, is_recap_request, looks_like_question, parse_since
 from app.answer.language import TEXTS, detect_language
 from app.answer.rag import Answerer
 from app.answer.recaps import Recaps
+from app.answer.understand import Understander
 from app.models import IncomingMessage, UsageEvent
 
 log = logging.getLogger(__name__)
@@ -36,7 +39,7 @@ def _outcome(kind: str, reply: str, language: str) -> str:
     texts = TEXTS[language]
     if reply == texts["not_ready"]:
         return "not_ready"
-    if reply == texts["dont_know"]:
+    if reply == texts["dont_know"] or reply.startswith(texts["dont_know_near"]):
         return "dont_know"
     if reply.startswith(texts["fallback"]):
         return "sources_only"
@@ -54,7 +57,13 @@ class Responder:
         recaps: Recaps | None = None,
         deadlines: Deadlines | None = None,
         record: Callable[[UsageEvent], Awaitable[None]] | None = None,
+        understander: Understander | None = None,
+        conversations: Conversations | None = None,
     ):
+        # Reads each message with the conversation so far (small talk, follow-ups, search queries).
+        self.understander = understander or Understander(None)
+        # What each member and Jeli just said to each other, to follow the thread.
+        self.conversations = conversations or Conversations()
         # Usage counters for the dashboard (Store.record_event); never authors, and no text
         # but the questions asked in groups.
         self.record = record
@@ -72,17 +81,21 @@ class Responder:
         started = time.monotonic()
         language = detect_language(message.text)
         if message.addressed_to_bot:
-            reply, kind = await self._route(message.text.strip(), message.author, language)
+            reply, kind = await self._route(message, language)
+            if reply:
+                self.conversations.note(message, reply)
         else:
             reply, kind = await self._already_answered(message), "already_answered"
-        if reply and self.record and message.platform != "dashboard":  # tries from the dashboard are not usage
+        if reply and self.record:
             event = UsageEvent(
                 kind=kind,
                 outcome=_outcome(kind, reply, language),
                 language=language,
                 is_private=message.is_private,
                 latency_ms=int((time.monotonic() - started) * 1000),
-                question=shareable_question(message.text) if kind == "question" and not message.is_private else "",
+                question="" if message.is_private else shareable_question(message.text),
+                channel=message.platform,
+                chat_id="" if message.is_private else message.chat_id,
             )
             try:
                 await self.record(event)
@@ -90,8 +103,13 @@ class Responder:
                 log.exception("Could not record a usage event")  # counting must never cost a reply
         return reply
 
-    async def _route(self, text: str, asker: str, language: str) -> tuple[str, str]:
+    def is_follow_up(self, message: IncomingMessage) -> bool:
+        """A group message not addressed to Jeli, but continuing a conversation with it."""
+        return self.conversations.is_follow_up(message)
+
+    async def _route(self, message: IncomingMessage, language: str) -> tuple[str, str]:
         texts = TEXTS[language]
+        text = message.text.strip()
         if not text or text.lower() in HELP_COMMANDS:
             return texts["help"], "help"
         since = catchup_since(text)
@@ -111,9 +129,20 @@ class Responder:
             return (await self.answerer.where_discussed(topic) if self.answerer else texts["not_ready"]), "search"
         if text.startswith("/"):
             return texts["help"], "help"
+        understood = await self.understander.understand(text, language, self.conversations.history(message))
+        if understood.kind in ("social", "about_jeli"):
+            return understood.reply, "social"
+        if understood.kind == "catchup" and self.catchup:
+            return await self.catchup.summarize(parse_since(text, datetime.now(timezone.utc)), language), "catchup"
+        question = understood.standalone
+        if question != text and is_deadlines_request(question) and self.deadlines:
+            return await self.deadlines.upcoming_reply(language), "deadlines"  # "and the deadlines?"
         if self.answerer is None:
             return texts["not_ready"], "question"
-        return await self.answerer.answer(text, asker=asker), "question"
+        answer = await self.answerer.answer(
+            question, asker=message.author, chat_id=message.chat_id, asker_id=message.author_id, queries=understood.queries
+        )
+        return answer, "question"
 
     async def _already_answered(self, message: IncomingMessage) -> str | None:
         """R7: a question asked in the group that the group already answered gets a pointer to it."""
@@ -125,7 +154,9 @@ class Responder:
             or self.answerer.is_ignored(message)
         ):
             return None
-        reply = await self.answerer.already_answered(message.text, self.duplicate_min_similarity)
+        reply = await self.answerer.already_answered(
+            message.text, self.duplicate_min_similarity, chat_id=message.chat_id, asker_id=message.author_id
+        )
         if reply and not self.uninvited.allow(message.chat_id):
             log.info("Already-answered question in %s, but the hourly cap on uninvited replies is reached", message.chat_id)
             return None

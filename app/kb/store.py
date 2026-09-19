@@ -10,7 +10,7 @@ from psycopg.types.json import Jsonb
 from psycopg_pool import AsyncConnectionPool, PoolTimeout
 
 from app.ingest.chunker import Chunk
-from app.models import Deadline, Recording, StoredMessage, UsageEvent
+from app.models import Deadline, Document, Recording, StoredMessage, UsageEvent
 
 log = logging.getLogger(__name__)
 
@@ -153,6 +153,79 @@ class Store:
                 (language, Jsonb(recap), recording_id),
             )
 
+    # --- Documents ------------------------------------------------------------------------------
+
+    DOCUMENT_COLUMNS = "id, title, filename, mimetype, size_bytes, pages, language, shared_by, shared_at, chat_id, translation_of"
+
+    async def save_document(self, document: Document, content: bytes) -> bool:
+        """Keep a document's file; False if the same document is already kept."""
+        async with self._pool.connection() as conn:
+            cursor = await conn.execute(
+                "insert into jeli.documents (id, title, filename, mimetype, size_bytes, pages, language, shared_by, "
+                "shared_at, chat_id, translation_of, content) values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s) "
+                "on conflict (id) do nothing",
+                (
+                    document.id, document.title, document.filename, document.mimetype, document.size_bytes,
+                    document.pages, document.language, document.shared_by, document.shared_at, document.chat_id,
+                    document.translation_of, content,
+                ),
+            )
+        return cursor.rowcount == 1
+
+    async def member_names(self) -> dict[str, str]:
+        """Phone number (digits) → the name members see on WhatsApp, learned from live messages:
+        exports name unsaved members by their number."""
+        async with self._pool.connection() as conn:
+            rows = await (
+                await conn.execute(
+                    "select distinct on (number) number, author from ("
+                    "select split_part(author_id, '@', 1) as number, author, sent_at from jeli.messages "
+                    "where source = 'whatsapp_live' and author_id like '%%@c.us') as live order by number, sent_at desc"
+                )
+            ).fetchall()
+        return {row["number"]: row["author"] for row in rows if row["author"] and row["author"] != "Someone"}
+
+    async def documents(self, ids: Sequence[str]) -> dict[str, Document]:
+        if not ids:
+            return {}
+        async with self._pool.connection() as conn:
+            rows = await (
+                await conn.execute(f"select {self.DOCUMENT_COLUMNS} from jeli.documents where id = any(%s)", (list(ids),))
+            ).fetchall()
+        return {row["id"]: Document(**row) for row in rows}
+
+    async def list_documents(self) -> list[Document]:
+        """The documents Jeli keeps (not the translations it made), newest first."""
+        async with self._pool.connection() as conn:
+            rows = await (
+                await conn.execute(
+                    f"select {self.DOCUMENT_COLUMNS} from jeli.documents where translation_of is null order by shared_at desc"
+                )
+            ).fetchall()
+        return [Document(**row) for row in rows]
+
+    async def document_content(self, document_id: str) -> bytes | None:
+        async with self._pool.connection() as conn:
+            row = await (await conn.execute("select content from jeli.documents where id = %s", (document_id,))).fetchone()
+        return bytes(row["content"]) if row else None
+
+    async def translation(self, document_id: str, language: str) -> Document | None:
+        async with self._pool.connection() as conn:
+            row = await (
+                await conn.execute(
+                    f"select {self.DOCUMENT_COLUMNS} from jeli.documents where translation_of = %s and language = %s",
+                    (document_id, language),
+                )
+            ).fetchone()
+        return Document(**row) if row else None
+
+    async def remove_document(self, document_id: str) -> None:
+        """Forget a document: its file, its translations, and its text in the knowledge base."""
+        async with self._pool.connection() as conn, conn.transaction():
+            await conn.execute("delete from jeli.messages where chat_id = %s", (document_id,))
+            await conn.execute("delete from jeli.chunks where chat_id = %s", (document_id,))
+            await conn.execute("delete from jeli.documents where id = %s or translation_of = %s", (document_id, document_id))
+
     async def messages_of(self, chat_id: str) -> list[StoredMessage]:
         """Every message of a chat (or segment of a recording), in time order."""
         async with self._pool.connection() as conn:
@@ -168,14 +241,14 @@ class Store:
     async def messages_since(
         self, since: datetime, chat_ids: Sequence[str] | None = None, limit: int = 1500
     ) -> list[StoredMessage]:
-        """Chat messages (not recording transcripts) since a moment, oldest first; the newest `limit` if more."""
+        """Chat messages (not recording transcripts nor documents) since a moment, oldest first; the newest `limit` if more."""
         chats = "and chat_id = any(%s)" if chat_ids is not None else ""
         params = (since, list(chat_ids), limit) if chat_ids is not None else (since, limit)
         async with self._pool.connection() as conn:
             rows = await (
                 await conn.execute(
                     "select id, chat_id, source, author, author_id, sent_at, text from jeli.messages "
-                    f"where sent_at >= %s and source <> 'recording' {chats} order by sent_at desc, id desc limit %s",
+                    f"where sent_at >= %s and source not in ('recording', 'document') {chats} order by sent_at desc, id desc limit %s",
                     params,
                 )
             ).fetchall()
@@ -335,23 +408,28 @@ class Store:
     async def record_event(self, event: UsageEvent) -> None:
         async with self._pool.connection() as conn:
             await conn.execute(
-                "insert into jeli.events (kind, outcome, language, is_private, latency_ms, question) "
-                "values (%s, %s, %s, %s, %s, %s)",
-                (event.kind, event.outcome, event.language, event.is_private, event.latency_ms, event.question or None),
+                "insert into jeli.events (kind, outcome, language, is_private, latency_ms, question, channel, chat_id) "
+                "values (%s, %s, %s, %s, %s, %s, %s, %s)",
+                (
+                    event.kind, event.outcome, event.language, event.is_private, event.latency_ms,
+                    event.question or None, event.channel, event.chat_id,
+                ),
             )
 
-    async def usage_since(self, since: datetime) -> dict:
-        """Counters for the dashboard: interactions by kind and day, question outcomes, reply times."""
+    async def usage_since(self, since: datetime, include_tries: bool = True) -> dict:
+        """Counters for the dashboard: interactions by kind and day, question outcomes, reply times.
+        Tries from the dashboard count too, unless include_tries is False."""
+        channels = "" if include_tries else "and channel <> 'dashboard'"
         async with self._pool.connection() as conn:
             by_kind = await (
                 await conn.execute(
-                    "select kind, count(*) as n from jeli.events where at >= %s group by kind", (since,)
+                    f"select kind, count(*) as n from jeli.events where at >= %s {channels} group by kind", (since,)
                 )
             ).fetchall()
             by_day = await (
                 await conn.execute(
                     "select (at at time zone 'utc')::date as day, outcome, count(*) as n from jeli.events "
-                    "where at >= %s and kind = 'question' group by 1, 2 order by 1",
+                    f"where at >= %s and kind = 'question' {channels} group by 1, 2 order by 1",
                     (since,),
                 )
             ).fetchall()
@@ -359,14 +437,14 @@ class Store:
                 await conn.execute(
                     "select percentile_cont(0.5) within group (order by latency_ms) as median, "
                     "percentile_cont(0.95) within group (order by latency_ms) as p95 "
-                    "from jeli.events where at >= %s and kind = 'question' and latency_ms is not null",
+                    f"from jeli.events where at >= %s and kind = 'question' and latency_ms is not null {channels}",
                     (since,),
                 )
             ).fetchone()
             questions = await (
                 await conn.execute(
                     "select at, outcome, question from jeli.events "
-                    "where at >= %s and kind = 'question' and question is not null order by at desc limit 200",
+                    f"where at >= %s and kind = 'question' and question is not null {channels} order by at desc limit 200",
                     (since,),
                 )
             ).fetchall()
@@ -378,6 +456,66 @@ class Store:
             "group_questions": [(row["at"], row["outcome"], row["question"]) for row in questions],
         }
 
+    async def recent_events(self, limit: int = 15) -> list[dict]:
+        """The latest exchanges with Jeli, newest first: the dashboard's live feed."""
+        async with self._pool.connection() as conn:
+            return await (
+                await conn.execute(
+                    "select id, at, kind, outcome, language, is_private, latency_ms, question, channel, chat_id "
+                    "from jeli.events order by id desc limit %s",
+                    (limit,),
+                )
+            ).fetchall()
+
+    async def activity_today(self, since: datetime) -> dict:
+        """Messages Jeli read and exchanges it had since a moment (the start of the day)."""
+        async with self._pool.connection() as conn:
+            return await (
+                await conn.execute(
+                    "select (select count(*) from jeli.messages where source = 'whatsapp_live' and sent_at >= %s) as read, "
+                    "(select count(*) from jeli.events where at >= %s) as exchanges, "
+                    "(select max(sent_at) from jeli.messages where source = 'whatsapp_live') as last_message",
+                    (since, since),
+                )
+            ).fetchone()
+
+    async def change_marker(self) -> str:
+        """Changes when anything the dashboard shows changes: it refreshes only then."""
+        async with self._pool.connection() as conn:
+            row = await (
+                await conn.execute(
+                    "select (select max(id) from jeli.events), (select max(id) from jeli.audit), "
+                    "(select max(id) from jeli.incidents), (select max(id) from jeli.tries), "
+                    "(select count(*) from jeli.deadlines where dismissed_at is null), (select max(id) from jeli.chunks), "
+                    "(select count(*) from jeli.documents), (select count(*) from jeli.messages where chunk_id is null)"
+                )
+            ).fetchone()
+        return "-".join(str(value) for value in row.values())
+
+    # --- Tries on the dashboard, kept per team member -------------------------------------------
+
+    async def add_try(self, member: str, role: str, text: str, details: dict | None = None) -> None:
+        async with self._pool.connection() as conn:
+            await conn.execute(
+                "insert into jeli.tries (member, role, text, details) values (%s, %s, %s, %s)",
+                (member, role, text, Jsonb(details or {})),
+            )
+
+    async def tries(self, member: str, limit: int = 60) -> list[dict]:
+        """A member's conversation with Jeli on the dashboard, oldest first."""
+        async with self._pool.connection() as conn:
+            rows = await (
+                await conn.execute(
+                    "select at, role, text, details from jeli.tries where member = %s order by id desc limit %s",
+                    (member, limit),
+                )
+            ).fetchall()
+        return list(reversed(rows))
+
+    async def clear_tries(self, member: str) -> None:
+        async with self._pool.connection() as conn:
+            await conn.execute("delete from jeli.tries where member = %s", (member,))
+
     async def knowledge_overview(self) -> dict:
         """What Jeli knows, in counts: per chat, per recording, and the indexing backlog."""
         async with self._pool.connection() as conn:
@@ -385,7 +523,7 @@ class Store:
                 await conn.execute(
                     "select chat_id, count(*) as messages, max(sent_at) as last_message, "
                     "count(*) filter (where source = 'whatsapp_live') as live "
-                    "from jeli.messages where source <> 'recording' group by chat_id order by messages desc"
+                    "from jeli.messages where source not in ('recording', 'document') group by chat_id order by messages desc"
                 )
             ).fetchall()
             recordings = await (

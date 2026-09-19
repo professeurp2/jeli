@@ -88,7 +88,11 @@ class Catchup:
             digest = await self._summarize(since, language, chat_ids)
             self._cache[key] = (self._clock(), digest)
         if digest is None:
-            return None if quiet_if_empty else TEXTS[language]["catchup_nothing"].format(since=_day(since, language))
+            coming_up = await self.deadlines.coming_up_section(language) if self.deadlines else None
+            if quiet_if_empty:
+                return coming_up  # a quiet day can still bring a reminder
+            nothing = TEXTS[language]["catchup_nothing"].format(since=_day(since, language))
+            return nothing + (f"\n\n{coming_up}" if coming_up else "")
         return digest
 
     async def _summarize(self, since: datetime, language: str, chat_ids: list[str] | None) -> str | None:
@@ -100,7 +104,7 @@ class Catchup:
         coming_up = await self.deadlines.coming_up_section(language) if self.deadlines else None
         header = texts["catchup_header"].format(since=_day(since, language), messages=len(messages))
         if not messages and not recordings:
-            return coming_up  # a quiet day can still bring a reminder
+            return None
 
         lines = [
             f"[{m.sent_at.astimezone(timezone.utc):%a %d %b %H:%M}] {self.chat_labels.get(m.chat_id, m.chat_id)} · "

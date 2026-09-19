@@ -28,7 +28,16 @@ def detect_language(text: str) -> str:
 
 TEXTS = {
     "en": {
-        "dont_know": "I don't have that in the group's records. Ask the organisers, or rephrase your question.",
+        "dont_know": "I couldn't find that in what the groups have discussed so far. Ask the organisers, or try /search with a keyword.",
+        "dont_know_near": "I couldn't find a clear answer in the groups. The closest discussions:",
+        "greeting_reply": "Hello! 👋 I'm Jeli, the group's memory. Ask me anything about the programme, the sessions or the deadlines.",
+        "thanks_reply": "You're welcome! 🙌",
+        "about_jeli": (
+            "I'm Jeli 👋, the memory of this community. I've read the groups, the recorded sessions and the "
+            "shared documents: ask me anything that was said, and I'll tell you where it was said — or that "
+            "I don't know. I can also catch you up (/catchup), recap a session (/recap), list what's due "
+            "(/deadlines) and find where a topic was discussed (/search). Team Jeli built me for the hackathon."
+        ),
         "sources": "Sources",
         "fallback": "I can't write a full answer right now, but here is where the group talked about it:",
         "not_ready": "I'm not connected to the group's memory yet. Try again soon!",
@@ -45,6 +54,12 @@ TEXTS = {
         "deadlines_none": "No deadline announced for the next {days} days.",
         "deadlines_coming_up": "⏰ Coming up",
         "deadline_in_call": "call",
+        "deadline_in_document": "document",
+        "file_here": "📄 Here is «{title}», shared by {who} on {day}.",
+        "file_translating": "📄 I'm translating «{title}» into {language}: I'll send it here in a minute or two.",
+        "file_translated": "«{title}» in {language} (machine translation: the original prevails)",
+        "file_translate_failed": "Sorry, I couldn't translate «{title}» right now. Try again in a few minutes.",
+        "file_language_unsupported": "I can translate documents into {languages}.",
         "search_header": "🔎 Where the group talked about it:",
         "search_nothing": "I found nothing about that in the group's records.",
         "recap_summary": "📝 Summary",
@@ -63,7 +78,16 @@ TEXTS = {
         ),
     },
     "fr": {
-        "dont_know": "Je n'ai pas cette information dans les échanges du groupe. Demandez aux organisateurs, ou reformulez la question.",
+        "dont_know": "Je n'ai pas trouvé cela dans les échanges des groupes. Demandez aux organisateurs, ou essayez /search avec un mot-clé.",
+        "dont_know_near": "Je n'ai pas trouvé de réponse claire dans les groupes. Les discussions les plus proches :",
+        "greeting_reply": "Bonjour ! 👋 Je suis Jeli, la mémoire du groupe. Posez-moi vos questions sur le programme, les séances ou les échéances.",
+        "thanks_reply": "Avec plaisir ! 🙌",
+        "about_jeli": (
+            "Je suis Jeli 👋, la mémoire de cette communauté. J'ai lu les groupes, les séances enregistrées et "
+            "les documents partagés : demandez-moi tout ce qui a été dit, je vous dis où — ou que je ne sais pas. "
+            "Je fais aussi le point (/catchup), le résumé d'une séance (/recap), la liste des échéances "
+            "(/deadlines) et je retrouve où un sujet a été abordé (/search). L'équipe Jeli m'a créé pour le hackathon."
+        ),
         "sources": "Sources",
         "fallback": "Je ne peux pas rédiger de réponse complète pour l'instant, mais voici où le groupe en a parlé :",
         "not_ready": "Je ne suis pas encore connecté à la mémoire du groupe. Réessayez bientôt !",
@@ -80,6 +104,12 @@ TEXTS = {
         "deadlines_none": "Aucune échéance annoncée pour les {days} prochains jours.",
         "deadlines_coming_up": "⏰ À venir",
         "deadline_in_call": "appel",
+        "deadline_in_document": "document",
+        "file_here": "📄 Voici «{title}», partagé par {who} le {day}.",
+        "file_translating": "📄 Je traduis «{title}» en {language} : je l'envoie ici d'ici une ou deux minutes.",
+        "file_translated": "«{title}» en {language} (traduction automatique : l'original fait foi)",
+        "file_translate_failed": "Désolé, je n'ai pas pu traduire «{title}» pour l'instant. Réessaie dans quelques minutes.",
+        "file_language_unsupported": "Je peux traduire les documents en {languages}.",
         "search_header": "🔎 Où le groupe en a parlé :",
         "search_nothing": "Je n'ai rien trouvé à ce sujet dans les échanges du groupe.",
         "recap_summary": "📝 Résumé",

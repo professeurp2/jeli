@@ -16,7 +16,7 @@ create schema if not exists jeli;
 create table if not exists jeli.messages (
     id          text primary key,  -- platform message id, or a stable fingerprint for exports
     chat_id     text not null,     -- e.g. the WhatsApp group id (…@g.us), or recording:<slug>
-    source      text not null check (source in ('whatsapp_export', 'whatsapp_live', 'telegram', 'recording')),
+    source      text not null check (source in ('whatsapp_export', 'whatsapp_live', 'telegram', 'recording', 'document')),
     author      text not null,
     author_id   text,
     sent_at     timestamptz not null,
@@ -147,6 +147,42 @@ create table if not exists jeli.incidents (
     kind        text not null
 );
 create index if not exists incidents_at on jeli.incidents (at desc);
+
+-- Documents members shared in the groups or the team added (PDF, Word, text): the file itself, so
+-- Jeli can send it back, and its text as messages of chat_id = the document's id, one per page part,
+-- so it is searched and cited like a conversation. A translation Jeli made is kept as a document
+-- of its own (translation_of), not indexed, and sent again when asked for again.
+create table if not exists jeli.documents (
+    id             text primary key,  -- document:<slug>-<hash of the content>
+    title          text not null,
+    filename       text not null,
+    mimetype       text not null,
+    size_bytes     integer not null,
+    pages          integer not null default 0,
+    language       text not null default '',
+    shared_by      text not null default '',
+    shared_at      timestamptz not null,
+    chat_id        text not null default '',  -- where it was shared; '' when added on the dashboard
+    content        bytea not null,
+    translation_of text references jeli.documents (id) on delete cascade,
+    created_at     timestamptz not null default now()
+);
+create index if not exists documents_translation_of on jeli.documents (translation_of, language);
+
+-- Where each exchange happened (whatsapp, telegram, dashboard) and in which group: the live feed.
+alter table jeli.events add column if not exists channel text not null default '';
+alter table jeli.events add column if not exists chat_id text not null default '';
+
+-- The team's tries of Jeli on the dashboard, kept per member.
+create table if not exists jeli.tries (
+    id      bigint generated always as identity primary key,
+    member  text not null,
+    at      timestamptz not null default now(),
+    role    text not null check (role in ('member', 'jeli')),
+    text    text not null,
+    details jsonb not null default '{}'::jsonb
+);
+create index if not exists tries_member_at on jeli.tries (member, at);
 
 -- Least-privilege application role: data access to the jeli schema only.
 do $$

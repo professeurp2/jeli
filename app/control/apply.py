@@ -25,6 +25,8 @@ def apply(state, runtime) -> None:
         responder.duplicate_detection = runtime["duplicate_detection"]
         responder.duplicate_min_similarity = runtime["duplicate_min_similarity"]
         responder.uninvited.limit = runtime["duplicate_replies_per_hour"]
+        responder.conversations.enabled = runtime["follow_up"]
+        responder.conversations.window_minutes = runtime["follow_up_minutes"]
 
     guard = getattr(state, "guard", None)
     if guard is not None:

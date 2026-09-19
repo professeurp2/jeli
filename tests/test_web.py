@@ -20,6 +20,7 @@ class FakeStore:
 
     def __init__(self):
         self.audit, self.settings, self.deadlines, self.messages, self.forgiven = [], {}, [], [], []
+        self.tries_rows, self.events = [], []
         self.incidents = [{"member_key": "2348185546555", "member_name": "Spammer", "kinds": {"flood": 4, "repeat": 2}, "last_at": NOW}]
 
     async def usage_since(self, since):
@@ -93,6 +94,32 @@ class FakeStore:
     async def record_incident(self, *args):
         pass
 
+    async def recent_events(self, limit=15):
+        return [
+            {"id": 2, "at": NOW, "kind": "question", "outcome": "answered", "language": "en", "is_private": False,
+             "latency_ms": 2100, "question": "When is the deadline?", "channel": "whatsapp", "chat_id": "meti-cohort-2026"},
+            {"id": 1, "at": NOW, "kind": "question", "outcome": "dont_know", "language": "en", "is_private": True,
+             "latency_ms": 1800, "question": None, "channel": "whatsapp", "chat_id": ""},
+        ]
+
+    async def activity_today(self, since):
+        return {"read": 42, "exchanges": 7, "last_message": NOW}
+
+    async def change_marker(self):
+        return f"{len(self.audit)}-{len(self.tries_rows)}-{len(self.deadlines)}"
+
+    async def add_try(self, member, role, text, details=None):
+        self.tries_rows.append({"member": member, "at": NOW, "role": role, "text": text, "details": details or {}})
+
+    async def tries(self, member, limit=60):
+        return [row for row in self.tries_rows if row["member"] == member][-limit:]
+
+    async def clear_tries(self, member):
+        self.tries_rows = [row for row in self.tries_rows if row["member"] != member]
+
+    async def record_event(self, event):
+        self.events.append(event)
+
 
 @pytest.fixture
 def accounts(monkeypatch):
@@ -108,6 +135,7 @@ def client(accounts):
         app.state.store = store
         app.state.runtime.store = store
         app.state.auth.store = store
+        app.state.responder.record = store.record_event
         client.fake_store = store
         yield client
 
@@ -186,12 +214,37 @@ def test_pausing_jeli_is_one_click_and_logged(client):
     assert not app.state.runtime.paused
 
 
-def test_try_jeli_answers_without_whatsapp(client):
+def test_try_jeli_answers_as_on_whatsapp_and_keeps_each_members_conversation(client):
     sign_in(client)
     token = csrf_of(client.get("/dashboard/try").text)
-    reply = client.post("/dashboard/try", json={"text": "When is the deadline?", "mode": "ask"}, headers={"X-CSRF-Token": token})
-    assert reply.status_code == 200 and reply.json()["reply"] == TEXTS["en"]["not_ready"]
+    headers = {"X-CSRF-Token": token}
+    reply = client.post("/dashboard/try", json={"text": "When is the deadline?", "mode": "ask", "chat": "meti-cohort-2026"}, headers=headers)
+    assert reply.status_code == 200
+    jeli = reply.json()["jeli"]
+    assert jeli["text"] == TEXTS["en"]["not_ready"] and jeli["quoted"] == ["You", "When is the deadline?"]  # replies to the question
+    greeting = client.post("/dashboard/try", json={"text": "Who are you?", "mode": "ask", "chat": "private"}, headers=headers).json()
+    assert greeting["jeli"]["text"] == TEXTS["en"]["about_jeli"]
     assert client.post("/dashboard/try", json={"text": "hi"}).status_code == 403  # no token
+    # Kept for this member only, and shown again on the page.
+    assert [row["role"] for row in client.fake_store.tries_rows] == ["member", "jeli", "member", "jeli"]
+    page = client.get("/dashboard/try").text
+    assert "When is the deadline?" in page and "Writing in" in page
+    # Every try is an exchange the team sees live.
+    assert {event.channel for event in client.fake_store.events} == {"dashboard"}
+    client.post("/dashboard/try/clear", data={"csrf": token})
+    assert client.fake_store.tries_rows == []
+
+
+def test_live_pages_answer_304_until_something_changes(client):
+    sign_in(client)
+    first = client.get("/dashboard", headers={"X-Live": "1"})
+    etag = first.headers["etag"]
+    assert first.status_code == 200 and 'id="live-body"' in first.text and "Live conversations" in first.text
+    assert "42</b> messages read" in first.text and "When is the deadline?" in first.text
+    assert client.get("/dashboard", headers={"X-Live": "1", "If-None-Match": etag}).status_code == 304
+    token = csrf_of(client.get("/dashboard").text)
+    client.post("/dashboard/pause", data={"action": "pause", "csrf": token})
+    assert client.get("/dashboard", headers={"X-Live": "1", "If-None-Match": etag}).status_code == 200
 
 
 def test_settings_are_saved_applied_and_validated(client):

@@ -17,6 +17,10 @@ excerpts of past conversations provided with each question.
 
 Rules:
 - Use only facts stated in the excerpts. Never use outside knowledge, never guess, never extrapolate.
+- Excerpts are often in another language than the question: use them all the same, translating
+  their facts faithfully (a French question is answered from English messages, and the reverse).
+- When the question could concern several programmes and the excerpts answer it differently for
+  each (e.g. team size), give each answer with its programme rather than picking one.
 - If the excerpts contain information that answers the question, even partially or relayed by a
   member rather than an organiser, answer with it (and say what is missing, if anything).
 - Set "answered" to false only when nothing in the excerpts helps answer the question.
