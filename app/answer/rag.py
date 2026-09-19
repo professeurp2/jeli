@@ -2,7 +2,8 @@
 
 1. Retrieve the conversation chunks closest to the question — searched with each of its queries
    (the question, its standalone rewording, English and member-language search queries), merged.
-2. If even the best one is not similar enough, answer "I don't know" without calling the model.
+2. If even the best one is not similar enough, there is no answer in the groups: Jeli explains what it
+   knows of the situation instead (awareness.py) — never a bare "I don't know".
 3. Otherwise give the model the chunks, rebuilt from their messages (minus ignored authors such as
    other bots, with phone numbers masked), and ask for an answer that cites them.
 4. Keep only answers that cite at least one real excerpt, and point to the source the WhatsApp way:
@@ -152,6 +153,8 @@ class Answerer:
         self.ignored = ignored_keys(ignored_authors)
         self.chat_labels = chat_labels or {}
         self._names: tuple[float, dict[str, str]] | None = None
+        # Explains why there is no answer from what Jeli knows of its own state (awareness.py).
+        self.explainer = None
 
     async def _search(self, queries: list[str]) -> list[SearchHit]:
         queries = list(dict.fromkeys(q for q in queries if q.strip()))[:4]
@@ -170,11 +173,11 @@ class Answerer:
         texts = TEXTS[language]
         hits = await self._search([question, *queries])
         if not hits or max(hit.similarity for hit in hits) < self.min_similarity:
-            return texts["dont_know"]
+            return await self._no_answer(question, language)
 
         excerpts = await self._excerpts(hits)
         if not excerpts:
-            return texts["dont_know"]
+            return await self._no_answer(question, language)
 
         prompt = build_prompt(question, display_author(asker), [e.for_prompt() for e in excerpts], language)
         try:
@@ -185,10 +188,18 @@ class Answerer:
 
         cited = [e for e in excerpts if e.number in set(generated.sources)]
         if not generated.answered or not cited or not generated.answer.strip():
-            if max(hit.similarity for hit in hits) >= NEAR_SIMILARITY:
-                return self._quotes(texts["dont_know_near"], excerpts, question)
-            return texts["dont_know"]
+            near = max(hit.similarity for hit in hits) >= NEAR_SIMILARITY
+            return await self._no_answer(question, language, excerpts if near else [])
         return self._reply(generated.answer.strip(), cited, chat_id, asker_id)
+
+    async def _no_answer(self, question: str, language: str, near: list[Excerpt] = ()) -> str:
+        """Not "I don't know" alone: what Jeli knows of the situation, and the closest discussions."""
+        texts = TEXTS[language]
+        if self.explainer is None:
+            return self._quotes(texts["dont_know_near"], list(near), question) if near else texts["dont_know"]
+        words = _words(question)
+        quotes = "\n\n".join(e.quote(words) for e in sorted(near, key=lambda e: e.relevance_rank)[:QUOTES_SHOWN])
+        return Reply(await self.explainer(question, language, quotes), unanswered=True)
 
     async def already_answered(
         self, question: str, min_similarity: float, chat_id: str | None = None, asker_id: str | None = None

@@ -185,6 +185,21 @@ class Store:
             ).fetchall()
         return {row["number"]: row["author"] for row in rows if row["author"] and row["author"] != "Someone"}
 
+    async def mentioned_documents(self, limit: int = 60) -> list[dict]:
+        """Messages that shared a file the chat history does not include ("<document omis>"),
+        newest first: author, when, where, and the message's text."""
+        async with self._pool.connection() as conn:
+            return await (
+                await conn.execute(
+                    "select author, sent_at, chat_id, text from jeli.messages "
+                    "where source in ('whatsapp_export', 'whatsapp_live') and (text ilike '%%document omis%%' "
+                    "or text ilike '%%document omitted%%' or text ilike '%%<attached:%%' or text ilike '%%(fichier joint)%%' "
+                    "or text ilike '%%(file attached)%%' or text ilike '%%<pièce jointe%%') "
+                    "order by sent_at desc limit %s",
+                    (limit,),
+                )
+            ).fetchall()
+
     async def documents(self, ids: Sequence[str]) -> dict[str, Document]:
         if not ids:
             return {}
@@ -528,7 +543,7 @@ class Store:
             ).fetchall()
             recordings = await (
                 await conn.execute(
-                    "select r.id, r.title, r.recorded_at, r.duration_seconds, "
+                    "select r.id, r.title, r.recorded_at, r.duration_seconds, r.method, r.source_url, "
                     "coalesce((select array_agg(k order by k) from jsonb_object_keys(r.recap) as k), '{}') as recaps, "
                     "(select count(*) from jeli.messages m where m.chat_id = r.id) as segments "
                     "from jeli.recordings r order by r.recorded_at"

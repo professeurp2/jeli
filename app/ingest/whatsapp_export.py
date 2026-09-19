@@ -57,6 +57,36 @@ def read_export(path: Path) -> str:
     return read_export_bytes(path.name, path.read_bytes())
 
 
+DOCUMENT_EXTENSIONS = (".pdf", ".docx", ".txt", ".md")
+
+
+def export_documents(filename: str, data: bytes) -> list[tuple[str, bytes]]:
+    """The documents attached to an export made "with media" (a .zip): (file name, content)."""
+    if not filename.lower().endswith(".zip"):
+        return []
+    try:
+        archive = zipfile.ZipFile(io.BytesIO(data))
+    except zipfile.BadZipFile:
+        return []
+    with archive:
+        chats = {n for n in archive.namelist() if n.endswith("_chat.txt") or n.lower().startswith("whatsapp chat")}
+        return [
+            (n.rsplit("/", 1)[-1], archive.read(n))
+            for n in archive.namelist()
+            if n.lower().endswith(DOCUMENT_EXTENSIONS) and n not in chats and not n.endswith("/")
+        ]
+
+
+def who_shared(name: str, messages: list[ExportedMessage]) -> ExportedMessage | None:
+    """The message that attached a file ("<attached: 00000012-Guide.pdf>", "Guide.pdf (file attached)")."""
+    plain = re.sub(r"^\d{6,}-", "", name).lower()
+    for message in messages:
+        text = message.text.lower()
+        if name.lower() in text or plain in text:
+            return message
+    return None
+
+
 def read_export_bytes(filename: str, data: bytes) -> str:
     """The same, from an uploaded file."""
     if filename.lower().endswith(".zip"):
@@ -103,6 +133,16 @@ def _clean(text: str) -> str:
 
 
 def parse_export(text: str, timezone: str = "UTC", day_first: bool = True) -> list[ExportedMessage]:
+    return _parse(text, timezone, day_first, keep_placeholders=False)
+
+
+def attachments(text: str, timezone: str = "UTC", day_first: bool = True) -> list[ExportedMessage]:
+    """The messages that attached a file ("<attached: 00000012-Guide.pdf>"): who shared it, when."""
+    return [m for m in _parse(text, timezone, day_first, keep_placeholders=True) if PLACEHOLDER.match(m.text) or "(file attached)" in m.text
+            or "(fichier joint)" in m.text]
+
+
+def _parse(text: str, timezone: str, day_first: bool, keep_placeholders: bool) -> list[ExportedMessage]:
     tz = ZoneInfo(timezone)
     raw: list[dict] = []  # header fields + text lines, before dates can be interpreted
     for line in text.splitlines():
@@ -118,10 +158,10 @@ def parse_export(text: str, timezone: str = "UTC", day_first: bool = True) -> li
     messages = []
     for fields, date in zip(raw, dates):
         body = AUTHOR.match("\n".join(fields["lines"]))
-        if not body or body["text"].startswith(LEFT_TO_RIGHT_MARK):
+        if not body or (body["text"].startswith(LEFT_TO_RIGHT_MARK) and not keep_placeholders):
             continue  # system notice (or an iPhone media placeholder)
         text = _clean(body["text"])
-        if not text or PLACEHOLDER.match(text):
+        if not text or (PLACEHOLDER.match(text) and not keep_placeholders):
             continue
         messages.append(
             ExportedMessage(

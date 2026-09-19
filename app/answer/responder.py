@@ -39,7 +39,7 @@ def _outcome(kind: str, reply: str, language: str) -> str:
     texts = TEXTS[language]
     if reply == texts["not_ready"]:
         return "not_ready"
-    if reply == texts["dont_know"] or reply.startswith(texts["dont_know_near"]):
+    if getattr(reply, "unanswered", False) or reply == texts["dont_know"] or reply.startswith(texts["dont_know_near"]):
         return "dont_know"
     if reply.startswith(texts["fallback"]):
         return "sources_only"

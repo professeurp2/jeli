@@ -1,10 +1,12 @@
-"""Adding a recorded session (a call) to Jeli's knowledge, without a command line.
+"""Adding a recorded session (a call) to Jeli's knowledge, on its own.
 
-The team pastes a YouTube link on the dashboard, or an organiser shares the recording's link in a
-group: Jeli transcribes it in the background (Gemini watches the video, window by window), stores
-each moment so answers can quote it and link to that second of the video, and writes the session's
-recap. Teams or Zoom recordings behind a sign-in cannot be fetched: post them on YouTube (unlisted is
-fine) or share their transcript.
+Organisers (the groups' admins, and the people the team lists) share each recording's link with a
+description ("Here is the recording of today's Module 2 class"). When one of them posts a link, a
+model reads the message and says whether it shares a session's recording, which session and which
+day. A YouTube recording is then transcribed in the background (Gemini watches the video, window by
+window), each moment stored so answers can quote it and link to that second, and its recap written.
+A recording Jeli cannot watch (Teams, SharePoint, Drive behind a sign-in) is still kept as a link,
+so Jeli can say where it is. The team can also add a session from the dashboard.
 """
 
 import asyncio
@@ -12,7 +14,9 @@ import logging
 import re
 import unicodedata
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import date, datetime, time, timezone
+
+from pydantic import BaseModel
 
 from app.answer.llm import LLM, LLMUnavailable
 from app.answer.recaps import Recaps
@@ -29,6 +33,25 @@ RECORDING_WORDS = re.compile(
     r"\b(recording|recorded|replay|session|class|meeting|webinar|call|module|enregistrement|replay|séance|réunion|cours)\b",
     re.IGNORECASE,
 )
+
+
+LINK = re.compile(r"https?://\S+", re.IGNORECASE)
+
+DETECT_SYSTEM = """\
+You read one message posted in a WhatsApp community by one of its organisers. Say whether it shares
+the recording of a session (a class, coaching, webinar, meeting, call) — not a promotional video, a
+tutorial from elsewhere, or a link to join a live session. If it does: title, a short name for the
+session as members would call it ("Wadhwani Ignite — Module 2 class"); session_day, the day the
+session took place as YYYY-MM-DD, resolving "today" or "yesterday" from the message's date ("" if
+unknown); url, the recording's link exactly as written.
+"""
+
+
+class RecordingShare(BaseModel):
+    is_recording: bool
+    title: str
+    session_day: str
+    url: str
 
 
 def slugify(text: str) -> str:
@@ -50,7 +73,7 @@ class SessionImport:
     title: str
     recorded_at: datetime
     by: str
-    state: str = "waiting"  # waiting, transcribing, learning, done, failed
+    state: str = "waiting"  # waiting, transcribing, learning, done, failed, link (kept, cannot be watched)
     progress: str = ""
     started_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     finished_at: datetime | None = None
@@ -58,9 +81,10 @@ class SessionImport:
 
 
 class Sessions:
-    def __init__(self, store: Store, transcription: LLM, recaps: Recaps | None, on_learned=None):
+    def __init__(self, store: Store, transcription: LLM, recaps: Recaps | None, on_learned=None, reader: LLM | None = None):
         self.store = store
         self.transcription = transcription
+        self.reader = reader  # reads organisers' messages for shared recordings
         self.recaps = recaps
         self.on_learned = on_learned  # e.g. index the new segments now
         self.imports: dict[str, SessionImport] = {}
@@ -78,12 +102,51 @@ class Sessions:
         return job
 
     def from_group(self, message: IncomingMessage) -> SessionImport | None:
-        """A recording's link shared in a group: add that session, named after the message."""
+        """A recording's link shared in a group, recognised by its words: add that session."""
         url = shared_recording(message)
         if not url or url in self.imports:
             return None
         title = " ".join(YOUTUBE_LINK.sub("", message.text).split())[:80] or f"Session shared by {message.author}"
         return self.start(url, title, message.sent_at, message.author)
+
+    async def from_organiser(self, message: IncomingMessage) -> SessionImport | None:
+        """An organiser posted a link: if the message shares a session's recording, add it — the
+        video transcribed if Jeli can watch it, otherwise kept as a link."""
+        if message.is_private or not LINK.search(message.text) or self.reader is None:
+            return None
+        prompt = f"Message posted on {message.sent_at:%A %d %B %Y} by {message.author}:\n{message.text[:3000]}"
+        try:
+            share = await self.reader.generate(prompt, RecordingShare, system=DETECT_SYSTEM, timeout=8, temperature=0, attempts=2)
+        except LLMUnavailable:
+            return self.from_group(message)  # the words alone, while the model is busy
+        url = share.url.strip()
+        if not share.is_recording or not url.startswith("http") or url in self.imports:
+            return None
+        try:
+            day = date.fromisoformat(share.session_day.strip())
+            recorded_at = datetime.combine(day, time(12, 0), timezone.utc)
+        except ValueError:
+            recorded_at = message.sent_at
+        title = " ".join(share.title.split())[:120] or f"Session shared by {message.author}"
+        if is_youtube(url):
+            return self.start(url, title, recorded_at, message.author)
+        return await self.keep_link(url, title, recorded_at, message.author)
+
+    async def keep_link(self, url: str, title: str, recorded_at: datetime, by: str) -> SessionImport:
+        """A recording Jeli cannot watch: kept as a link, so Jeli can say where it is."""
+        job = SessionImport(url, title, recorded_at, by, state="link", progress="Shared as a link Jeli cannot watch (sign-in needed)")
+        job.finished_at = datetime.now(timezone.utc)
+        self.imports[url] = job
+        recording_id = f"{RECORDING_PREFIX}{recorded_at:%Y-%m-%d}-{slugify(title)}"
+        existing = (await self.store.recordings([recording_id])).get(recording_id)
+        if existing is None:
+            await self.store.save_recording(
+                Recording(id=recording_id, title=title, recorded_at=recorded_at, method="link", source_url=url)
+            )
+        return job
+
+    def in_progress(self) -> list[SessionImport]:
+        return [job for job in self.imports.values() if job.state in ("waiting", "transcribing", "learning")]
 
     async def _run(self, job: SessionImport) -> None:
         recording_id = f"{RECORDING_PREFIX}{job.recorded_at:%Y-%m-%d}-{slugify(job.title)}"

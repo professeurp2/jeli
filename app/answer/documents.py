@@ -124,6 +124,27 @@ def page_messages(document: Document, pages: list[str]) -> list[StoredMessage]:
     return messages
 
 
+FILE_NAME = re.compile(r"([\w\-. ()'’&,]+?\.(?:pdf|docx?|pptx?|xlsx?|txt))", re.IGNORECASE)
+MARKERS = re.compile(r"<document omis>|document omitted|<attached:[^>]*>|\(fichier joint\)|\(file attached\)|<pièce jointe[^>]*>|\[transféré\]|\[forwarded\]", re.IGNORECASE)
+
+
+async def missing_documents(store: Store) -> list[dict]:
+    """Documents members shared in the groups whose file Jeli does not have (chat histories
+    exported without media): name, who shared it, when, where."""
+    kept = await store.list_documents()
+    known = {d.filename.lower() for d in kept} | {d.title.lower() for d in kept}
+    missing, seen = [], set()
+    for row in await store.mentioned_documents():
+        found = FILE_NAME.search(row["text"])
+        name = found.group(1).strip() if found else " ".join(MARKERS.sub("", row["text"]).split())[:80]
+        plain = re.sub(r"^\d{6,}-", "", name)
+        if not name or plain.lower() in known or plain.rsplit(".", 1)[0].lower() in known or plain.lower() in seen:
+            continue
+        seen.add(plain.lower())
+        missing.append({"name": plain, "author": row["author"], "sent_at": row["sent_at"], "chat_id": row["chat_id"]})
+    return missing
+
+
 class FileChoice(BaseModel):
     document: int
     translate_to: str

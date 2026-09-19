@@ -29,7 +29,8 @@ from app.control.guard import INCIDENTS
 from app.control.runtime import FIELDS, coerce
 from app.control.schedule import WEEKDAY_NAMES, WEEKDAYS, parse_schedule
 from app.control.words import KINDS, OUTCOME_WORDS, OUTCOMES, pct
-from app.ingest.whatsapp_export import message_ids, parse_export, read_export_bytes
+from app.answer.documents import missing_documents
+from app.ingest.whatsapp_export import attachments, export_documents, message_ids, parse_export, read_export_bytes, who_shared
 from app.kb.indexer import RECORDING_PREFIX
 from app.models import Attachment, Deadline, IncomingMessage, StoredMessage
 from app.web import ui
@@ -837,9 +838,10 @@ async def knowledge_page(request: Request, member: Member, preview: str = "") ->
     languages = {"en": "English", "fr": "French"}
     session_rows = [
         [
-            f'<span class="strong">{esc(r["title"])}</span>',
+            f'<span class="strong">{esc(r["title"])}</span>'
+            + (f'<br><a class="small" href="{esc(r["source_url"])}" target="_blank" rel="noopener">{esc(r["source_url"][:60])}</a>' if r.get("source_url") else ""),
             when(r["recorded_at"], "date"),
-            ui.duration(r["duration_seconds"]),
+            ui.pill("warn", "Link only — cannot be watched") if r.get("method") == "link" else ui.duration(r["duration_seconds"]),
             esc(", ".join(languages.get(k, k) for k in r["recaps"]) or "—"),
         ]
         for r in recordings
@@ -851,6 +853,7 @@ async def knowledge_page(request: Request, member: Member, preview: str = "") ->
             "Check before adding",
             f"""<p>“{esc(pending['filename'])}”: <b>{pending['count']:,} messages</b> from <b>{pending['people']} people</b>,
             from {pending['first']:%d %b %Y} to {pending['last']:%d %b %Y}, into <b>{esc(pending['label'])}</b>.</p>
+            {f"<p>With <b>{len(pending['documents'])} documents</b>: {esc(', '.join(d['name'] for d in pending['documents'][:6]))}{' …' if len(pending['documents']) > 6 else ''}</p>" if pending.get("documents") else ""}
             <p class="hint">Messages Jeli already knows are skipped. Check that the first and last dates look right: if not, the phone's time zone or date format was wrong.</p>
             <div class="actions" style="margin-top:12px">"""
             + ui.form("/dashboard/knowledge/import", csrf, ui.hidden("token", preview) + ui.button("Add to Jeli's knowledge", kind="primary", icon_name="check"), cls="inline")
@@ -871,7 +874,7 @@ async def knowledge_page(request: Request, member: Member, preview: str = "") ->
           <label>Time zone of the phone that exported it<select name="timezone">{zones}</select></label>
         </div>
         <label class="check" style="margin-top:12px"><input type="checkbox" name="month_first"> Dates are written month first (e.g. 9/24/26, American phones)</label>
-        <p class="hint" style="margin-top:8px">On the phone: open the group → ⋮ or the group name → More → Export chat → Without media. You'll see a summary before anything is added.</p>
+        <p class="hint" style="margin-top:8px">On the phone: open the group → ⋮ or the group name → More → Export chat. Choose <b>Include media</b> to give Jeli the documents shared in the chat too (it keeps PDF, Word and text files). You'll see a summary before anything is added.</p>
         <div class="actions" style="margin-top:14px">{ui.button("Read the file", kind="primary", icon_name="upload")}</div>""",
         upload=True,
     )
@@ -891,6 +894,24 @@ async def knowledge_page(request: Request, member: Member, preview: str = "") ->
         ]
         for d in documents
     ]
+    missing = await missing_documents(store) if hasattr(store, "mentioned_documents") else []
+    missing_rows = [
+        [
+            f'<span class="strong">{esc(m["name"])}</span>',
+            f'<span class="small">{esc(display_author(m["author"]))}<br><span class="muted">{esc(_chat_name(m["chat_id"], labels))}, {m["sent_at"]:%d %b}</span></span>',
+            ui.form(
+                "/dashboard/documents/upload",
+                csrf,
+                ui.hidden("title", m["name"].rsplit(".", 1)[0] if "." in m["name"][-6:] else m["name"])
+                + ui.hidden("shared_by", m["author"]) + ui.hidden("shared_at", m["sent_at"].isoformat()) + ui.hidden("chat", m["chat_id"])
+                + '<input type="file" name="file" accept=".pdf,.docx,.txt,.md" required style="max-width:230px">'
+                + ui.button("Give it to Jeli", kind="small", icon_name="upload"),
+                upload=True,
+                cls="actions",
+            ),
+        ]
+        for m in missing[:20]
+    ]
     add_document = ui.form(
         "/dashboard/documents/upload",
         csrf,
@@ -903,7 +924,7 @@ async def knowledge_page(request: Request, member: Member, preview: str = "") ->
     sessions_state = getattr(_state(request), "sessions", None)
     jobs = sorted(sessions_state.imports.values(), key=lambda j: j.started_at, reverse=True) if sessions_state else []
     state_pills = {"waiting": ("neutral", "Waiting"), "transcribing": ("info", "Transcribing"), "learning": ("info", "Learning"),
-                   "done": ("good", "Added"), "failed": ("bad", "Failed")}
+                   "done": ("good", "Added"), "failed": ("bad", "Failed"), "link": ("warn", "Link only")}
     job_rows = [[f'<span class="strong">{esc(j.title)}</span><br><span class="muted small">{esc(j.url)}</span>', ui.pill(*state_pills[j.state]),
                  esc(j.progress), when(j.started_at, "ago")] for j in jobs[:8]]
     add_session = ui.form(
@@ -929,6 +950,9 @@ async def knowledge_page(request: Request, member: Member, preview: str = "") ->
         + ui.card("Documents", ui.table(["Document", "Pages", "Language", "Shared by", ""], document_rows, numeric={1},
                                         empty_text="No document yet. Documents shared in the groups are kept on their own."),
                   icon_name="book", description="Jeli answers from them page by page, and sends them — translated if asked — when members ask for them.")
+        + (ui.card("Documents mentioned in the groups, but missing", ui.table(["Document", "Shared by", "Its file"], missing_rows),
+                   icon_name="alert", description="These were shared in the chats, but the chat history came without its files. Upload one here and Jeli learns it; members who ask about it are told it is missing meanwhile.")
+           if missing_rows else "")
         + ui.card("Add a document", add_document, icon_name="upload", description="Guidelines, rules, forms: anything members may ask about or ask for.")
         + ui.card("Sessions", ui.table(["Session", "Date", "Length", "Summaries", ""], session_rows, empty_text="No session yet."),
                   icon_name="clock", description="Recorded calls Jeli can quote to the minute.")
@@ -955,8 +979,13 @@ async def documents_upload(request: Request, member: Change) -> RedirectResponse
         return _done(request, "/dashboard/knowledge", "Choose the document first.", "bad")
     data = await upload.read(MAX_UPLOAD_BYTES + 1)
     try:
+        shared_at = datetime.fromisoformat(str(form.get("shared_at"))) if form.get("shared_at") else None
+    except ValueError:
+        shared_at = None
+    try:
         document, new = await documents.add(
-            upload.filename, data, title=str(form.get("title", "")), shared_by=member.capitalize(), mimetype=upload.content_type or ""
+            upload.filename, data, title=str(form.get("title", "")), shared_by=str(form.get("shared_by") or member.capitalize())[:80],
+            shared_at=shared_at, chat_id=str(form.get("chat", ""))[:120], mimetype=upload.content_type or "",
         )
     except ValueError as error:
         return _done(request, "/dashboard/knowledge", f"This document cannot be added: {error}.", "bad")
@@ -1038,9 +1067,16 @@ async def knowledge_upload(request: Request, member: Change) -> RedirectResponse
     if zone not in dict(TIMEZONES):
         zone = "UTC"
     try:
-        exported = parse_export(read_export_bytes(upload.filename, data), timezone=zone, day_first=not form.get("month_first"))
+        text = read_export_bytes(upload.filename, data)
+        exported = parse_export(text, timezone=zone, day_first=not form.get("month_first"))
     except ValueError as error:
         return _done(request, "/dashboard/knowledge", f"This file cannot be read: {error}.", "bad")
+    # An export "with media" carries the documents shared in the chat: who shared each one, when.
+    shared = attachments(text, timezone=zone, day_first=not form.get("month_first"))
+    documents = []
+    for name, content in export_documents(upload.filename, data):
+        by = who_shared(name, shared)
+        documents.append({"name": name, "data": content, "author": by.author if by else "", "sent_at": by.sent_at if by else None})
     if not exported:
         return _done(request, "/dashboard/knowledge", "No messages found in this file. Is it a WhatsApp chat export?", "bad")
     labels = _labels(request)
@@ -1068,6 +1104,7 @@ async def knowledge_upload(request: Request, member: Change) -> RedirectResponse
         "people": len({m.author for m in exported}),
         "first": exported[0].sent_at,
         "last": exported[-1].sent_at,
+        "documents": documents,
         "expires": now + 1800,
     }
     return RedirectResponse(f"/dashboard/knowledge?preview={token}", status_code=303)
@@ -1087,10 +1124,21 @@ async def knowledge_import(request: Request, member: Change) -> RedirectResponse
         for id_, m in zip(message_ids(chat, exported), exported)
     ]
     added = await store.add_messages(messages)
+    kept = 0
+    documents = getattr(state, "documents", None)
+    for shared in pending.get("documents", []) if documents else []:
+        try:
+            _, new = await documents.add(
+                shared["name"], shared["data"], shared_by=shared["author"] or "A member",
+                shared_at=shared["sent_at"] or pending["last"], chat_id=chat,
+            )
+            kept += new
+        except ValueError:
+            continue
     runtime = state.runtime
     if pending["label"] != _chat_name(chat, _labels(request)):
         await runtime.update({"chat_labels": {**runtime["chat_labels"], chat: pending["label"]}}, member, f"Named a conversation “{pending['label']}”")
-    await store.add_audit(member, f"Added {added:,} old messages to “{pending['label']}”")
+    await store.add_audit(member, f"Added {added:,} old messages{f' and {kept} documents' if kept else ''} to “{pending['label']}”")
     memory = getattr(state, "activities", {}).get("memory")
     if memory and added:
         memory.run_now(member)
@@ -1098,7 +1146,7 @@ async def knowledge_import(request: Request, member: Change) -> RedirectResponse
     return _done(
         request,
         "/dashboard/knowledge",
-        f"{added:,} new messages added{f' ({known:,} were already known)' if known else ''}. Jeli is learning them now: they can be asked about in a few minutes.",
+        f"{added:,} new messages{f' and {kept} documents' if kept else ''} added{f' ({known:,} messages were already known)' if known else ''}. Jeli is learning them now: they can be asked about in a few minutes.",
     )
 
 
@@ -1304,6 +1352,10 @@ async def watchlist_change(request: Request, member: Change) -> RedirectResponse
 # --- Exceptions -----------------------------------------------------------------------------------
 
 LISTS = {
+    "organisers": (
+        "Organisers",
+        "The groups' admins are organisers already. Add others here: the recordings they share are added on their own.",
+    ),
     "ignored_authors": ("People Jeli never quotes", "Their messages are never used as sources — for example other bots in the group."),
     "muted_members": ("People Jeli doesn't answer", "Jeli stays silent when they call it. Add a name as shown on WhatsApp, or a phone number."),
 }

@@ -50,10 +50,12 @@ class Reply(str):
     attachment: Attachment | None
     pending: Callable[[], Awaitable[Attachment | str]] | None
 
-    def __new__(cls, text: str, *, reply_to=None, quoted=None, mentions=(), attachment=None, pending=None):
+    unanswered: bool  # explains why there is no answer (counted as "couldn't answer")
+
+    def __new__(cls, text: str, *, reply_to=None, quoted=None, mentions=(), attachment=None, pending=None, unanswered=False):
         reply = super().__new__(cls, text)
         reply.reply_to, reply.quoted, reply.mentions = reply_to, quoted, list(mentions)
-        reply.attachment, reply.pending = attachment, pending
+        reply.attachment, reply.pending, reply.unanswered = attachment, pending, unanswered
         return reply
 
 

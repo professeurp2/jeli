@@ -8,12 +8,14 @@ from fastapi import FastAPI
 from app.adapters import telegram, whatsapp_waha
 from app.answer.catchup import Catchup
 from app.answer.deadlines import DeadlineExtractor, Deadlines
+from app.answer.awareness import Awareness
 from app.answer.documents import Documents
 from app.answer.llm import LLM
 from app.answer.rag import Answerer
 from app.answer.recaps import Recaps
 from app.answer.responder import Responder
 from app.answer.understand import Understander
+from app.answer.citations import ignored_keys, is_ignored
 from app.config import get_settings
 from app.control.apply import apply
 from app.control.guard import Guard
@@ -53,7 +55,7 @@ async def lifespan(app: FastAPI):
 
     # Grounded answers need the knowledge base and a Gemini key; without them Jeli says it isn't ready.
     state.llm = state.answerer = state.catchup = state.recaps = state.deadlines = state.extractor = None
-    state.documents = state.sessions = None
+    state.documents = state.sessions = state.awareness = None
     if store and state.embedder:
         state.llm = LLM(settings.gemini_api_key, settings.answer_models)
         state.answerer = Answerer(store, state.embedder, state.llm, min_similarity=runtime["answer_min_similarity"])
@@ -68,7 +70,11 @@ async def lifespan(app: FastAPI):
             if memory:
                 memory.run_now("Jeli")
 
-        state.sessions = Sessions(store, LLM(settings.gemini_api_key, settings.transcription_model_list), state.recaps, learn_now)
+        state.sessions = Sessions(
+            store, LLM(settings.gemini_api_key, settings.transcription_model_list), state.recaps, learn_now, reader=state.llm
+        )
+        state.awareness = Awareness(store, state.llm, state.sessions)
+        state.answerer.explainer = state.awareness.explain
     state.responder = Responder(
         state.answerer,
         state.catchup,
@@ -91,14 +97,31 @@ async def lifespan(app: FastAPI):
 
     live = LiveIngestor(store) if store else None
 
+    async def is_organiser(message: IncomingMessage) -> bool | None:
+        """Listed by the team, or an admin of the group; None when nobody is known as one."""
+        listed = ignored_keys(runtime["organisers"])
+        if is_ignored(message, listed):
+            return True
+        admins = await state.whatsapp.group_admins(message.chat_id) if state.whatsapp else None
+        if admins:
+            return bool({(message.author_id or "").split("@")[0].split(":")[0]} & admins)
+        return None if not listed else False
+
     async def ingest(message: IncomingMessage) -> None:
-        """Remember every group message; a session's recording shared in a group is added too."""
+        """Remember every group message; a session's recording an organiser shares is added too."""
         await live.ingest(message)
-        if state.sessions and runtime["auto_sessions"]:
-            try:
-                state.sessions.from_group(message)
-            except ValueError:
-                pass
+        if not (state.sessions and runtime["auto_sessions"]) or message.is_private or "http" not in message.text:
+            return
+        try:
+            organiser = await is_organiser(message)
+            if organiser:
+                await state.sessions.from_organiser(message)
+            elif organiser is None:
+                state.sessions.from_group(message)  # nobody known as organiser: the words alone
+        except ValueError:
+            pass
+        except Exception:
+            logging.getLogger(__name__).exception("Could not check a shared link for a recording")
 
     # Each adapter runs when its environment variables are set; WhatsApp is the target channel.
     state.whatsapp = whatsapp_waha.start(settings, respond, ingest=ingest if store else None)

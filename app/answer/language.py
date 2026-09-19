@@ -32,6 +32,7 @@ TEXTS = {
         "dont_know_near": "I couldn't find a clear answer in the groups. The closest discussions:",
         "greeting_reply": "Hello! 👋 I'm Jeli, the group's memory. Ask me anything about the programme, the sessions or the deadlines.",
         "thanks_reply": "You're welcome! 🙌",
+        "session_in_progress": "⏳ The recording of «{title}» (shared by {who}, {day}) is being transcribed right now — {progress}. Ask me again in a few minutes and I'll tell you what was said.",
         "about_jeli": (
             "I'm Jeli 👋, the memory of this community. I've read the groups, the recorded sessions and the "
             "shared documents: ask me anything that was said, and I'll tell you where it was said — or that "
@@ -39,7 +40,7 @@ TEXTS = {
             "(/deadlines) and find where a topic was discussed (/search). Team Jeli built me for the hackathon."
         ),
         "sources": "Sources",
-        "fallback": "I can't write a full answer right now, but here is where the group talked about it:",
+        "fallback": "I'm answering a lot of questions right now, so here is where the group talked about it — ask me again in a minute for a full answer:",
         "not_ready": "I'm not connected to the group's memory yet. Try again soon!",
         "already_covered": "💡 This was already answered in the group:",
         "catchup_header": "🗓️ Catch-up since {since} ({messages} messages)",
@@ -82,6 +83,7 @@ TEXTS = {
         "dont_know_near": "Je n'ai pas trouvé de réponse claire dans les groupes. Les discussions les plus proches :",
         "greeting_reply": "Bonjour ! 👋 Je suis Jeli, la mémoire du groupe. Posez-moi vos questions sur le programme, les séances ou les échéances.",
         "thanks_reply": "Avec plaisir ! 🙌",
+        "session_in_progress": "⏳ L'enregistrement de «{title}» (partagé par {who}, {day}) est en cours de transcription — {progress}. Redemandez-moi dans quelques minutes et je vous dirai ce qui s'y est dit.",
         "about_jeli": (
             "Je suis Jeli 👋, la mémoire de cette communauté. J'ai lu les groupes, les séances enregistrées et "
             "les documents partagés : demandez-moi tout ce qui a été dit, je vous dis où — ou que je ne sais pas. "
@@ -89,7 +91,7 @@ TEXTS = {
             "(/deadlines) et je retrouve où un sujet a été abordé (/search). L'équipe Jeli m'a créé pour le hackathon."
         ),
         "sources": "Sources",
-        "fallback": "Je ne peux pas rédiger de réponse complète pour l'instant, mais voici où le groupe en a parlé :",
+        "fallback": "Je reçois beaucoup de questions en ce moment : voici où le groupe en a parlé — redemandez-moi dans une minute pour une réponse complète :",
         "not_ready": "Je ne suis pas encore connecté à la mémoire du groupe. Réessayez bientôt !",
         "already_covered": "💡 Cette question a déjà reçu une réponse dans le groupe :",
         "catchup_header": "🗓️ Récap depuis {since} ({messages} messages)",

@@ -191,6 +191,7 @@ class Waha:
         # Keeps a document shared in a group: (filename, data, mimetype, shared_by, shared_at, chat_id).
         self.on_document = None
         self._later: set[asyncio.Task] = set()
+        self._admins: dict[str, tuple[float, set[str]]] = {}
 
     def accepts(self, message: IncomingMessage) -> bool:
         """Direct messages are always accepted; groups only if listed in WHATSAPP_GROUP_IDS (when set)."""
@@ -507,6 +508,27 @@ class Waha:
             for chat in chats
             if isinstance(chat, dict) and str(chat.get("id", "")).endswith("@g.us")
         }
+
+    async def group_admins(self, chat_id: str) -> set[str] | None:
+        """The admins of a group (number or id digits), cached for an hour; None if unknown."""
+        cached = self._admins.get(chat_id)
+        if cached and time.monotonic() - cached[0] < 3600:
+            return cached[1]
+        try:
+            response = await self._http.get(f"/api/{self.session}/groups/{chat_id}/participants")
+            response.raise_for_status()
+            participants = response.json()
+        except (httpx.HTTPError, ValueError):
+            return None
+        admins = set()
+        for person in participants if isinstance(participants, list) else []:
+            role = str(person.get("role", "")).lower()
+            if role in ("admin", "superadmin") or person.get("isAdmin") or person.get("isSuperAdmin"):
+                for key in ("id", "pn", "phoneNumber", "lid"):
+                    if person.get(key):
+                        admins.add(user_part(str(person[key])))
+        self._admins[chat_id] = (time.monotonic(), admins)
+        return admins
 
     async def aclose(self) -> None:
         await self._http.aclose()
