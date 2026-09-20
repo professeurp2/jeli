@@ -26,6 +26,9 @@ class IncomingMessage:
     voice_mimetype: str = ""
     # Asked by voice: Jeli answers by voice too.
     reply_by_voice: bool = False
+    # Body of the WhatsApp message the member is quoting, when they typed a real question alongside.
+    # Included as context so the LLM knows what "ça" / "this" / "ce message" refers to.
+    quoted_context: str = ""
 
 
 @dataclass(frozen=True)

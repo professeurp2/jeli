@@ -124,6 +124,12 @@ class Responder:
     async def _route(self, message: IncomingMessage, language: str) -> tuple[str, str]:
         texts = TEXTS[language]
         text = message.text.strip()
+        # When the member quotes an older message alongside their question, prepend it as context
+        # so the LLM understands what "ça" / "ce message" / "this" refers to.
+        if message.quoted_context:
+            text_with_context = f"[Message cité: {message.quoted_context}]\n{text}"
+        else:
+            text_with_context = text
         if not text or text.lower() in HELP_COMMANDS:
             return texts["help"], "help"
         since = catchup_since(text)
@@ -143,11 +149,11 @@ class Responder:
             return (await self.answerer.where_discussed(topic) if self.answerer else texts["not_ready"]), "search"
         if text.startswith("/"):
             return texts["help"], "help"
-        understood = await self.understander.understand(text, language, self.conversations.history(message))
+        understood = await self.understander.understand(text_with_context, language, self.conversations.history(message))
         if understood.kind in ("social", "about_jeli"):
             return understood.reply, "social"
         if understood.kind == "file" and self.documents:
-            reply = await self.documents.reply(text, language, self.conversations.history(message))
+            reply = await self.documents.reply(text_with_context, language, self.conversations.history(message))
             if reply is not None:
                 return reply, "file"
         if understood.kind == "catchup" and self.catchup and not SESSION_WORD.search(text):

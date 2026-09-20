@@ -176,8 +176,13 @@ def parse_message(event: dict, bot_name: str) -> IncomingMessage | None:
     # When the member's own text is empty or a bare punctuation mark after stripping the mention,
     # fall back to the body of the quoted/replied-to message as the question context.
     quoted_body = (reply_to.get("body") or "").strip()
+    quoted_context = ""
     if not text or (len(text) <= 2 and not text.startswith("/")):
         text = quoted_body
+    elif quoted_body:
+        # Member typed a real question AND quoted an older message: keep both so the LLM
+        # knows what "ça" / "this" / "ce message" refers to.
+        quoted_context = quoted_body[:300]
 
     return IncomingMessage(
         platform="whatsapp",
@@ -193,6 +198,7 @@ def parse_message(event: dict, bot_name: str) -> IncomingMessage | None:
         voice_url=voice["url"] if voice else None,
         voice_mimetype=voice.get("mimetype", "") if voice else "",
         reply_by_voice=asks_for_voice(text),
+        quoted_context=quoted_context,
     )
 
 
