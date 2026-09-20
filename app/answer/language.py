@@ -67,7 +67,7 @@ TEXTS = {
         "recap_summary": "📝 Summary",
         "recap_actions": "📋 To do",
         "recap_moments": "⏱️ Key moments",
-        "recap_choose": "Which session? Reply with /recap and its number:",
+        "recap_choose": "Which session? Reply with its number (e.g. 4) or /recap 4:",
         "recap_unavailable": "I can't write this recap right now. Try again in a few minutes.",
         "help": (
             "Hey, I'm Jeli 👋 the group's memory. Ask me anything — what was decided, what's coming up, "
@@ -125,7 +125,7 @@ TEXTS = {
         "recap_summary": "📝 Résumé",
         "recap_actions": "📋 À faire",
         "recap_moments": "⏱️ Moments clés",
-        "recap_choose": "Quelle session ? Répondez /recap suivi de son numéro :",
+        "recap_choose": "Quelle session ? Répondez avec son numéro (ex. 4) ou /recap 4 :",
         "recap_unavailable": "Je ne peux pas rédiger ce résumé pour l'instant. Réessayez dans quelques minutes.",
         "help": (
             "Salut, c'est Jeli 👋 la mémoire du groupe. Pose-moi n'importe quelle question — ce qui a été "

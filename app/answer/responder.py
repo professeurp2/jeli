@@ -30,6 +30,8 @@ HELP_COMMANDS = {"/start", "/help", "/aide", "help", "aide"}
 SEARCH_COMMAND = re.compile(r"^/(?:search|cherche|chercher)\b(.*)$", re.IGNORECASE | re.DOTALL)
 MENTION = re.compile(r"@\d{6,}")  # WhatsApp mentions carry the member's number
 NUMBER = re.compile(r"\+?\d[\d\s().-]{7,}\d")
+# Bare number follow-up after /recap listing: "4", "#4", "session 4", "4."
+BARE_SESSION_NUMBER = re.compile(r"^(?:session\s+)?#?(\d+)\.?$", re.IGNORECASE)
 
 
 def shareable_question(text: str) -> str:
@@ -143,6 +145,13 @@ class Responder:
             recap = await self.recaps.reply(text, language)
             if recap:
                 return recap, "recap"  # otherwise it is not about a recorded session: a normal question
+        # Bare number follow-up: user types "4" or "session 4" after /recap listed sessions
+        if self.recaps and self.in_conversation(message):
+            bare = BARE_SESSION_NUMBER.match(text.strip())
+            if bare:
+                recap = await self.recaps.reply(f"/recap {bare.group(1)}", language)
+                if recap:
+                    return recap, "recap"
         search = SEARCH_COMMAND.match(text)
         if search and search.group(1).strip():
             topic = search.group(1).strip()
