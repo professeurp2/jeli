@@ -25,7 +25,7 @@ class FakeModels:
 
 
 def make_embedder(models):
-    return Embedder(api_key="unused", client=SimpleNamespace(aio=SimpleNamespace(models=models)))
+    return Embedder(api_keys="unused", client=SimpleNamespace(aio=SimpleNamespace(models=models)))
 
 
 def test_documents_are_embedded_in_batches_and_normalised():

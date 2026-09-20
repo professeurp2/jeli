@@ -73,8 +73,13 @@ class TokenBudget:
 
 
 class Embedder:
-    def __init__(self, api_key: str, client: genai.Client | None = None, tokens_per_minute: int = TOKENS_PER_MINUTE):
-        self._client = client or genai.Client(api_key=api_key)
+    def __init__(self, api_keys: list[str] | str, client: genai.Client | None = None, tokens_per_minute: int = TOKENS_PER_MINUTE):
+        if client:
+            self._clients = [client]
+        else:
+            keys = [api_keys] if isinstance(api_keys, str) else api_keys
+            self._clients = [genai.Client(api_key=k) for k in keys if k]
+        self._key = 0
         self._budget = TokenBudget(tokens_per_minute)
 
     async def embed_documents(self, texts: Sequence[str]) -> list[list[float]]:
@@ -94,14 +99,23 @@ class Embedder:
         return vectors
 
     async def _call_with_retry(self, batch: list[str], config: types.EmbedContentConfig):
-        for delay in (*RETRY_DELAYS, None):
+        keys_tried: set[int] = set()
+        delays = iter((*RETRY_DELAYS, None))
+        while True:
             try:
-                return await self._client.aio.models.embed_content(model=MODEL, contents=batch, config=config)
+                return await self._clients[self._key].aio.models.embed_content(model=MODEL, contents=batch, config=config)
             except (errors.APIError, httpx.TransportError) as error:
-                # Rate limits, server errors and network drops are transient; a bad request is not.
                 code = getattr(error, "code", None)
+                if code == 429:
+                    keys_tried.add(self._key)
+                    if len(keys_tried) < len(self._clients):
+                        self._key = (self._key + 1) % len(self._clients)
+                        log.info("Embeddings quota on key %d, rotating to key %d", self._key - 1, self._key)
+                        continue  # retry immediately with next key
                 retryable = isinstance(error, httpx.TransportError) or code == 429 or (code or 0) >= 500
+                delay = next(delays)
                 if not retryable or delay is None:
                     raise
                 log.warning("Gemini embeddings failed (%s), retrying in %s s", code or type(error).__name__, delay)
+                keys_tried.clear()  # reset after waiting so rotation can restart
                 await asyncio.sleep(delay)

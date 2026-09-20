@@ -46,7 +46,7 @@ async def lifespan(app: FastAPI):
     if store:
         await store.open()
     state.store = store
-    state.embedder = Embedder(settings.gemini_api_key) if settings.gemini_api_key else None
+    state.embedder = Embedder(settings.api_key_list) if settings.api_key_list else None
 
     # The team's settings from the dashboard, over the environment's.
     runtime = Runtime(settings, store)
@@ -58,7 +58,7 @@ async def lifespan(app: FastAPI):
     state.llm = state.answerer = state.catchup = state.recaps = state.deadlines = state.extractor = None
     state.documents = state.sessions = state.awareness = None
     if store and state.embedder:
-        state.llm = LLM(settings.gemini_api_key, settings.answer_models)
+        state.llm = LLM(settings.api_key_list, settings.answer_models)
         state.answerer = Answerer(store, state.embedder, state.llm, min_similarity=runtime["answer_min_similarity"])
         state.deadlines = Deadlines(store)
         state.catchup = Catchup(store, state.llm, deadlines=state.deadlines)
@@ -72,7 +72,7 @@ async def lifespan(app: FastAPI):
                 memory.run_now("Jeli")
 
         state.sessions = Sessions(
-            store, LLM(settings.gemini_api_key, settings.transcription_model_list), state.recaps, learn_now, reader=state.llm
+            store, LLM(settings.api_key_list, settings.transcription_model_list), state.recaps, learn_now, reader=state.llm
         )
         state.awareness = Awareness(store, state.llm, state.sessions)
         state.answerer.explainer = state.awareness.explain
