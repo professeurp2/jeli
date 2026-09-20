@@ -623,8 +623,14 @@ class Waha:
             log.warning("Cannot download the voice note %s: %r", message.message_id, error)
             return None
         heard = await self.voice.listen(response.content, message.voice_mimetype)
-        if not heard:
+        if heard is None:
+            # Model unavailable: tell the member warmly so they know what happened.
+            if message.addressed_to_bot:
+                language = detect_language(message.text or "")
+                await self.send_text(message.chat_id, TEXTS[language]["voice_not_heard"], reply_to=message.message_id)
             return None
+        if not heard:
+            return None  # silence or noise: stay quiet
         message = dataclasses.replace(message, text=heard, voice_url=None, reply_by_voice=True)
         if self.ingest and not message.is_private:
             await self.ingest(dataclasses.replace(message, text=f"🎤 {heard}"))  # the group's memory keeps it too
@@ -671,6 +677,11 @@ class Waha:
         if reply:
             voice_sent = audio and await self._send_voice_reply(message, reply, audio)
             if not voice_sent:
+                if by_voice and audio is None:
+                    # TTS was requested but the speech model failed: tell the member warmly, then give text.
+                    language = detect_language(message.text or "")
+                    await self.send_text(message.chat_id, TEXTS[language]["voice_reply_unavailable"], reply_to=message.message_id)
+                    await self.spacer.wait_turn()
                 await self.send_reply(message, reply)
             elif len(spoken(reply)) > MAX_SPOKEN_CHARS:
                 # Voice note was truncated: also send the full written reply beneath it.

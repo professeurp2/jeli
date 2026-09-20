@@ -38,7 +38,14 @@ FILE_REQUEST = re.compile(
     r"\b(send|share|forward|resend|attach|translat\w*|envoie|envoyer|renvoie|partage|transf[eè]re|tradu\w*)\b",
     re.IGNORECASE,
 )
-KINDS = ("question", "social", "about_jeli", "catchup", "file")
+# Pronouns and bare demonstratives that signal a question may lack a clear referent.
+VAGUE_SIGNAL = re.compile(
+    r"^\s*(?:ça|cela|ce truc|this|that|it)\s*\??$"  # message is literally just "ça?" or "this?"
+    r"|\b(ça|this|that)\b.*\?$"  # ends with "ça?" or "this?"
+    r"|\b(de quoi|sur quoi|à propos de quoi|about what|about which)\b",
+    re.IGNORECASE,
+)
+KINDS = ("question", "social", "about_jeli", "catchup", "file", "vague")
 
 SYSTEM = f"""\
 You read the messages members send to Jeli, the memory assistant of a WhatsApp community: the UniPods
@@ -57,7 +64,11 @@ Classify the latest message ("kind"):
 - "catchup": what happened or what they missed in the groups over a period (today, this week, since
   Monday). Not what was said in a given session, meeting, class or call: that is a "question".
 - "file": asks to be sent a document or file, or a translated version of one.
-- "question": anything else, even vague — the programmes, sessions, people, dates, rules, events.
+- "vague": the question has no clear topic — it refers to something ("ça", "this", "the module",
+  "the meeting") without saying which one, or is so general that searching would miss the point.
+  reply: one warm, curious sentence (never a list) that invites the member to be more specific —
+  ask which programme, session, topic or date they mean; sound like a helpful colleague, not a form.
+- "question": anything else — the programmes, sessions, people, dates, rules, events.
 standalone: the latest message rewritten as a complete question that makes sense on its own, using
 the conversation so far ("and for the video?" → "What is the deadline for the demo video?"), in the
 member's language. queries: for "question" and "file", two or three short search queries for the
@@ -103,7 +114,8 @@ class Understander:
         if ABOUT_JELI.search(text):
             return Understood(kind="about_jeli", reply=texts["about_jeli"], standalone=text, queries=[])
         clear_question = looks_like_question(text) and len(text.split()) >= 4
-        if self.llm is None or (clear_question and not turns and not FILE_REQUEST.search(text)):
+        might_be_vague = len(text.split()) < 5 or bool(VAGUE_SIGNAL.search(text))
+        if self.llm is None or (clear_question and not might_be_vague and not turns and not FILE_REQUEST.search(text)):
             return plain(text)
         prompt = (
             (f"Conversation so far:\n{conversation_text(list(turns))}\n\n" if turns else "")
@@ -119,7 +131,7 @@ class Understander:
             understood.kind = "question"
         if understood.kind == "about_jeli":
             understood.reply = texts["about_jeli"]  # what Jeli does, never a model's guess about it
-        elif understood.kind == "social" and not understood.reply.strip():
+        elif understood.kind in ("social", "vague") and not understood.reply.strip():
             understood.reply = texts["greeting_reply"]
         understood.standalone = " ".join(understood.standalone.split()) or text
         understood.queries = [" ".join(q.split()) for q in understood.queries if q.strip()][:3]

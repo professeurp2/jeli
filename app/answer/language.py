@@ -84,6 +84,8 @@ TEXTS = {
         "guard_repeat": "💬 You've already sent me this message several times. If I haven't answered, it's because I don't have that information — try rephrasing or using /search.",
         "admin_silenced": "✅ Got it! I'll stay quiet in this group{duration}. Use /resume to bring me back.",
         "admin_resumed": "✅ I'm back! Listening and answering as usual. 👑",
+        "voice_not_heard": "Hey, I got your voice note but couldn't quite make it out 🎤 Could you try again, or just type your question? I'm all ears either way!",
+        "voice_reply_unavailable": "I couldn't send you a voice reply right now — my voice module is having a moment 🎤 Here's my answer in text:",
     },
     "fr": {
         "dont_know": "Je n'ai pas trouvé cela dans les échanges des groupes. Demandez aux organisateurs, ou essayez /search avec un mot-clé.",
@@ -142,5 +144,7 @@ TEXTS = {
         "guard_repeat": "💬 Tu m'as déjà envoyé ce message plusieurs fois. Si je n'ai pas répondu, c'est que je n'ai pas cette information — essaie de reformuler ou utilise /search.",
         "admin_silenced": "✅ Reçu ! Je me tais dans ce groupe{duration}. Utilise /resume pour me faire revenir.",
         "admin_resumed": "✅ Je suis de retour ! J'écoute et réponds normalement. 👑",
+        "voice_not_heard": "Hey, j'ai reçu ton message vocal mais je n'ai pas réussi à le comprendre 🎤 Tu peux réessayer, ou simplement écrire ta question ? Je suis là dans tous les cas !",
+        "voice_reply_unavailable": "Je ne peux pas t'envoyer un message vocal là — mon module vocal fait une petite pause 🎤 Voici ma réponse en texte :",
     },
 }

@@ -111,8 +111,9 @@ class Voice:
         self.llm = llm  # listens with the answer models; speaks with its client
         self.models = models
 
-    async def listen(self, audio: bytes, mimetype: str) -> str:
-        """What the member said; "" when nothing could be heard (or no model is available)."""
+    async def listen(self, audio: bytes, mimetype: str) -> str | None:
+        """What the member said. Returns "" when nothing was heard (silence/noise/oversized audio),
+        None when the transcription model itself was unavailable (so the caller can notify the user)."""
         if not audio or len(audio) > MAX_VOICE_BYTES:
             return ""
         part = types.Part(inline_data=types.Blob(mime_type=mimetype.split(";")[0].strip() or "audio/ogg", data=audio))
@@ -120,7 +121,7 @@ class Voice:
             heard = await self.llm.generate([part, "Transcribe this voice note."], Heard, system=LISTEN_SYSTEM, timeout=20, temperature=0, attempts=2)
         except LLMUnavailable:
             log.warning("Could not listen to a voice note: no model available")
-            return ""
+            return None
         return " ".join(heard.text.split())
 
     async def describe(self, image: bytes, mimetype: str) -> str:
