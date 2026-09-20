@@ -30,7 +30,7 @@ from app.adapters.pacing import SendSpacer, SlidingWindowLimiter, reading_delay,
 from app.answer.citations import is_ignored, poll_text
 from app.answer.language import TEXTS, detect_language
 from app.answer.react import emotion_emoji, is_correction
-from app.answer.voice import asks_for_voice, sources, spoken, without_voice_request
+from app.answer.voice import MAX_SPOKEN_CHARS, asks_for_voice, sources, spoken, without_voice_request
 from app.config import Settings
 from app.control.guard import Guard
 from app.models import Attachment, IncomingMessage
@@ -669,7 +669,12 @@ class Waha:
         finally:
             await self._post_quietly("/api/stopTyping", chat)
         if reply:
-            if not (audio and await self._send_voice_reply(message, reply, audio)):
+            voice_sent = audio and await self._send_voice_reply(message, reply, audio)
+            if not voice_sent:
+                await self.send_reply(message, reply)
+            elif len(spoken(reply)) > MAX_SPOKEN_CHARS:
+                # Voice note was truncated: also send the full written reply beneath it.
+                await self.spacer.wait_turn()
                 await self.send_reply(message, reply)
             await self.deliver_files(message, reply)
 

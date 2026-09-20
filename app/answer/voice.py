@@ -136,10 +136,14 @@ class Voice:
         return seen.description.strip()
 
     async def speak(self, text: str) -> bytes | None:
-        """The text read aloud, as a WAV file; None when it is too long or no speech model answers."""
+        """The text read aloud, as a WAV file; None when no speech model answers.
+        Long replies are truncated at a sentence boundary: the full text is sent alongside."""
         text = text.strip()
-        if not text or len(text) > MAX_SPOKEN_CHARS:
+        if not text:
             return None
+        if len(text) > MAX_SPOKEN_CHARS:
+            cutoff = text[:MAX_SPOKEN_CHARS].rfind(". ")
+            text = text[:cutoff + 1] if cutoff > 300 else text[:MAX_SPOKEN_CHARS]
         config = types.GenerateContentConfig(
             response_modalities=["AUDIO"],
             speech_config=types.SpeechConfig(
