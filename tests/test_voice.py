@@ -96,7 +96,7 @@ def test_asked_by_voice_jeli_answers_by_voice_then_writes_the_sources(waha):
     paths = [path for path, _ in waha.sent]
     assert paths == ["/api/sendSeen", "/api/startTyping", "/api/default/presence", "/api/stopTyping", "/api/sendVoice", "/api/sendText"]
     voice, text = waha.sent[4][1], waha.sent[5][1]
-    assert voice["convert"] is True and voice["reply_to"] == "voice-1" and voice["file"]["mimetype"] == "audio/wav"
+    assert voice["convert"] is True and voice["reply_to"] == "voice-1" and voice["file"]["mimetype"] == "audio/mpeg"
     assert text["text"] == "> *Diane* · METI cohort, Wed 16 Sep\n> Submissions close on 24 Sept"
 
 

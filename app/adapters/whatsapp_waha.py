@@ -30,7 +30,7 @@ from app.adapters.pacing import SendSpacer, SlidingWindowLimiter, reading_delay,
 from app.answer.citations import is_ignored, poll_text
 from app.answer.language import TEXTS, detect_language
 from app.answer.react import emotion_emoji, is_correction
-from app.answer.voice import MAX_SPOKEN_CHARS, asks_for_voice, sources, spoken, without_voice_request
+from app.answer.voice import AUDIO_BYTES_PER_SECOND, AUDIO_MIMETYPE, MAX_SPOKEN_CHARS, asks_for_voice, sources, spoken, without_voice_request
 from app.config import Settings
 from app.control.guard import Guard
 from app.models import Attachment, IncomingMessage
@@ -443,10 +443,11 @@ class Waha:
         return result.get("id")
 
     async def send_voice(self, chat_id: str, audio: bytes, reply_to: str | None = None) -> None:
-        """A voice note: WAHA turns the audio (WAV) into the OGG/Opus that WhatsApp plays."""
+        """A voice note: WAHA converts the audio to OGG/Opus for WhatsApp."""
+        ext = AUDIO_MIMETYPE.split("/")[-1]
         payload = {
             "chatId": chat_id,
-            "file": {"mimetype": "audio/wav", "filename": "jeli.wav", "data": base64.b64encode(audio).decode()},
+            "file": {"mimetype": AUDIO_MIMETYPE, "filename": f"jeli.{ext}", "data": base64.b64encode(audio).decode()},
             "convert": True,
         }
         if reply_to:
@@ -653,6 +654,7 @@ class Waha:
             await self.delete_message(message.chat_id, wrong_id)
             log.info("Deleted Jeli's wrong message %s after correction in %s", wrong_id, message.chat_id)
         chat = {"chatId": message.chat_id}
+        language = detect_language(message.text or "")
         by_voice = self.voice is not None and message.reply_by_voice
         if by_voice:
             message = dataclasses.replace(message, text=without_voice_request(message.text))
@@ -665,10 +667,10 @@ class Waha:
             reply = await self.respond(message)
             if reply and by_voice:
                 await self._post_quietly(f"/api/{self.session}/presence", {**chat, "presence": "recording"})
-                audio = await self.voice.speak(spoken(reply))
+                audio = await self.voice.speak(spoken(reply), language)
             if reply:
                 # Answer generation counts as typing time: only wait for what is left.
-                busy = min(VOICE_RECORDING_SECONDS, len(audio) / 48_000) if audio else typing_duration(reply)
+                busy = min(VOICE_RECORDING_SECONDS, len(audio) / AUDIO_BYTES_PER_SECOND) if audio else typing_duration(reply)
                 await asyncio.sleep(max(0.0, busy - (time.monotonic() - typing_since)))
                 # Still "typing…" while other answers go out first.
                 await self.spacer.wait_turn()
@@ -679,7 +681,6 @@ class Waha:
             if not voice_sent:
                 if by_voice and audio is None:
                     # TTS was requested but the speech model failed: tell the member warmly, then give text.
-                    language = detect_language(message.text or "")
                     await self.send_text(message.chat_id, TEXTS[language]["voice_reply_unavailable"], reply_to=message.message_id)
                     await self.spacer.wait_turn()
                 await self.send_reply(message, reply)

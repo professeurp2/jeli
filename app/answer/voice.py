@@ -7,23 +7,23 @@ the text that follows it); WAHA turns the audio into a WhatsApp voice note. When
 member gets the written answer instead: a voice reply is a courtesy, never a condition.
 """
 
-import asyncio
 import io
 import logging
 import re
 import wave
 
-from google.genai import errors, types
+import edge_tts
+from google.genai import types
 from pydantic import BaseModel
 
 from app.answer.llm import LLM, LLMUnavailable
 
 log = logging.getLogger(__name__)
 
-SPEECH_MODELS = ("gemini-2.5-flash-preview-tts", "gemini-2.5-pro-preview-tts")
-VOICE_NAME = "Puck"  # lively and warm
-SPEECH_TIMEOUT = 40
-SAMPLE_RATE = 24_000  # the speech models return 16-bit mono PCM at 24 kHz
+# edge-tts: free, no API key, natural voices — primary TTS
+EDGE_VOICES = {"fr": "fr-FR-ElisaNeural", "en": "en-US-AriaNeural"}
+AUDIO_MIMETYPE = "audio/mpeg"
+AUDIO_BYTES_PER_SECOND = 16_000  # edge-tts MP3 at ~128 kbps
 # A voice note says the answer in about a minute at most; longer answers stay written.
 MAX_SPOKEN_CHARS = 900
 MAX_VOICE_BYTES = 5 * 1024 * 1024  # a voice note of several minutes; longer is not a question
@@ -107,9 +107,8 @@ def wav(pcm: bytes, rate: int = SAMPLE_RATE) -> bytes:
 
 
 class Voice:
-    def __init__(self, llm: LLM, models: tuple[str, ...] = SPEECH_MODELS):
+    def __init__(self, llm: LLM):
         self.llm = llm  # listens with the answer models; speaks with its client
-        self.models = models
 
     async def listen(self, audio: bytes, mimetype: str) -> str | None:
         """What the member said. Returns "" when nothing was heard (silence/noise/oversized audio),
@@ -136,8 +135,8 @@ class Voice:
             return ""
         return seen.description.strip()
 
-    async def speak(self, text: str) -> bytes | None:
-        """The text read aloud, as a WAV file; None when no speech model answers.
+    async def speak(self, text: str, language: str = "en") -> bytes | None:
+        """The text read aloud as an MP3 file; None when TTS fails.
         Long replies are truncated at a sentence boundary: the full text is sent alongside."""
         text = text.strip()
         if not text:
@@ -145,22 +144,16 @@ class Voice:
         if len(text) > MAX_SPOKEN_CHARS:
             cutoff = text[:MAX_SPOKEN_CHARS].rfind(". ")
             text = text[:cutoff + 1] if cutoff > 300 else text[:MAX_SPOKEN_CHARS]
-        config = types.GenerateContentConfig(
-            response_modalities=["AUDIO"],
-            speech_config=types.SpeechConfig(
-                voice_config=types.VoiceConfig(prebuilt_voice_config=types.PrebuiltVoiceConfig(voice_name=VOICE_NAME))
-            ),
-            automatic_function_calling=types.AutomaticFunctionCallingConfig(disable=True),
-        )
-        for model in self.models:
-            try:
-                response = await asyncio.wait_for(
-                    self.llm.client.aio.models.generate_content(model=model, contents=SPEAK_STYLE.format(text=text), config=config),
-                    timeout=SPEECH_TIMEOUT,
-                )
-                blob = response.candidates[0].content.parts[0].inline_data
-                rate = re.search(r"rate=(\d+)", blob.mime_type or "")
-                return wav(blob.data, int(rate.group(1)) if rate else SAMPLE_RATE)
-            except Exception as error:
-                log.error("TTS model %s failed — %s: %s", model, type(error).__name__, error)
+        voice = EDGE_VOICES.get(language, EDGE_VOICES["en"])
+        try:
+            communicate = edge_tts.Communicate(SPEAK_STYLE.format(text=text), voice)
+            audio = bytearray()
+            async for chunk in communicate.stream():
+                if chunk["type"] == "audio":
+                    audio.extend(chunk["data"])
+            if audio:
+                return bytes(audio)
+            log.warning("edge-tts returned no audio (language=%s)", language)
+        except Exception as error:
+            log.error("edge-tts failed: %s: %s", type(error).__name__, error)
         return None
