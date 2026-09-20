@@ -29,6 +29,10 @@ class IncomingMessage:
     # Body of the WhatsApp message the member is quoting, when they typed a real question alongside.
     # Included as context so the LLM knows what "ça" / "this" / "ce message" refers to.
     quoted_context: str = ""
+    # An image or photo the member shared (a screenshot, a table, a chart …).
+    # Jeli downloads it and asks Gemini to describe it, then prepends the description to the text.
+    image_url: str | None = None
+    image_mimetype: str = ""
 
 
 @dataclass(frozen=True)

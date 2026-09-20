@@ -44,10 +44,19 @@ Write down, word for word, what is said in this WhatsApp voice note, in the lang
 (English, French or another). No comments, no timestamps; "" if nothing is said.
 """
 SPEAK_STYLE = "Read this WhatsApp voice reply aloud, warmly and naturally, at a relaxed pace:\n\n{text}"
+IMAGE_SYSTEM = """\
+Describe what this image shows in 2-4 sentences. If it contains a table, list, chart, form or any
+text, transcribe the key content faithfully. Be concise and factual — focus on information that
+would help answer a question about the image.
+"""
 
 
 class Heard(BaseModel):
     text: str
+
+
+class Seen(BaseModel):
+    description: str
 
 
 VOICE_ASK = re.compile(
@@ -113,6 +122,18 @@ class Voice:
             log.warning("Could not listen to a voice note: no model available")
             return ""
         return " ".join(heard.text.split())
+
+    async def describe(self, image: bytes, mimetype: str) -> str:
+        """What the image shows; "" when the model cannot process it."""
+        if not image:
+            return ""
+        part = types.Part(inline_data=types.Blob(mime_type=mimetype.split(";")[0].strip() or "image/jpeg", data=image))
+        try:
+            seen = await self.llm.generate([part, "Describe this image."], Seen, system=IMAGE_SYSTEM, timeout=20, temperature=0, attempts=1)
+        except LLMUnavailable:
+            log.warning("Could not describe an image: no model available")
+            return ""
+        return seen.description.strip()
 
     async def speak(self, text: str) -> bytes | None:
         """The text read aloud, as a WAV file; None when it is too long or no speech model answers."""

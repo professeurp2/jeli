@@ -134,6 +134,14 @@ def _voice_note(payload: dict) -> dict | None:
     return None
 
 
+def _image_media(payload: dict) -> dict | None:
+    """A photo or image the member shared (screenshot, chart, table …), None for other media."""
+    media = payload.get("media") or {}
+    if payload.get("hasMedia") and media.get("url") and (media.get("mimetype") or "").startswith("image/"):
+        return media
+    return None
+
+
 def parse_message(event: dict, bot_name: str) -> IncomingMessage | None:
     """Turn a WAHA `message` event into an IncomingMessage; None for anything Jeli should not process."""
     if event.get("event") != "message":
@@ -145,7 +153,8 @@ def parse_message(event: dict, bot_name: str) -> IncomingMessage | None:
     if poll:
         text = poll_text(*poll)  # a poll: its question and options, to be remembered with its votes
     voice = _voice_note(payload)
-    if payload.get("fromMe") or not chat_id or chat_id.endswith(IGNORED_CHAT_SUFFIXES) or not (text or voice):
+    image = _image_media(payload)
+    if payload.get("fromMe") or not chat_id or chat_id.endswith(IGNORED_CHAT_SUFFIXES) or not (text or voice or image):
         return None
 
     me = event.get("me") or {}
@@ -199,6 +208,8 @@ def parse_message(event: dict, bot_name: str) -> IncomingMessage | None:
         voice_mimetype=voice.get("mimetype", "") if voice else "",
         reply_by_voice=asks_for_voice(text),
         quoted_context=quoted_context,
+        image_url=image["url"] if image else None,
+        image_mimetype=image.get("mimetype", "") if image else "",
     )
 
 
@@ -480,6 +491,8 @@ class Waha:
                 message = await self._listen(message)
                 if message is None:
                     return
+            if message.image_url and message.addressed_to_bot:
+                message = await self._see(message)
             if not message.addressed_to_bot and self.follow_up and self.follow_up(message):
                 message = dataclasses.replace(message, addressed_to_bot=True)
             if message.addressed_to_bot:
@@ -494,6 +507,24 @@ class Waha:
                         await self.send_reaction(message.chat_id, message.message_id, emoji)
         except Exception:
             log.exception("Failed to handle WhatsApp message %s", message.message_id)
+
+    async def _see(self, message: IncomingMessage) -> IncomingMessage:
+        """Download and describe an image; the description is prepended to the message text so the
+        LLM can answer questions about a screenshot, table or chart a member shared."""
+        if self.voice is None:
+            return message
+        try:
+            response = await self._http.get(httpx.URL(message.image_url).raw_path.decode())
+            response.raise_for_status()
+        except httpx.HTTPError as error:
+            log.warning("Cannot download the image from message %s: %r", message.message_id, error)
+            return message
+        description = await self.voice.describe(response.content, message.image_mimetype)
+        if not description:
+            return message
+        prefix = f"[Image: {description}]"
+        new_text = f"{prefix}\n{message.text}".strip() if message.text else prefix
+        return dataclasses.replace(message, text=new_text, image_url=None)
 
     async def _listen(self, message: IncomingMessage) -> IncomingMessage | None:
         """A voice note, listened to when it is for Jeli: sent to it, a reply to it, or said in a
