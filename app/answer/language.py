@@ -35,9 +35,10 @@ TEXTS = {
         "session_in_progress": "⏳ The recording of «{title}» (shared by {who}, {day}) is being transcribed right now — {progress}. Ask me again in a few minutes and I'll tell you what was said.",
         "about_jeli": (
             "I'm Jeli 👋, the memory of this community. I've read the groups, the recorded sessions and the "
-            "shared documents: ask me anything that was said, and I'll tell you where it was said — or that "
-            "I don't know. I can also catch you up (/catchup), recap a session (/recap), list what's due "
-            "(/deadlines) and find where a topic was discussed (/search). Team Jeli built me for the hackathon."
+            "programme documents — MIT, Wadhwani, the Ethiopian AI Institute, the selection data. Ask me "
+            "anything that was said or shared, and I'll tell you where — or that I don't know. I can also "
+            "catch you up (/catchup), recap a session (/recap), list what's due (/deadlines) and find where "
+            "a topic was discussed (/search). Team Jeli built me for the hackathon."
         ),
         "sources": "Sources",
         "fallback": "I'm answering a lot of questions right now, so here is where the group talked about it — ask me again in a minute for a full answer:",
@@ -70,8 +71,9 @@ TEXTS = {
         "recap_choose": "Which session? Reply with /recap and its number:",
         "recap_unavailable": "I can't write this recap right now. Try again in a few minutes.",
         "help": (
-            "Hi, I'm Jeli, the group's memory. Ask me about anything discussed in the group or in "
-            "recorded sessions — mention me (@Jeli), reply to one of my messages, or start with \"Jeli,\". "
+            "Hi, I'm Jeli, the group's memory. Ask me about anything discussed in the group, in recorded "
+            "sessions, or in the programme documents (MIT, Wadhwani, Ethiopian AI Institute, selection) — "
+            "mention me (@Jeli), reply to one of my messages, or start with \"Jeli,\". "
             "I answer with my sources, and I say so when I don't know.\n\n"
             "/catchup — what you missed (/catchup 3 days, or \"what did I miss since Monday?\")\n"
             "/recap — summary of a recorded session\n"
@@ -90,7 +92,8 @@ TEXTS = {
         "session_in_progress": "⏳ L'enregistrement de «{title}» (partagé par {who}, {day}) est en cours de transcription — {progress}. Redemandez-moi dans quelques minutes et je vous dirai ce qui s'y est dit.",
         "about_jeli": (
             "Je suis Jeli 👋, la mémoire de cette communauté. J'ai lu les groupes, les séances enregistrées et "
-            "les documents partagés : demandez-moi tout ce qui a été dit, je vous dis où — ou que je ne sais pas. "
+            "les documents du programme — MIT, Wadhwani, l'Institut Éthiopien d'IA, les données de sélection. "
+            "Demandez-moi tout ce qui a été dit ou partagé, je vous dis où — ou que je ne sais pas. "
             "Je fais aussi le point (/catchup), le résumé d'une séance (/recap), la liste des échéances "
             "(/deadlines) et je retrouve où un sujet a été abordé (/search). L'équipe Jeli m'a créé pour le hackathon."
         ),
@@ -125,8 +128,9 @@ TEXTS = {
         "recap_choose": "Quelle session ? Répondez /recap suivi de son numéro :",
         "recap_unavailable": "Je ne peux pas rédiger ce résumé pour l'instant. Réessayez dans quelques minutes.",
         "help": (
-            "Bonjour, je suis Jeli, la mémoire du groupe. Posez-moi une question sur ce qui s'est dit ici "
-            "ou pendant les sessions enregistrées — mentionnez-moi (@Jeli), répondez à l'un de mes messages, "
+            "Bonjour, je suis Jeli, la mémoire du groupe. Posez-moi une question sur ce qui s'est dit ici, "
+            "pendant les sessions enregistrées, ou dans les documents du programme (MIT, Wadhwani, Institut "
+            "Éthiopien d'IA, sélection) — mentionnez-moi (@Jeli), répondez à l'un de mes messages, "
             "ou commencez par « Jeli, ». Je réponds avec mes sources, et je le dis quand je ne sais pas.\n\n"
             "/catchup — ce que vous avez raté (/catchup 3 jours, ou « qu'est-ce que j'ai raté depuis lundi ? »)\n"
             "/recap — résumé d'une session enregistrée\n"
