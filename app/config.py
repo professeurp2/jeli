@@ -32,6 +32,9 @@ class Settings(BaseSettings):
     telegram_webhook_secret: str = ""
 
     gemini_api_key: str = ""
+    # Extra Gemini keys (comma-separated) for quota rotation: when one key is exhausted the next
+    # takes over. Create additional projects on aistudio.google.com to multiply the free quota.
+    gemini_api_keys: str = ""
     # Answer models, tried in order: the next one takes over on quota, overload or timeout.
     gemini_models: str = "gemini-3.6-flash,gemini-3.5-flash-lite,gemini-flash-lite-latest"
     # Transcription models, tried in order (they listen to the recording, window by window).
@@ -75,6 +78,14 @@ class Settings(BaseSettings):
     # How often live messages are chunked and embedded. Set to 30 on Railway for faster recall.
     index_interval_seconds: int = 30
     log_level: str = "INFO"
+
+    @property
+    def api_key_list(self) -> list[str]:
+        """All Gemini keys for quota rotation: primary key first, then extras."""
+        primary = [self.gemini_api_key] if self.gemini_api_key else []
+        extras = [k.strip() for k in self.gemini_api_keys.split(",") if k.strip()]
+        seen = set(primary)
+        return primary + [k for k in extras if k not in seen]
 
     @property
     def whatsapp_groups(self) -> set[str]:

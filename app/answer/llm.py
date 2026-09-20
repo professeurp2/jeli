@@ -40,7 +40,7 @@ class LLMUnavailable(Exception):
 class LLM:
     def __init__(
         self,
-        api_key: str,
+        api_keys: list[str] | str,
         models: list[str],
         client: genai.Client | None = None,
         clock: Callable[[], float] = time.monotonic,
@@ -48,28 +48,33 @@ class LLM:
         if not models:
             raise ValueError("At least one model is required")
         self.models = models
-        self._client = client or genai.Client(api_key=api_key)
+        if client:
+            self._clients = [client]
+        else:
+            keys = [api_keys] if isinstance(api_keys, str) else api_keys
+            self._clients = [genai.Client(api_key=k) for k in keys if k]
+        self._key = 0  # index of the active key
         self._clock = clock
-        self._resting_until: dict[str, float] = {}
+        # Cooldown per (key_index, model_name) pair.
+        self._resting_until: dict[tuple[int, str], float] = {}
 
     @property
     def client(self) -> genai.Client:
-        return self._client
+        return self._clients[self._key]
 
-    def _rest(self, model: str, reason: str) -> None:
-        self._resting_until[model] = self._clock() + COOLDOWN_SECONDS[reason]
-        log.warning("Model %s %s, skipped for %d s", model, reason, COOLDOWN_SECONDS[reason])
+    def _rest(self, key: int, model: str, reason: str) -> None:
+        self._resting_until[(key, model)] = self._clock() + COOLDOWN_SECONDS[reason]
+        log.warning("Key %d model %s %s, skipped for %d s", key, model, reason, COOLDOWN_SECONDS[reason])
 
     def status(self) -> list[tuple[str, int]]:
-        """Each model and the seconds it still rests after a failure (0: available)."""
+        """Each model and the seconds it still rests on the active key (0: available)."""
         now = self._clock()
-        return [(model, max(0, int(self._resting_until.get(model, 0) - now))) for model in self.models]
+        return [(m, max(0, int(self._resting_until.get((self._key, m), 0) - now))) for m in self.models]
 
-    def _available(self) -> list[str]:
+    def _available(self, key: int) -> list[str]:
         now = self._clock()
-        ready = [m for m in self.models if self._resting_until.get(m, 0) <= now]
-        # If every model is resting, try them all anyway rather than not answering.
-        return ready or self.models
+        ready = [m for m in self.models if self._resting_until.get((key, m), 0) <= now]
+        return ready or self.models  # all resting: try them anyway rather than not answering
 
     async def generate(
         self,
@@ -92,24 +97,34 @@ class LLM:
             thinking_config=types.ThinkingConfig(thinking_level=THINKING_LEVEL),
             automatic_function_calling=types.AutomaticFunctionCallingConfig(disable=True),
         )
-        for model in self._available()[:attempts]:
+        # Try every (key, model) pair: models on the active key first, then rotate keys.
+        tried: list[tuple[int, str]] = []
+        all_pairs = [(ki, m) for ki in range(len(self._clients)) for m in self._available(ki)]
+        # Prioritise active key; bring it to the front without duplicating.
+        active_models = [(self._key, m) for m in self._available(self._key)]
+        other_models = [(ki, m) for ki, m in all_pairs if ki != self._key]
+        for key_idx, model in (active_models + other_models)[:attempts]:
+            if (key_idx, model) in tried:
+                continue
+            tried.append((key_idx, model))
+            client = self._clients[key_idx]
             try:
                 response = await asyncio.wait_for(
-                    self._client.aio.models.generate_content(model=model, contents=contents, config=config),
+                    client.aio.models.generate_content(model=model, contents=contents, config=config),
                     timeout=timeout,
                 )
+                self._key = key_idx  # remember which key last worked
                 parsed = response.parsed
                 return parsed if isinstance(parsed, schema) else schema.model_validate_json(response.text)
             except errors.ClientError as error:
-                # Quota (429) and retired models (404) move on to the next model; other client errors are bugs.
+                # Quota (429) and retired models (404) move on to the next model/key.
                 if error.code not in (404, 429):
                     raise
-                self._rest(model, "quota")
+                self._rest(key_idx, model, "quota")
             except (errors.ServerError, TimeoutError, httpx.TransportError):
-                # Overload, slowness or a network drop ("Server disconnected without sending a response").
-                self._rest(model, "unavailable")
+                self._rest(key_idx, model, "unavailable")
             except (ValidationError, ValueError) as error:
-                log.warning("Model %s returned unusable output (%s), trying the next one", model, type(error).__name__)
+                log.warning("Key %d model %s returned unusable output (%s), trying next", key_idx, model, type(error).__name__)
         raise LLMUnavailable
 
     async def answer(self, system: str, prompt: str) -> GeneratedAnswer:
