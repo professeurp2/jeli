@@ -20,7 +20,7 @@ from app.answer.llm import LLM, LLMUnavailable
 
 log = logging.getLogger(__name__)
 
-SPEECH_MODELS = ("gemini-3.1-flash-tts-preview", "gemini-2.5-flash-preview-tts")
+SPEECH_MODELS = ("gemini-2.5-flash-preview-tts", "gemini-2.5-pro-preview-tts")
 VOICE_NAME = "Puck"  # lively and warm
 SPEECH_TIMEOUT = 40
 SAMPLE_RATE = 24_000  # the speech models return 16-bit mono PCM at 24 kHz
