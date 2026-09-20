@@ -21,7 +21,7 @@ from app.answer.llm import LLM, LLMUnavailable
 log = logging.getLogger(__name__)
 
 # edge-tts: free, no API key, natural voices — primary TTS
-EDGE_VOICES = {"fr": "fr-FR-ElisaNeural", "en": "en-US-AriaNeural"}
+EDGE_VOICES = {"fr": "fr-FR-DeniseNeural", "en": "en-US-AriaNeural"}
 AUDIO_MIMETYPE = "audio/mpeg"
 AUDIO_BYTES_PER_SECOND = 16_000  # edge-tts MP3 at ~128 kbps
 SAMPLE_RATE = 24_000  # WAV helper: 16-bit mono PCM at 24 kHz (used by tests)
@@ -147,7 +147,7 @@ class Voice:
             text = text[:cutoff + 1] if cutoff > 300 else text[:MAX_SPOKEN_CHARS]
         voice = EDGE_VOICES.get(language, EDGE_VOICES["en"])
         try:
-            communicate = edge_tts.Communicate(SPEAK_STYLE.format(text=text), voice)
+            communicate = edge_tts.Communicate(text, voice)
             audio = bytearray()
             async for chunk in communicate.stream():
                 if chunk["type"] == "audio":
