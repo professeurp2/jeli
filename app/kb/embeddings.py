@@ -79,8 +79,9 @@ class Embedder:
         else:
             keys = [api_keys] if isinstance(api_keys, str) else api_keys
             self._clients = [genai.Client(api_key=k) for k in keys if k]
-        self._key = 0
-        self._budget = TokenBudget(tokens_per_minute)
+        self._next_key = 0  # round-robin cursor: advanced after each batch
+        # Combined budget: n keys × per-key quota = effective tokens per minute.
+        self._budget = TokenBudget(tokens_per_minute * len(self._clients))
 
     async def embed_documents(self, texts: Sequence[str]) -> list[list[float]]:
         return await self._embed(texts, "RETRIEVAL_DOCUMENT")
@@ -101,16 +102,20 @@ class Embedder:
     async def _call_with_retry(self, batch: list[str], config: types.EmbedContentConfig):
         keys_tried: set[int] = set()
         delays = iter((*RETRY_DELAYS, None))
+        key = self._next_key  # start from the round-robin cursor
         while True:
             try:
-                return await self._clients[self._key].aio.models.embed_content(model=MODEL, contents=batch, config=config)
+                result = await self._clients[key].aio.models.embed_content(model=MODEL, contents=batch, config=config)
+                self._next_key = (key + 1) % len(self._clients)  # advance after success
+                return result
             except (errors.APIError, httpx.TransportError) as error:
                 code = getattr(error, "code", None)
                 if code == 429:
-                    keys_tried.add(self._key)
+                    keys_tried.add(key)
                     if len(keys_tried) < len(self._clients):
-                        self._key = (self._key + 1) % len(self._clients)
-                        log.info("Embeddings quota on key %d, rotating to key %d", self._key - 1, self._key)
+                        old_key = key
+                        key = (key + 1) % len(self._clients)
+                        log.info("Embeddings quota on key %d, rotating to key %d", old_key, key)
                         continue  # retry immediately with next key
                 retryable = isinstance(error, httpx.TransportError) or code == 429 or (code or 0) >= 500
                 delay = next(delays)
@@ -118,4 +123,5 @@ class Embedder:
                     raise
                 log.warning("Gemini embeddings failed (%s), retrying in %s s", code or type(error).__name__, delay)
                 keys_tried.clear()  # reset after waiting so rotation can restart
+                key = self._next_key  # resume from round-robin position after wait
                 await asyncio.sleep(delay)

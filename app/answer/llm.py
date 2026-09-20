@@ -53,28 +53,47 @@ class LLM:
         else:
             keys = [api_keys] if isinstance(api_keys, str) else api_keys
             self._clients = [genai.Client(api_key=k) for k in keys if k]
-        self._key = 0  # index of the active key
+        self._next_key = 0  # round-robin cursor: advanced after each success
         self._clock = clock
         # Cooldown per (key_index, model_name) pair.
         self._resting_until: dict[tuple[int, str], float] = {}
 
     @property
     def client(self) -> genai.Client:
-        return self._clients[self._key]
+        return self._clients[self._next_key % len(self._clients)]
 
     def _rest(self, key: int, model: str, reason: str) -> None:
         self._resting_until[(key, model)] = self._clock() + COOLDOWN_SECONDS[reason]
         log.warning("Key %d model %s %s, skipped for %d s", key, model, reason, COOLDOWN_SECONDS[reason])
 
     def status(self) -> list[tuple[str, int]]:
-        """Each model and the seconds it still rests on the active key (0: available)."""
+        """Each model and minimum seconds it still rests across all keys (0: at least one key ready)."""
         now = self._clock()
-        return [(m, max(0, int(self._resting_until.get((self._key, m), 0) - now))) for m in self.models]
+        n = len(self._clients)
+        return [
+            (m, min(max(0, int(self._resting_until.get((ki, m), 0) - now)) for ki in range(n)))
+            for m in self.models
+        ]
 
-    def _available(self, key: int) -> list[str]:
+    def _build_pairs(self) -> list[tuple[int, str]]:
+        """Model-first, key-round-robin ordering.
+
+        Tries the best model across all keys before falling back to the next model.
+        Within each model, keys rotate from self._next_key for even quota distribution.
+        Pairs still in cooldown are appended last as a last-resort fallback.
+        """
+        n = len(self._clients)
         now = self._clock()
-        ready = [m for m in self.models if self._resting_until.get((key, m), 0) <= now]
-        return ready or self.models  # all resting: try them anyway rather than not answering
+        preferred: list[tuple[int, str]] = []
+        fallback: list[tuple[int, str]] = []
+        for model in self.models:
+            for offset in range(n):
+                ki = (self._next_key + offset) % n
+                if self._resting_until.get((ki, model), 0) <= now:
+                    preferred.append((ki, model))
+                else:
+                    fallback.append((ki, model))
+        return preferred + fallback
 
     async def generate(
         self,
@@ -86,8 +105,8 @@ class LLM:
         media_resolution: types.MediaResolution | None = None,
         attempts: int | None = None,
     ) -> Schema:
-        """`attempts`: how many models to try at most (all by default) — one for optional steps,
-        so that a busy model never doubles the wait."""
+        """`attempts`: how many (key, model) pairs to try at most (all by default) — one for optional
+        steps so that a busy model never doubles the wait."""
         config = types.GenerateContentConfig(
             system_instruction=system,
             response_mime_type="application/json",
@@ -97,23 +116,18 @@ class LLM:
             thinking_config=types.ThinkingConfig(thinking_level=THINKING_LEVEL),
             automatic_function_calling=types.AutomaticFunctionCallingConfig(disable=True),
         )
-        # Try every (key, model) pair: models on the active key first, then rotate keys.
-        tried: list[tuple[int, str]] = []
-        all_pairs = [(ki, m) for ki in range(len(self._clients)) for m in self._available(ki)]
-        # Prioritise active key; bring it to the front without duplicating.
-        active_models = [(self._key, m) for m in self._available(self._key)]
-        other_models = [(ki, m) for ki, m in all_pairs if ki != self._key]
-        for key_idx, model in (active_models + other_models)[:attempts]:
+        tried: set[tuple[int, str]] = set()
+        for key_idx, model in self._build_pairs()[:attempts]:
             if (key_idx, model) in tried:
                 continue
-            tried.append((key_idx, model))
+            tried.add((key_idx, model))
             client = self._clients[key_idx]
             try:
                 response = await asyncio.wait_for(
                     client.aio.models.generate_content(model=model, contents=contents, config=config),
                     timeout=timeout,
                 )
-                self._key = key_idx  # remember which key last worked
+                self._next_key = (key_idx + 1) % len(self._clients)  # advance round-robin
                 parsed = response.parsed
                 return parsed if isinstance(parsed, schema) else schema.model_validate_json(response.text)
             except errors.ClientError as error:
