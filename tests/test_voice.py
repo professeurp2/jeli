@@ -52,7 +52,7 @@ class Voice:
         assert audio == b"OggS voice" and mimetype.startswith("audio/ogg")
         return self.heard
 
-    async def speak(self, text):
+    async def speak(self, text, language="en"):
         self.said.append(text)
         return self.audio
 
