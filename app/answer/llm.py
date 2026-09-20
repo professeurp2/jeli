@@ -22,7 +22,7 @@ TIMEOUT_SECONDS = 6
 # default 14 s or overloaded, "low" 5.7 s and wrongly "not found", "minimal" 1.7 s and correct.
 THINKING_LEVEL = "minimal"
 # A model out of quota is skipped for a while instead of costing a failed round trip per question.
-COOLDOWN_SECONDS = {"quota": 300, "unavailable": 60}
+COOLDOWN_SECONDS = {"quota": 300, "unavailable": 60, "invalid": 86_400}
 
 Schema = TypeVar("Schema", bound=BaseModel)
 
@@ -65,6 +65,13 @@ class LLM:
     def _rest(self, key: int, model: str, reason: str) -> None:
         self._resting_until[(key, model)] = self._clock() + COOLDOWN_SECONDS[reason]
         log.warning("Key %d model %s %s, skipped for %d s", key, model, reason, COOLDOWN_SECONDS[reason])
+
+    def _disable_key(self, key: int) -> None:
+        """Mark all models on a key as invalid for 24 h (e.g. after 401 UNAUTHENTICATED)."""
+        until = self._clock() + COOLDOWN_SECONDS["invalid"]
+        for m in self.models:
+            self._resting_until[(key, m)] = until
+        log.error("Key %d disabled for 24 h — verify it is valid and Gemini API is enabled on its project", key)
 
     def status(self) -> list[tuple[str, int]]:
         """Each model and minimum seconds it still rests across all keys (0: at least one key ready)."""
@@ -131,10 +138,12 @@ class LLM:
                 parsed = response.parsed
                 return parsed if isinstance(parsed, schema) else schema.model_validate_json(response.text)
             except errors.ClientError as error:
-                # Quota (429) and retired models (404) move on to the next model/key.
-                if error.code not in (404, 429):
+                if error.code == 401:
+                    self._disable_key(key_idx)  # bad key: skip all models on it for 24 h
+                elif error.code in (404, 429):
+                    self._rest(key_idx, model, "quota")
+                else:
                     raise
-                self._rest(key_idx, model, "quota")
             except (errors.ServerError, TimeoutError, httpx.TransportError):
                 self._rest(key_idx, model, "unavailable")
             except (ValidationError, ValueError) as error:
