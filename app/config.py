@@ -72,8 +72,8 @@ class Settings(BaseSettings):
     database_url: str = ""
     # WhatsApp exports carry local times without a timezone: the exporting phone's zone.
     export_timezone: str = "UTC"
-    # How often live messages are chunked and embedded.
-    index_interval_seconds: int = 120
+    # How often live messages are chunked and embedded. Set to 30 on Railway for faster recall.
+    index_interval_seconds: int = 30
     log_level: str = "INFO"
 
     @property

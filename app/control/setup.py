@@ -13,9 +13,10 @@ from app.kb.indexer import index_pending
 # The scan shares the Gemini quota with answers: a backlog (a fresh import) is drained a few
 # batches an hour rather than in one burst that would leave members without answers.
 MAX_DEADLINE_BATCHES_PER_RUN = 10
-# A live conversation is learned once quiet for this long. Measured: with 30 minutes, a question
-# about something said 10 minutes earlier got "I don't know".
-SETTLE = timedelta(minutes=3)
+# A live conversation is learned once quiet for this long.
+# Shorter = new messages become searchable sooner; too short = a multi-message exchange may be
+# chunked before the thread is complete. 1 minute is a good balance for a live group.
+SETTLE = timedelta(minutes=1)
 
 
 def _plural(n: int, word: str) -> str:
