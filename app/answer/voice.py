@@ -150,6 +150,7 @@ class Voice:
             speech_config=types.SpeechConfig(
                 voice_config=types.VoiceConfig(prebuilt_voice_config=types.PrebuiltVoiceConfig(voice_name=VOICE_NAME))
             ),
+            automatic_function_calling=types.AutomaticFunctionCallingConfig(disable=True),
         )
         for model in self.models:
             try:
