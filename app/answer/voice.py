@@ -24,6 +24,7 @@ log = logging.getLogger(__name__)
 EDGE_VOICES = {"fr": "fr-FR-ElisaNeural", "en": "en-US-AriaNeural"}
 AUDIO_MIMETYPE = "audio/mpeg"
 AUDIO_BYTES_PER_SECOND = 16_000  # edge-tts MP3 at ~128 kbps
+SAMPLE_RATE = 24_000  # WAV helper: 16-bit mono PCM at 24 kHz (used by tests)
 # A voice note says the answer in about a minute at most; longer answers stay written.
 MAX_SPOKEN_CHARS = 900
 MAX_VOICE_BYTES = 5 * 1024 * 1024  # a voice note of several minutes; longer is not a question
