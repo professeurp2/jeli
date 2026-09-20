@@ -160,6 +160,6 @@ class Voice:
                 blob = response.candidates[0].content.parts[0].inline_data
                 rate = re.search(r"rate=(\d+)", blob.mime_type or "")
                 return wav(blob.data, int(rate.group(1)) if rate else SAMPLE_RATE)
-            except (errors.APIError, TimeoutError, IndexError, AttributeError, TypeError) as error:
-                log.warning("Speech model %s failed (%s), trying the next one", model, type(error).__name__)
+            except Exception as error:
+                log.error("TTS model %s failed — %s: %s", model, type(error).__name__, error)
         return None
