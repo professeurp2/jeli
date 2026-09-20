@@ -110,12 +110,14 @@ class Embedder:
                 return result
             except (errors.APIError, httpx.TransportError) as error:
                 code = getattr(error, "code", None)
-                if code == 429:
+                if code in (401, 429):
+                    if code == 401:
+                        log.error("Key %d rejected with 401 UNAUTHENTICATED — verify it is valid and Gemini API is enabled", key)
                     keys_tried.add(key)
                     if len(keys_tried) < len(self._clients):
                         old_key = key
                         key = (key + 1) % len(self._clients)
-                        log.info("Embeddings quota on key %d, rotating to key %d", old_key, key)
+                        log.info("Embeddings rotating from key %d to key %d (%s)", old_key, key, code)
                         continue  # retry immediately with next key
                 retryable = isinstance(error, httpx.TransportError) or code == 429 or (code or 0) >= 500
                 delay = next(delays)
