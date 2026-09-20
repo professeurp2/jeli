@@ -521,7 +521,8 @@ class Waha:
         key = message.author_id or message.author
         now = time.monotonic()
         # For cooling_down / flood: explain only once per hour (not on every message during the cooldown).
-        if reason in ("cooling_down", "flood") and now - self._last_explained.get(key, 0) < 3600:
+        # Default to (now - 3601) so the very first call always sends, regardless of system uptime.
+        if reason in ("cooling_down", "flood") and now - self._last_explained.get(key, now - 3601) < 3600:
             return
         self._last_explained[key] = now
         language = detect_language(message.text)
