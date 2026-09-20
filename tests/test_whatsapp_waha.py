@@ -283,7 +283,9 @@ def test_a_member_cannot_make_jeli_flood_the_group(waha_env, calls, monkeypatch)
         other = message_event(f"@{BOT_PHONE} my question", message_id="msg-other")
         other["payload"]["participant"] = "22371111111@c.us"
         post_event(client, other)
-    assert len(sent_texts(calls)) == 3
+    texts = sent_texts(calls)
+    assert len(texts) == 4  # msg-0, msg-1 answered; msg-2 gets the flood explanation; msg-other answered
+    assert "short break" in texts[2]["text"] or "peu de temps" in texts[2]["text"]
 
 
 def make_waha(handler):

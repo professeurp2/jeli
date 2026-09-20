@@ -78,6 +78,9 @@ TEXTS = {
             "/deadlines — what is due in the next two weeks\n"
             "/search <topic> — where the group talked about it"
         ),
+        "guard_cooling_down": "🙏 I've received a lot of messages from you in a short time and need a short break. I'll be back in about an hour — feel free to ask again then.",
+        "guard_oversized": "⚠️ Your message is too long for me to process (limit: ~1 500 characters). Could you shorten your question?",
+        "guard_repeat": "💬 You've already sent me this message several times. If I haven't answered, it's because I don't have that information — try rephrasing or using /search.",
     },
     "fr": {
         "dont_know": "Je n'ai pas trouvé cela dans les échanges des groupes. Demandez aux organisateurs, ou essayez /search avec un mot-clé.",
@@ -130,5 +133,8 @@ TEXTS = {
             "/deadlines — les échéances des deux prochaines semaines\n"
             "/search <sujet> — où le groupe en a parlé"
         ),
+        "guard_cooling_down": "🙏 J'ai reçu beaucoup de messages de ta part en peu de temps et j'ai besoin d'une petite pause. Je serai de retour dans environ une heure — tu pourras me poser ta question à ce moment-là.",
+        "guard_oversized": "⚠️ Ton message est trop long pour que je puisse le traiter (limite : ~1 500 caractères). Peux-tu résumer ta question ?",
+        "guard_repeat": "💬 Tu m'as déjà envoyé ce message plusieurs fois. Si je n'ai pas répondu, c'est que je n'ai pas cette information — essaie de reformuler ou utilise /search.",
     },
 }

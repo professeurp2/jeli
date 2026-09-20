@@ -28,6 +28,7 @@ from fastapi import APIRouter, BackgroundTasks, Header, HTTPException, Request
 from app.adapters import Ingest, Respond
 from app.adapters.pacing import SendSpacer, SlidingWindowLimiter, reading_delay, typing_duration
 from app.answer.citations import is_ignored, poll_text
+from app.answer.language import TEXTS, detect_language
 from app.answer.react import emotion_emoji, is_correction
 from app.answer.voice import asks_for_voice, sources, spoken, without_voice_request
 from app.config import Settings
@@ -258,6 +259,8 @@ class Waha:
         # Set from WAHA's session.status events: Jeli stays silent while the session is not WORKING.
         self.paused = False
         self.status: str | None = None
+        # Tracks the last time Jeli explained a refusal to each member (to avoid repeating every message).
+        self._last_explained: dict[str, float] = {}
         # Set by the team from the dashboard: Jeli keeps remembering the groups but sends nothing.
         self.suspended = False
         # Groups where Jeli listens and ingests, but never replies (listen-only / silent mode).
@@ -311,38 +314,40 @@ class Waha:
             return
         self.set_status(status)
 
-    def may_reply(self, message: IncomingMessage) -> bool:
-        """Anti-ban guards: never answer while paused by the team or the session is unhealthy, nor
-        late, too often, or to a member who misuses Jeli."""
+    def may_reply(self, message: IncomingMessage) -> str | None:
+        """Anti-ban guards: returns the refusal reason, or None when Jeli may answer.
+        Reasons the member caused ('cooling_down', 'oversized', 'repeat', 'flood') trigger an
+        explanation; system/team reasons ('silent_group', 'suspended', 'paused', 'age',
+        'blocked', 'hourly_limit') stay silent."""
         if message.chat_id in self.silent_groups:
             log.info("Group %s is in silent mode: Jeli listens but does not reply", message.chat_id)
-            return False
+            return "silent_group"
         if self.suspended:
             log.info("Jeli is paused by the team: not answering message %s", message.message_id)
-            return False
+            return "suspended"
         if self.paused:
             log.warning("Session is not WORKING: not answering message %s", message.message_id)
-            return False
+            return "paused"
         age = (datetime.now(timezone.utc) - message.sent_at).total_seconds()
         if age > MAX_REPLY_AGE_SECONDS:
             log.info("Not answering message %s: %d s old (backlog after a reconnection)", message.message_id, age)
-            return False
+            return "age"
         if self.guard:
             refusal = self.guard.check(message) if message.addressed_to_bot else (
                 "blocked" if is_ignored(message, self.guard.blocked) else None
             )
             if refusal:
                 log.info("Not answering message %s: %s", message.message_id, refusal)
-                return False
+                return refusal
         if not self.user_limiter.allow(message.author_id or message.chat_id):
             log.warning("Member rate limit reached: not answering message %s", message.message_id)
             if self.guard and message.addressed_to_bot:
                 self.guard.report(message, "flood")
-            return False
+            return "flood"
         if not self.hourly_limiter.allow("all"):
             log.error("Hourly answer limit reached: Jeli stays silent until the window frees up")
-            return False
-        return True
+            return "hourly_limit"
+        return None
 
     async def _post(self, path: str, payload: dict) -> dict:
         response = await self._http.post(path, json={"session": self.session, **payload})
@@ -508,6 +513,21 @@ class Waha:
         except Exception:
             log.exception("Failed to handle WhatsApp message %s", message.message_id)
 
+    async def _explain_refusal(self, message: IncomingMessage, reason: str) -> None:
+        """Send a one-time explanation when Jeli can't answer because of the member's own behaviour.
+        Silent for team/system reasons (blocked, paused, suspended…) to avoid noise during outages."""
+        if reason not in ("cooling_down", "oversized", "repeat", "flood"):
+            return
+        key = message.author_id or message.author
+        now = time.monotonic()
+        # For cooling_down / flood: explain only once per hour (not on every message during the cooldown).
+        if reason in ("cooling_down", "flood") and now - self._last_explained.get(key, 0) < 3600:
+            return
+        self._last_explained[key] = now
+        language = detect_language(message.text)
+        text = TEXTS[language][f"guard_{reason}" if reason != "flood" else "guard_cooling_down"]
+        await self.send_text(message.chat_id, text, reply_to=message.message_id)
+
     async def _see(self, message: IncomingMessage) -> IncomingMessage:
         """Download and describe an image; the description is prepended to the message text so the
         LLM can answer questions about a screenshot, table or chart a member shared."""
@@ -551,7 +571,9 @@ class Waha:
     async def _converse(self, message: IncomingMessage) -> None:
         """Answer like a person would: read, type (or record) for a while, then reply (WAHA's
         recommended sequence). Asked by voice, or asked for a voice reply: a voice note."""
-        if not self.may_reply(message):
+        refusal = self.may_reply(message)
+        if refusal is not None:
+            await self._explain_refusal(message, refusal)
             return
         # When someone corrects Jeli, acknowledge immediately and delete the wrong message.
         if is_correction(message.text) and message.chat_id in self._last_sent:
@@ -606,7 +628,7 @@ class Waha:
         """A message not addressed to Jeli: it speaks only when the responder finds that the group
         already answered this question (R7), and within the same anti-ban limits."""
         reply = await self.respond(message)
-        if not reply or not self.may_reply(message):
+        if not reply or self.may_reply(message) is not None:
             return
         chat = {"chatId": message.chat_id}
         await asyncio.sleep(reading_delay())
