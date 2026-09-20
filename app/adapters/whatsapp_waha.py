@@ -46,6 +46,9 @@ RESTRICTION_ERRORS = ("463", "475")
 # Status updates and channels are not conversations.
 IGNORED_CHAT_SUFFIXES = ("@broadcast", "@newsletter")
 TEXT_MENTION = re.compile(r"@(\d{5,})")
+# Admin commands that only team members can use.
+ADMIN_COMMAND = re.compile(r"^/(silence|mute|pause|resume|unsilence|unmute)\b(.*)$", re.IGNORECASE | re.DOTALL)
+ADMIN_DURATION = re.compile(r"(\d+)\s*(h|hours?|heures?|m|min|minutes?)", re.IGNORECASE)
 # Documents Jeli keeps when a member shares them in a group.
 DOCUMENT_TYPES = (".pdf", ".docx", ".txt", ".md")
 MAX_DOCUMENT_BYTES = 15 * 1024 * 1024
@@ -265,6 +268,10 @@ class Waha:
         self.suspended = False
         # Groups where Jeli listens and ingests, but never replies (listen-only / silent mode).
         self.silent_groups: set[str] = set()
+        # Team members' numbers (digits only): only they can run admin commands.
+        self.admin_numbers: list[str] = settings.team_number_list
+        # Picture URL to set at startup (e.g. a King Julien image). Empty: no change.
+        self._bot_picture_url: str = settings.bot_picture_url
         # Spots and silences members who misuse Jeli (floods, repeats, manipulation attempts).
         self.guard: Guard | None = None
         # Whether a group message continues a conversation with Jeli (set by the responder).
@@ -313,6 +320,60 @@ class Waha:
             log.error("Cannot read the session status from WAHA at %s: %r", self._http.base_url, error)
             return
         self.set_status(status)
+        if self._bot_picture_url:
+            await self._set_profile_picture(self._bot_picture_url)
+
+    async def _set_profile_picture(self, url: str) -> None:
+        """Download image from url and set it as Jeli's WhatsApp profile picture."""
+        try:
+            async with httpx.AsyncClient(timeout=20) as client:
+                img_response = await client.get(url)
+                img_response.raise_for_status()
+                b64 = base64.b64encode(img_response.content).decode()
+            await self._post("/api/my/picture", {"picture": f"data:{img_response.headers.get('content-type', 'image/jpeg')};base64,{b64}"})
+            log.info("Profile picture updated from %s", url)
+        except Exception as error:
+            log.warning("Could not set profile picture: %r", error)
+
+    def _is_admin(self, message: IncomingMessage) -> bool:
+        """True when the sender is one of the team members (admin_numbers list)."""
+        if not self.admin_numbers:
+            return False
+        jid_digits = re.sub(r"\D", "", message.author_id or message.author or "")
+        return any(jid_digits.endswith(num) for num in self.admin_numbers)
+
+    async def _auto_unsilence(self, chat_id: str, delay: float) -> None:
+        await asyncio.sleep(delay)
+        self.silent_groups.discard(chat_id)
+        log.info("Auto-unsilenced group %s after admin timer expired", chat_id)
+
+    async def _try_admin_command(self, message: IncomingMessage) -> bool:
+        """Handle /silence [duration] and /resume. Returns True if an admin command was handled."""
+        match = ADMIN_COMMAND.match(message.text.strip())
+        if not match:
+            return False
+        verb = match.group(1).lower()
+        args = (match.group(2) or "").strip()
+        language = detect_language(message.text)
+        if verb in ("resume", "unsilence", "unmute"):
+            self.silent_groups.discard(message.chat_id)
+            reply = TEXTS[language]["admin_resumed"]
+        else:
+            self.silent_groups.add(message.chat_id)
+            dur_match = ADMIN_DURATION.search(args)
+            if dur_match:
+                amount = int(dur_match.group(1))
+                unit = dur_match.group(2)[0].lower()
+                seconds = amount * 3600 if unit == "h" else amount * 60
+                task = asyncio.create_task(self._auto_unsilence(message.chat_id, seconds))
+                self._later.add(task)
+                task.add_done_callback(self._later.discard)
+                duration_str = (f" for {amount}h" if unit == "h" else f" for {amount} min") if language == "en" else (f" pendant {amount}h" if unit == "h" else f" pendant {amount} min")
+            else:
+                duration_str = ""
+            reply = TEXTS[language]["admin_silenced"].format(duration=duration_str)
+        await self.send_text(message.chat_id, reply, reply_to=message.message_id)
+        return True
 
     def may_reply(self, message: IncomingMessage) -> str | None:
         """Anti-ban guards: returns the refusal reason, or None when Jeli may answer.
@@ -572,6 +633,9 @@ class Waha:
     async def _converse(self, message: IncomingMessage) -> None:
         """Answer like a person would: read, type (or record) for a while, then reply (WAHA's
         recommended sequence). Asked by voice, or asked for a voice reply: a voice note."""
+        # Admin commands bypass all rate limits, silence and suspension.
+        if self._is_admin(message) and await self._try_admin_command(message):
+            return
         refusal = self.may_reply(message)
         if refusal is not None:
             await self._explain_refusal(message, refusal)

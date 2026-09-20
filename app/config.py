@@ -57,7 +57,10 @@ class Settings(BaseSettings):
     # Weekly report to the team, in private: "mon 07:00" (UTC). Empty: off.
     team_report_time: str = ""
     # The team members' WhatsApp numbers, comma-separated. Personal data: set it on the server only.
+    # These are the only people allowed to use admin commands (/silence, /resume).
     team_numbers: str = ""
+    # Public URL of Jeli's WhatsApp profile picture (set once at startup via WAHA API). Empty: no change.
+    bot_picture_url: str = ""
     # The community's organisers (names and/or numbers, comma-separated): their messages are
     # announcements. The groups' admins count too. Server only; the team edits it on the dashboard.
     organisers: str = ""
