@@ -44,7 +44,37 @@ LISTEN_SYSTEM = """\
 Write down, word for word, what is said in this WhatsApp voice note, in the language it is spoken
 (English, French or another). No comments, no timestamps; "" if nothing is said.
 """
-SPEAK_STYLE = "Read this WhatsApp voice reply aloud, warmly and naturally, at a relaxed pace:\n\n{text}"
+_BULLET = re.compile(r"\n\s*[-•]\s*")
+_NEWLINES = re.compile(r"\n+")
+_PUNCT_ARTIFACTS = re.compile(r"[,;]\s*[.,;]|[.]\s*,|\s{2,}")
+
+
+def for_speech(text: str) -> str:
+    """Turn structured text (newlines, bullets) into natural spoken flow.
+    Called on the output of spoken() before passing to the TTS engine."""
+    text = _BULLET.sub(", ", text)          # "- item" → ", item"
+    text = _NEWLINES.sub(". ", text)        # paragraph/line breaks → pause
+    text = _PUNCT_ARTIFACTS.sub(lambda m: m.group(0)[0], text)
+    text = text.strip(" ,.")
+    # Remove repeated 3+-word phrases (e.g. a date said four times in a catchup).
+    seen: set[str] = set()
+    words = text.split()
+    out: list[str] = []
+    i = 0
+    while i < len(words):
+        matched = False
+        for n in (5, 4, 3):
+            phrase = " ".join(words[i:i + n])
+            if len(phrase) > 10 and phrase in seen:
+                i += n
+                matched = True
+                break
+        if not matched:
+            if i + 3 <= len(words):
+                seen.add(" ".join(words[i:i + 3]))
+            out.append(words[i])
+            i += 1
+    return " ".join(out)
 IMAGE_SYSTEM = """\
 Describe what this image shows in 2-4 sentences. If it contains a table, list, chart, form or any
 text, transcribe the key content faithfully. Be concise and factual — focus on information that
@@ -147,7 +177,7 @@ class Voice:
             text = text[:cutoff + 1] if cutoff > 300 else text[:MAX_SPOKEN_CHARS]
         voice = EDGE_VOICES.get(language, EDGE_VOICES["en"])
         try:
-            communicate = edge_tts.Communicate(text, voice)
+            communicate = edge_tts.Communicate(for_speech(text), voice)
             audio = bytearray()
             async for chunk in communicate.stream():
                 if chunk["type"] == "audio":
