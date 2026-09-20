@@ -246,8 +246,8 @@ def test_try_jeli_plays_the_voice_note_jeli_would_send(client):
     headers = {"X-CSRF-Token": csrf_of(client.get("/dashboard/try").text)}
     jeli = client.post("/dashboard/try", json={"text": "Who are you? Reply by voice", "mode": "ask", "chat": "private"}, headers=headers).json()["jeli"]
     assert jeli["text"] == TEXTS["en"]["about_jeli"]  # the question, without "reply by voice"
-    assert jeli["voice"] == "data:audio/wav;base64,UklGRi12b2ljZQ==" and voice.said.startswith("I'm Jeli, the memory")
-    assert "/catchup" not in voice.said and "catch you up, recap a session" in voice.said  # commands are not read out
+    assert jeli["voice"] == "data:audio/wav;base64,UklGRi12b2ljZQ==" and voice.said.startswith("Hey, I'm Jeli")
+    assert "/catchup" not in voice.said and "METI UniPods AI Programme" in voice.said  # commands are not read out
     kept = client.fake_store.tries_rows[-1]
     assert "voice" not in kept["details"] and kept["details"]["spoken"] is True  # the audio itself is not kept
     app.state.voice = None

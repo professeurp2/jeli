@@ -34,11 +34,10 @@ TEXTS = {
         "thanks_reply": "You're welcome! 🙌",
         "session_in_progress": "⏳ The recording of «{title}» (shared by {who}, {day}) is being transcribed right now — {progress}. Ask me again in a few minutes and I'll tell you what was said.",
         "about_jeli": (
-            "I'm Jeli 👋, the memory of this community. I've read the groups, the recorded sessions and the "
-            "METI UniPods AI Programme documents — MIT, Wadhwani, the Ethiopian AI Institute, the Cohort 1 "
-            "selection data. Ask me anything that was said or shared, and I'll tell you where — or that I "
-            "don't know. I can also catch you up (/catchup), recap a session (/recap), list what's due "
-            "(/deadlines) and find where a topic was discussed (/search). Team Jeli built me for the hackathon."
+            "Hey, I'm Jeli 👋 I follow everything in this group — chats, call recordings, and the METI "
+            "UniPods AI Programme documents (MIT, Wadhwani, Ethiopian AI Institute, Cohort 1 selection). "
+            "Ask me anything and I'll tell you where it came from — or say so when I don't know. "
+            "Team Jeli built me for the hackathon."
         ),
         "sources": "Sources",
         "fallback": "I'm answering a lot of questions right now, so here is where the group talked about it — ask me again in a minute for a full answer:",
@@ -71,14 +70,14 @@ TEXTS = {
         "recap_choose": "Which session? Reply with /recap and its number:",
         "recap_unavailable": "I can't write this recap right now. Try again in a few minutes.",
         "help": (
-            "Hi, I'm Jeli, the group's memory. Ask me about anything discussed in the group, in recorded "
-            "sessions, or in the METI UniPods AI Programme documents (MIT, Wadhwani, Ethiopian AI Institute, "
-            "Cohort 1 selection) — mention me (@Jeli), reply to one of my messages, or start with \"Jeli,\". "
-            "I answer with my sources, and I say so when I don't know.\n\n"
-            "/catchup — what you missed (/catchup 3 days, or \"what did I miss since Monday?\")\n"
+            "Hey, I'm Jeli 👋 the group's memory. Ask me anything — what was decided, what's coming up, "
+            "what the METI UniPods AI Programme says about MIT, Wadhwani or the Ethiopian AI Institute. "
+            "Mention me (@Jeli), reply to one of my messages, or start with \"Jeli,\". "
+            "I always show my sources, and I say so when I don't know.\n\n"
+            "/catchup — catch up on what you missed\n"
             "/recap — summary of a recorded session\n"
-            "/deadlines — what is due in the next two weeks\n"
-            "/search <topic> — where the group talked about it"
+            "/deadlines — what's due in the next two weeks\n"
+            "/search <topic> — find where the group talked about it"
         ),
         "guard_cooling_down": "🙏 I've received a lot of messages from you in a short time and need a short break. I'll be back in about an hour — feel free to ask again then.",
         "guard_oversized": "⚠️ Your message is too long for me to process (limit: ~1 500 characters). Could you shorten your question?",
@@ -91,11 +90,10 @@ TEXTS = {
         "thanks_reply": "Avec plaisir ! 🙌",
         "session_in_progress": "⏳ L'enregistrement de «{title}» (partagé par {who}, {day}) est en cours de transcription — {progress}. Redemandez-moi dans quelques minutes et je vous dirai ce qui s'y est dit.",
         "about_jeli": (
-            "Je suis Jeli 👋, la mémoire de cette communauté. J'ai lu les groupes, les séances enregistrées et "
-            "les documents du programme METI UniPods AI — MIT, Wadhwani, l'Institut Éthiopien d'IA, les données "
-            "de sélection de la Cohorte 1. Demandez-moi tout ce qui a été dit ou partagé, je vous dis où — ou "
-            "que je ne sais pas. Je fais aussi le point (/catchup), le résumé d'une séance (/recap), la liste "
-            "des échéances (/deadlines) et je retrouve où un sujet a été abordé (/search). L'équipe Jeli m'a créé pour le hackathon."
+            "Salut, c'est Jeli 👋 Je suis à jour sur tout dans ce groupe — les échanges, les sessions "
+            "enregistrées, et les documents du programme METI UniPods AI (MIT, Wadhwani, Institut Éthiopien "
+            "d'IA, sélection Cohorte 1). Pose-moi n'importe quoi et je te dis d'où ça vient — ou que je ne "
+            "sais pas. L'équipe Jeli m'a créé pour le hackathon."
         ),
         "sources": "Sources",
         "fallback": "Je reçois beaucoup de questions en ce moment : voici où le groupe en a parlé — redemandez-moi dans une minute pour une réponse complète :",
@@ -128,14 +126,14 @@ TEXTS = {
         "recap_choose": "Quelle session ? Répondez /recap suivi de son numéro :",
         "recap_unavailable": "Je ne peux pas rédiger ce résumé pour l'instant. Réessayez dans quelques minutes.",
         "help": (
-            "Bonjour, je suis Jeli, la mémoire du groupe. Posez-moi une question sur ce qui s'est dit ici, "
-            "pendant les sessions enregistrées, ou dans les documents du programme METI UniPods AI (MIT, "
-            "Wadhwani, Institut Éthiopien d'IA, sélection Cohorte 1) — mentionnez-moi (@Jeli), répondez à "
-            "l'un de mes messages, ou commencez par « Jeli, ». Je réponds avec mes sources, et je le dis quand je ne sais pas.\n\n"
-            "/catchup — ce que vous avez raté (/catchup 3 jours, ou « qu'est-ce que j'ai raté depuis lundi ? »)\n"
+            "Salut, c'est Jeli 👋 la mémoire du groupe. Pose-moi n'importe quelle question — ce qui a été "
+            "décidé, ce qui arrive, ce que dit le programme METI UniPods AI sur MIT, Wadhwani ou l'Institut "
+            "Éthiopien d'IA. Mentionne-moi (@Jeli), réponds à l'un de mes messages, ou commence par "
+            "« Jeli, ». Je cite mes sources — et je dis quand je ne sais pas.\n\n"
+            "/catchup — rattraper ce que tu as manqué\n"
             "/recap — résumé d'une session enregistrée\n"
-            "/deadlines — les échéances des deux prochaines semaines\n"
-            "/search <sujet> — où le groupe en a parlé"
+            "/deadlines — les prochaines échéances\n"
+            "/search <sujet> — où on en a parlé dans le groupe"
         ),
         "guard_cooling_down": "🙏 J'ai reçu beaucoup de messages de ta part en peu de temps et j'ai besoin d'une petite pause. Je serai de retour dans environ une heure — tu pourras me poser ta question à ce moment-là.",
         "guard_oversized": "⚠️ Ton message est trop long pour que je puisse le traiter (limite : ~1 500 caractères). Peux-tu résumer ta question ?",
