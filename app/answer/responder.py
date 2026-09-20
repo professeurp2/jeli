@@ -159,7 +159,7 @@ class Responder:
         if text.startswith("/"):
             return texts["help"], "help"
         understood = await self.understander.understand(text_with_context, language, self.conversations.history(message))
-        if understood.kind in ("social", "about_jeli"):
+        if understood.kind in ("social", "about_jeli", "vague"):
             return understood.reply, "social"
         if understood.kind == "file" and self.documents:
             reply = await self.documents.reply(text_with_context, language, self.conversations.history(message))
