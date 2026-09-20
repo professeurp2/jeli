@@ -100,7 +100,10 @@ def test_ambiguous_or_bare_recap_requests_list_the_sessions():
     everything = asyncio.run(recaps.reply("/recap", "en"))
     assert everything.count("\n") == 3
     assert asyncio.run(recaps.reply("/recap 3", "en")).startswith("🎥 Wadhwani Ignite — Module 1 Problem Statement coaching")
-    assert asyncio.run(recaps.reply("summary of the bootcamp session", "en")) is None
+    # No matching recording: show the full list so the member can pick, instead of silently returning None
+    no_match = asyncio.run(recaps.reply("summary of the bootcamp session", "en"))
+    assert no_match is not None and no_match.startswith(TEXTS["en"]["recap_choose"])
+    assert "1. Wadhwani Ignite" in no_match
 
 
 MIT = Recording(
