@@ -121,7 +121,8 @@ class Excerpt:
         elif self.document:
             header = f"[{self.number}] Document «{self.document.title}», shared by {display_author(self.document.shared_by)}"
         else:
-            header = f"[{self.number}] {self.chat_label} · {self.started_at:%d %B %Y}"
+            label = self.chat_label or self.chat_id.split("@")[0]
+            header = f"[{self.number}] {label} · {self.started_at:%d %B %Y}"
         return header + "\n" + "\n".join(self.lines)
 
     def best_message(self, words: set[str]) -> StoredMessage:
@@ -143,7 +144,8 @@ class Excerpt:
             page = document_page(message.sent_at, self.document.shared_at)
             return quote(f"📄 *{self.document.title}*, page {page}", best_snippet(message.text, words))
         role = " · organiser" if self.by_organiser(message) else ""
-        return quote(f"*{self.name(message)}*{role} · {self.chat_label}, {short_day(message.sent_at)}", best_snippet(message.text, words))
+        label = f" · {self.chat_label}" if self.chat_label else ""
+        return quote(f"*{self.name(message)}*{role}{label}, {short_day(message.sent_at)}", best_snippet(message.text, words))
 
 
 def distinct(excerpts: list[Excerpt], words: set[str]) -> list[Excerpt]:
@@ -338,7 +340,7 @@ class Answerer:
                     number=len(excerpts) + 1,
                     relevance_rank=position,
                     chat_id=hit.chat_id,
-                    chat_label=document.title if document else self.chat_labels.get(hit.chat_id, hit.chat_id),
+                    chat_label=document.title if document else self.chat_labels.get(hit.chat_id, ""),
                     started_at=kept[0].sent_at,
                     messages=tuple(kept),
                     names=names,
