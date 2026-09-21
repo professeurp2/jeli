@@ -49,6 +49,8 @@ def apply(state, runtime) -> None:
         whatsapp.spacer.min_interval = runtime["whatsapp_min_send_interval_seconds"]
         whatsapp.enabled_images = runtime["enabled.images"]
         whatsapp.enabled_proactive_images = runtime["enabled.proactive_images"]
+        whatsapp.voice_rate = runtime["voice_rate"]
+        whatsapp.voice_intro_rate = runtime["voice_intro_rate"]
 
     for activity in getattr(state, "activities", {}).values():
         activity.wake()  # schedules and on/off switches may have changed

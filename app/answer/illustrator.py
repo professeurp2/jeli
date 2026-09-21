@@ -56,10 +56,11 @@ IMAGE_REQUEST = re.compile(
 )
 
 PROMPT_SYSTEM = """\
-The user wants an image. Write a concise, vivid image prompt in English for a text-to-image AI.
-Focus on what to show visually: subject, composition, style.
-For educational or scientific topics prefer styles like "clear educational diagram",
-"scientific illustration", "labeled infographic", "step-by-step visual".
+The user wants an image. Write a concise image prompt in English for a text-to-image AI.
+ALWAYS use infographic / diagram style: flat design, clean white background, bold labels,
+minimal clutter, high contrast colours. Never photorealistic, never blurry.
+Examples of good style endings: "flat vector infographic, white background, bold text labels",
+"clean data visualization, minimal design", "educational diagram, clear layout".
 Keep the prompt under 80 words. Output only the prompt — no explanation.
 Also write a short caption (≤10 words) in the user's language summarising what the image shows.
 """

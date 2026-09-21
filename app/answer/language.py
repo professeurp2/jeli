@@ -28,125 +28,124 @@ def detect_language(text: str) -> str:
 
 TEXTS = {
     "en": {
-        "dont_know": "I couldn't find that in what the groups have discussed so far. Ask the organisers, or try /search with a keyword.",
-        "dont_know_near": "I couldn't find a clear answer in the groups. The closest discussions:",
-        "greeting_reply": "Hello! 👋 I'm Jeli. I keep track of everything shared in this group — sessions, announcements, decisions, deadlines. Ask me anything!",
-        "thanks_reply": "You're welcome! 🙌",
-        "session_in_progress": "⏳ The recording of «{title}» (shared by {who}, {day}) is being transcribed right now — {progress}. Ask me again in a few minutes and I'll tell you what was said.",
+        "dont_know": "Hmm, I don't have anything on that in the group's history yet. Best to ask an organiser directly, or try /search to browse what's been shared.",
+        "dont_know_near": "I couldn't find a clear answer, but these discussions from the group might help:",
+        "greeting_reply": "Hey! 👋 I'm Jeli — your group's memory. I keep track of sessions, announcements, decisions and deadlines. What can I help you with?",
+        "thanks_reply": "Anytime! 😊",
+        "welcome_new": "Welcome! 🙏 Great to have you here.",
+        "session_in_progress": "⏳ «{title}» (shared by {who}, {day}) is still being transcribed — {progress}. Give me a few more minutes and I'll have the full details for you!",
         "about_jeli": (
-            "Hey, I'm Jeli 👋 I follow everything in this group — chats, call recordings, and the METI "
-            "UniPods AI Programme documents (MIT, Wadhwani, Ethiopian AI Institute, Cohort 1 selection). "
-            "Ask me anything and I'll tell you where it came from — or say so when I don't know. "
-            "Team Jeli built me for the hackathon."
+            "Hey, I'm Jeli 👋 Think of me as the group's memory — I follow everything: chats, call recordings, "
+            "and the METI UniPods AI Programme documents (MIT, Wadhwani, Ethiopian AI Institute, Cohort 1). "
+            "Ask me anything — I'll tell you where it came from, and I'll always be honest when I don't know."
         ),
         "sources": "Sources",
-        "fallback": "I'm answering a lot of questions right now, so here is where the group talked about it — ask me again in a minute for a full answer:",
-        "not_ready": "I'm not connected to the group's memory yet. Try again soon!",
-        "already_covered": "💡 This was already answered in the group:",
+        "fallback": "Things are a bit busy right now, but here's where the group discussed this — ask me again in a minute for a full answer:",
+        "not_ready": "I'm still warming up — give me a moment and try again!",
+        "already_covered": "💡 The group already covered this:",
         "catchup_header": "🗓️ Catch-up since {since} ({messages} messages)",
-        "catchup_nothing": "Nothing new in the groups since {since}",
-        "catchup_not_live": "I'm not receiving the groups' messages yet: my memory stops on {day} at {time} GMT, so I can't tell you what's new since. As soon as my number is in the group, I'll follow everything live.",
-        "catchup_unavailable": "{messages} messages since {since}, but I can't summarise them right now. Try again in a few minutes.",
+        "catchup_nothing": "All quiet since {since} — nothing new in the groups! ☀️",
+        "catchup_not_live": "I'm not in the group yet, so my memory stops on {day} at {time} GMT. Once I'm added, I'll follow everything live and keep you up to date.",
+        "catchup_unavailable": "{messages} messages since {since}, but I can't summarise them right now — try again in a few minutes.",
         "catchup_highlights": "📣 Highlights",
         "catchup_decisions": "✅ Decisions",
         "catchup_deadlines": "⏰ Deadlines and dates",
         "catchup_questions": "❓ Still unanswered",
         "catchup_recordings": "🎥 Recorded sessions",
         "deadlines_header": "⏰ Deadlines in the next {days} days",
-        "deadlines_none": "No deadline announced for the next {days} days.",
+        "deadlines_none": "Nothing due in the next {days} days — enjoy the breather! 😌",
         "deadlines_coming_up": "⏰ Coming up",
         "deadline_in_call": "call",
         "deadline_in_document": "document",
-        "file_here": "📄 Here is «{title}», shared by {who} on {day}.",
-        "file_translating": "📄 I'm translating «{title}» into {language}: I'll send it here in a minute or two.",
-        "file_translated": "«{title}» in {language} (machine translation: the original prevails)",
-        "file_translate_failed": "Sorry, I couldn't translate «{title}» right now. Try again in a few minutes.",
+        "file_here": "📄 Here's «{title}», shared by {who} on {day}.",
+        "file_translating": "📄 Translating «{title}» into {language} — I'll drop it here in a minute or two.",
+        "file_translated": "«{title}» in {language} (machine translation — the original is the reference)",
+        "file_translate_failed": "Sorry, the translation of «{title}» didn't go through this time. Give it another try in a few minutes!",
         "file_language_unsupported": "I can translate documents into {languages}.",
         "search_header": "🔎 Where the group talked about it:",
-        "search_nothing": "I found nothing about that in the group's records.",
+        "search_nothing": "Nothing came up for that in the group's records — try different keywords maybe?",
         "recap_summary": "📝 Summary",
         "recap_actions": "📋 To do",
         "recap_moments": "⏱️ Key moments",
-        "recap_choose": "Which session? Reply with its number (e.g. 4) or /recap 4:",
-        "recap_unavailable": "I can't write this recap right now. Try again in a few minutes.",
+        "recap_choose": "Which session would you like? Reply with its number (e.g. 4) or /recap 4:",
+        "recap_unavailable": "I can't write the recap right now — try again in a few minutes.",
         "help": (
-            "Hey, I'm Jeli 👋 the group's memory. Ask me anything — what was decided, what's coming up, "
+            "Hey, I'm Jeli 👋 I'm the group's memory. Ask me anything — what was decided, what's coming up, "
             "what the METI UniPods AI Programme says about MIT, Wadhwani or the Ethiopian AI Institute. "
-            "Mention me (@Jeli), reply to one of my messages, or start with \"Jeli,\". "
-            "I always show my sources, and I say so when I don't know.\n\n"
+            "Just mention me (@Jeli), reply to one of my messages, or start with \"Jeli,\".\n\n"
             "/catchup — catch up on what you missed\n"
-            "/recap — summary of a recorded session\n"
-            "/deadlines — what's due in the next two weeks\n"
-            "/search <topic> — find where the group talked about it"
+            "/recap — get a summary of a recorded session\n"
+            "/deadlines — see what's due in the next two weeks\n"
+            "/search <topic> — find where the group talked about something"
         ),
-        "guard_cooling_down": "🙏 I've received a lot of messages from you in a short time and need a short break. I'll be back in about an hour — feel free to ask again then.",
-        "guard_oversized": "⚠️ Your message is too long for me to process (limit: ~1 500 characters). Could you shorten your question?",
-        "guard_repeat": "💬 You've already sent me this message several times. If I haven't answered, it's because I don't have that information — try rephrasing or using /search.",
-        "admin_silenced": "✅ Got it! I'll stay quiet in this group{duration}. Use /resume to bring me back.",
-        "admin_resumed": "✅ I'm back! Listening and answering as usual. 👑",
-        "voice_not_heard": "Hey, I got your voice note but couldn't quite make it out 🎤 Could you try again, or just type your question? I'm all ears either way!",
-        "voice_reply_unavailable": "I couldn't send you a voice reply right now — my voice module is having a moment 🎤 Here's my answer in text:",
+        "guard_cooling_down": "🙏 You've sent me quite a few messages in a short time — I need a short breather! I'll be back in about an hour, feel free to ask me then.",
+        "guard_oversized": "⚠️ That message is a bit too long for me to handle (limit: ~1 500 characters). Could you shorten it a little?",
+        "guard_repeat": "💬 You've sent me this a few times already. If I haven't replied, it's because I don't have that info yet — try rephrasing or use /search.",
+        "admin_silenced": "✅ Got it! Going quiet in this group{duration}. Use /resume whenever you want me back.",
+        "admin_resumed": "✅ I'm back! All ears as usual. 👑",
+        "voice_not_heard": "Hey, I got your voice note but couldn't quite make it out 🎤 Could you try again, or just type your question? I'm here either way!",
+        "voice_reply_unavailable": "Couldn't send a voice reply right now — something came up on my end 🎤 Here's my answer in text:",
         "image_what": "What would you like an image of? 🎨 Describe the subject and I'll illustrate it!",
     },
     "fr": {
-        "dont_know": "Je n'ai pas trouvé cela dans les échanges des groupes. Demandez aux organisateurs, ou essayez /search avec un mot-clé.",
-        "dont_know_near": "Je n'ai pas trouvé de réponse claire dans les groupes. Les discussions les plus proches :",
-        "greeting_reply": "Bonjour ! 👋 Je suis Jeli. Je suis au courant de tout ce qui est partagé dans ce groupe — sessions, annonces, décisions, échéances. Posez-moi vos questions !",
-        "thanks_reply": "Avec plaisir ! 🙌",
-        "session_in_progress": "⏳ L'enregistrement de «{title}» (partagé par {who}, {day}) est en cours de transcription — {progress}. Redemandez-moi dans quelques minutes et je vous dirai ce qui s'y est dit.",
+        "dont_know": "Hmm, je n'ai rien trouvé là-dessus dans les échanges du groupe. Tu peux poser la question directement aux organisateurs, ou essayer /search avec un mot-clé.",
+        "dont_know_near": "Je n'ai pas trouvé de réponse claire, mais ces discussions du groupe pourraient t'aider :",
+        "greeting_reply": "Salut ! 👋 Moi c'est Jeli — la mémoire du groupe. Je suis tout : sessions, annonces, décisions, échéances. Je t'aide avec quoi ?",
+        "thanks_reply": "Avec plaisir ! 😊",
+        "welcome_new": "Bienvenue ! 🙏 Ravi de t'avoir parmi nous.",
+        "session_in_progress": "⏳ «{title}» (partagé par {who}, {day}) est encore en cours de transcription — {progress}. Encore quelques minutes et j'aurai tous les détails pour toi !",
         "about_jeli": (
-            "Salut, c'est Jeli 👋 Je suis à jour sur tout dans ce groupe — les échanges, les sessions "
-            "enregistrées, et les documents du programme METI UniPods AI (MIT, Wadhwani, Institut Éthiopien "
-            "d'IA, sélection Cohorte 1). Pose-moi n'importe quoi et je te dis d'où ça vient — ou que je ne "
-            "sais pas. L'équipe Jeli m'a créé pour le hackathon."
+            "Salut, c'est Jeli 👋 Pense à moi comme à la mémoire du groupe — je suis tout : les échanges, "
+            "les sessions enregistrées, et les documents du programme METI UniPods AI (MIT, Wadhwani, "
+            "Institut Éthiopien d'IA, Cohorte 1). Pose-moi n'importe quelle question — je te dis d'où ça "
+            "vient, et je suis honnête quand je ne sais pas."
         ),
         "sources": "Sources",
-        "fallback": "Je reçois beaucoup de questions en ce moment : voici où le groupe en a parlé — redemandez-moi dans une minute pour une réponse complète :",
-        "not_ready": "Je ne suis pas encore connecté à la mémoire du groupe. Réessayez bientôt !",
-        "already_covered": "💡 Cette question a déjà reçu une réponse dans le groupe :",
+        "fallback": "C'est un peu chargé là, mais voici où le groupe en a parlé — redemande-moi dans une minute pour une réponse complète :",
+        "not_ready": "Je suis encore en train de me réveiller — donne-moi un instant et réessaie !",
+        "already_covered": "💡 Le groupe a déjà répondu à ça :",
         "catchup_header": "🗓️ Récap depuis {since} ({messages} messages)",
-        "catchup_nothing": "Rien de nouveau dans les groupes depuis {since}",
-        "catchup_not_live": "Je ne reçois pas encore les messages des groupes : ma mémoire s'arrête le {day} à {time} GMT, donc je ne peux pas vous dire ce qui s'est passé depuis. Dès que mon numéro sera dans le groupe, je suivrai tout en direct.",
-        "catchup_unavailable": "{messages} messages depuis {since}, mais je ne peux pas les résumer pour l'instant. Réessayez dans quelques minutes.",
+        "catchup_nothing": "Tout calme depuis {since} — rien de nouveau dans les groupes ! ☀️",
+        "catchup_not_live": "Je ne suis pas encore dans le groupe, donc ma mémoire s'arrête le {day} à {time} GMT. Dès que je suis ajouté, je suis tout en direct et je te tiens à jour.",
+        "catchup_unavailable": "{messages} messages depuis {since}, mais je ne peux pas les résumer maintenant — réessaie dans quelques minutes.",
         "catchup_highlights": "📣 À retenir",
         "catchup_decisions": "✅ Décisions",
         "catchup_deadlines": "⏰ Échéances et dates",
         "catchup_questions": "❓ Questions restées sans réponse",
         "catchup_recordings": "🎥 Sessions enregistrées",
         "deadlines_header": "⏰ Échéances des {days} prochains jours",
-        "deadlines_none": "Aucune échéance annoncée pour les {days} prochains jours.",
+        "deadlines_none": "Rien d'urgent dans les {days} prochains jours — profite ! 😌",
         "deadlines_coming_up": "⏰ À venir",
         "deadline_in_call": "appel",
         "deadline_in_document": "document",
-        "file_here": "📄 Voici «{title}», partagé par {who} le {day}.",
-        "file_translating": "📄 Je traduis «{title}» en {language} : je l'envoie ici d'ici une ou deux minutes.",
-        "file_translated": "«{title}» en {language} (traduction automatique : l'original fait foi)",
-        "file_translate_failed": "Désolé, je n'ai pas pu traduire «{title}» pour l'instant. Réessaie dans quelques minutes.",
+        "file_here": "📄 Voilà «{title}», partagé par {who} le {day}.",
+        "file_translating": "📄 Je traduis «{title}» en {language} — je t'envoie ça d'ici une ou deux minutes.",
+        "file_translated": "«{title}» en {language} (traduction automatique — l'original fait foi)",
+        "file_translate_failed": "Désolé, la traduction de «{title}» n'a pas fonctionné cette fois. Réessaie dans quelques minutes !",
         "file_language_unsupported": "Je peux traduire les documents en {languages}.",
         "search_header": "🔎 Où le groupe en a parlé :",
-        "search_nothing": "Je n'ai rien trouvé à ce sujet dans les échanges du groupe.",
+        "search_nothing": "Je n'ai rien trouvé à ce sujet dans les échanges du groupe — essaie avec d'autres mots peut-être ?",
         "recap_summary": "📝 Résumé",
         "recap_actions": "📋 À faire",
         "recap_moments": "⏱️ Moments clés",
-        "recap_choose": "Quelle session ? Répondez avec son numéro (ex. 4) ou /recap 4 :",
-        "recap_unavailable": "Je ne peux pas rédiger ce résumé pour l'instant. Réessayez dans quelques minutes.",
+        "recap_choose": "Quelle session tu veux ? Réponds avec son numéro (ex. 4) ou /recap 4 :",
+        "recap_unavailable": "Je ne peux pas rédiger ce résumé là — réessaie dans quelques minutes.",
         "help": (
             "Salut, c'est Jeli 👋 la mémoire du groupe. Pose-moi n'importe quelle question — ce qui a été "
             "décidé, ce qui arrive, ce que dit le programme METI UniPods AI sur MIT, Wadhwani ou l'Institut "
-            "Éthiopien d'IA. Mentionne-moi (@Jeli), réponds à l'un de mes messages, ou commence par "
-            "« Jeli, ». Je cite mes sources — et je dis quand je ne sais pas.\n\n"
+            "Éthiopien d'IA. Mentionne-moi (@Jeli), réponds à un de mes messages, ou commence par « Jeli, ».\n\n"
             "/catchup — rattraper ce que tu as manqué\n"
             "/recap — résumé d'une session enregistrée\n"
             "/deadlines — les prochaines échéances\n"
-            "/search <sujet> — où on en a parlé dans le groupe"
+            "/search <sujet> — trouver où on en a parlé dans le groupe"
         ),
-        "guard_cooling_down": "🙏 J'ai reçu beaucoup de messages de ta part en peu de temps et j'ai besoin d'une petite pause. Je serai de retour dans environ une heure — tu pourras me poser ta question à ce moment-là.",
-        "guard_oversized": "⚠️ Ton message est trop long pour que je puisse le traiter (limite : ~1 500 caractères). Peux-tu résumer ta question ?",
-        "guard_repeat": "💬 Tu m'as déjà envoyé ce message plusieurs fois. Si je n'ai pas répondu, c'est que je n'ai pas cette information — essaie de reformuler ou utilise /search.",
-        "admin_silenced": "✅ Reçu ! Je me tais dans ce groupe{duration}. Utilise /resume pour me faire revenir.",
-        "admin_resumed": "✅ Je suis de retour ! J'écoute et réponds normalement. 👑",
-        "voice_not_heard": "Hey, j'ai reçu ton message vocal mais je n'ai pas réussi à le comprendre 🎤 Tu peux réessayer, ou simplement écrire ta question ? Je suis là dans tous les cas !",
-        "voice_reply_unavailable": "Je ne peux pas t'envoyer un message vocal là — mon module vocal fait une petite pause 🎤 Voici ma réponse en texte :",
+        "guard_cooling_down": "🙏 Tu m'as envoyé pas mal de messages d'un coup — j'ai besoin d'une petite pause ! Je reviens dans environ une heure, n'hésite pas à me reposer ta question à ce moment.",
+        "guard_oversized": "⚠️ Ton message est un peu long pour moi (limite : ~1 500 caractères). Tu peux le raccourcir un peu ?",
+        "guard_repeat": "💬 Tu m'as déjà envoyé ça plusieurs fois. Si je n'ai pas répondu, c'est que je n'ai pas encore cette info — essaie de reformuler ou utilise /search.",
+        "admin_silenced": "✅ Reçu ! Je me fais discret dans ce groupe{duration}. Un /resume quand tu veux me faire revenir.",
+        "admin_resumed": "✅ Me revoilà ! J'écoute et réponds normalement. 👑",
+        "voice_not_heard": "Hey, j'ai reçu ton vocal mais j'ai pas réussi à le saisir 🎤 Tu peux réessayer, ou juste écrire ta question ? Je suis là dans tous les cas !",
+        "voice_reply_unavailable": "Je n'arrive pas à t'envoyer un vocal là — il se passe un truc de mon côté 🎤 Voilà ma réponse en texte :",
         "image_what": "De quoi voudrais-tu une image ? 🎨 Décris le sujet et j'illustre !",
     },
 }

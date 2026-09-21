@@ -16,6 +16,7 @@ import hashlib
 import hmac
 import json
 import logging
+import random
 import re
 import time
 from collections import OrderedDict
@@ -50,6 +51,14 @@ IGNORED_CHAT_SUFFIXES = ("@broadcast", "@newsletter")
 TEXT_MENTION = re.compile(r"@(\d{5,})")
 # Admin commands that only team members can use.
 ADMIN_COMMAND = re.compile(r"^/(silence|mute|pause|resume|unsilence|unmute)\b(.*)$", re.IGNORECASE | re.DOTALL)
+# Self-introduction patterns: higher voice rate for first contact.
+_INTRO = re.compile(
+    r"\b(?:je\s+me\s+pr[eé]sente|je\s+m[''']appelle|je\s+suis\s+nouveau|je\s+rejoins|"
+    r"permit\s+me\s+to\s+introduce|my\s+name\s+is|i\s+(?:am|'m)\s+new|just\s+joined|"
+    r"first\s+(?:time|message|day)|nouveau\s+(?:ici|membre)|bonne\s+arriv[eé]e|"
+    r"glad\s+to\s+(?:join|be\s+here)|ravi\s+de\s+(?:rejoindre|vous\s+retrouver))\b",
+    re.IGNORECASE,
+)
 ADMIN_DURATION = re.compile(r"(\d+)\s*(h|hours?|heures?|m|min|minutes?)", re.IGNORECASE)
 # Documents Jeli keeps when a member shares them in a group.
 DOCUMENT_TYPES = (".pdf", ".docx", ".txt", ".md")
@@ -289,6 +298,11 @@ class Waha:
         # Image generation toggles (set from the dashboard via apply.py).
         self.enabled_images: bool = True          # explicit "génère une image de…" requests
         self.enabled_proactive_images: bool = True  # proactive suggestion after a rich answer
+        # Probabilistic voice: fraction of messages Jeli answers by voice (0.0 – 1.0).
+        self.voice_rate: float = 0.20
+        self.voice_intro_rate: float = 0.80
+        # Members Jeli has already talked to: first contact triggers voice_intro_rate.
+        self._seen_members: set[str] = set()
         # Whether this member was talking with Jeli a moment ago (set by the responder).
         self.in_conversation = None
         self._later: set[asyncio.Task] = set()
@@ -684,6 +698,16 @@ class Waha:
             # regardless of whether the voice module is wired up. Without this, "récap,
             # réponds en vocal" is forwarded intact and the LLM says "je ne peux pas" itself.
             message = dataclasses.replace(message, text=without_voice_request(message.text))
+        # Probabilistic voice: reply by voice on a fraction of messages even without being asked.
+        # Higher rate for first contact or self-introductions.
+        if self.voice and not by_voice:
+            author_id = message.author_id or message.author or ""
+            is_new = bool(author_id) and author_id not in self._seen_members
+            if author_id:
+                self._seen_members.add(author_id)
+            rate = self.voice_intro_rate if (is_new or bool(_INTRO.search(message.text or ""))) else self.voice_rate
+            if rate > 0 and random.random() < rate:
+                by_voice = True
         await asyncio.sleep(reading_delay())
         await self._post_quietly("/api/sendSeen", {**chat, "messageIds": [message.message_id]})
         await self._post_quietly("/api/startTyping", chat)
@@ -723,6 +747,8 @@ class Waha:
                         topic = illustrator.topic_from_request(msg_text or "")
                         if topic and illustrator.has_statistical_content(msg_text or ""):
                             async def make_image() -> Attachment | None:
+                                if not self.enabled_images:
+                                    return None
                                 ip = await illustrator.build_prompt(topic, llm)
                                 if not ip:
                                     return None
@@ -736,6 +762,8 @@ class Waha:
                     reply_text = reply
 
                     async def maybe_image() -> Attachment | None:
+                        if not self.enabled_proactive_images:
+                            return None
                         ip = await illustrator.suggest_if_useful(msg_text or "", reply_text, llm)
                         if not ip:
                             return None

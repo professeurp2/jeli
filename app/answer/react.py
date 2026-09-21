@@ -48,12 +48,57 @@ _CORRECTION = re.compile(
 )
 
 
+# Greetings / introductions.
+_GREETING = re.compile(
+    r"(?:"
+    r"\bhello\b|\bhi\b|\bhey\b|\bbonjour\b|\bsalut\b|\bsalam\b|\bwelcome\b|bienvenue"
+    r"|good\s+(?:morning|afternoon|evening)|bon(?:ne)?\s+(?:matin[eé]e?|soir[eé]e?|journée?|après-midi)"
+    r"|how\s+are\s+you|comment\s+(?:ça\s+va|allez-vous|tu\s+vas)"
+    r")",
+    re.IGNORECASE,
+)
+
+# Thanks / gratitude.
+_THANKS = re.compile(
+    r"(?:"
+    r"\bthank(?:s|\s+you)\b|\bmerci\b|\bthx\b|\bthankyou\b"
+    r"|je\s+te\s+remercie|je\s+vous\s+remercie|très\s+reconnaissant"
+    r")",
+    re.IGNORECASE,
+)
+
+# Congratulations / celebration / success.
+_CONGRATS = re.compile(
+    r"(?:"
+    r"🎉|🥳|🎊|congrat|félicit|bravo|bien\s+joué|well\s+done|amazing|excellent|fantastique|superbe"
+    r"|we\s+(?:won|passed|made\s+it)|on\s+(?:a\s+gagné|a\s+réussi)|c.est\s+(?:génial|parfait|super)"
+    r")",
+    re.IGNORECASE,
+)
+
+# Encouragement / motivation.
+_ENCOURAGE = re.compile(
+    r"(?:"
+    r"💪|🙌|courage|allez|go\s+(?:team|for\s+it)|you\s+can\s+do|on\s+peut\s+le\s+faire|let.s\s+go"
+    r")",
+    re.IGNORECASE,
+)
+
+
 def emotion_emoji(text: str) -> str | None:
     """Return the emoji to react with based on the message's emotional tone, or None."""
     if _SAD.search(text):
         return "😢"
     if _FUNNY.search(text):
         return "😄"
+    if _CONGRATS.search(text):
+        return "🎉"
+    if _THANKS.search(text):
+        return "🙏"
+    if _ENCOURAGE.search(text):
+        return "💪"
+    if _GREETING.search(text):
+        return "👋"
     return None
 
 

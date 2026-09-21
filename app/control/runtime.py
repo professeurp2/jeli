@@ -77,6 +77,10 @@ FIELDS = {
         # Image generation (Pollinations.ai, free, no API key).
         Field("enabled.images", "bool", lambda s: True),
         Field("enabled.proactive_images", "bool", lambda s: True),
+        # Probabilistic voice: Jeli replies by voice on this fraction of messages (0–1).
+        # voice_intro_rate applies to first contact or self-introductions.
+        Field("voice_rate", "float", lambda s: 0.20, 0.0, 1.0),
+        Field("voice_intro_rate", "float", lambda s: 0.80, 0.0, 1.0),
     )
 }
 
