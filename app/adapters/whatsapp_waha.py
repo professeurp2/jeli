@@ -286,6 +286,9 @@ class Waha:
         self.on_vote = None
         # Listens to voice notes and speaks answers (app/answer/voice.py); None: text only.
         self.voice = None
+        # Image generation toggles (set from the dashboard via apply.py).
+        self.enabled_images: bool = True          # explicit "génère une image de…" requests
+        self.enabled_proactive_images: bool = True  # proactive suggestion after a rich answer
         # Whether this member was talking with Jeli a moment ago (set by the responder).
         self.in_conversation = None
         self._later: set[asyncio.Task] = set()
@@ -716,23 +719,20 @@ class Waha:
                 llm = self.voice.llm
                 msg_text = message.text
                 if asks_for_image(msg_text or ""):
-                    # Explicit image request: extract the subject, generate only when one exists.
-                    # (When the request has no subject, understand() already asked the member what
-                    # to illustrate — so there is nothing to generate here.)
-                    topic = illustrator.topic_from_request(msg_text or "")
-                    if topic:
-                        async def make_image() -> Attachment | None:
-                            ip = await illustrator.build_prompt(topic, llm)
-                            if not ip:
-                                return None
-                            data = await illustrator.generate(ip.prompt)
-                            if not data:
-                                return None
-                            return Attachment("jeli.jpg", "image/jpeg", data, caption=ip.caption)
+                    if self.enabled_images:
+                        topic = illustrator.topic_from_request(msg_text or "")
+                        if topic:
+                            async def make_image() -> Attachment | None:
+                                ip = await illustrator.build_prompt(topic, llm)
+                                if not ip:
+                                    return None
+                                data = await illustrator.generate(ip.prompt)
+                                if not data:
+                                    return None
+                                return Attachment("jeli.jpg", "image/jpeg", data, caption=ip.caption)
 
-                        asyncio.create_task(self._send_later(message, make_image))
-                else:
-                    # Proactive: let the LLM decide if the answer would benefit from a visual.
+                            asyncio.create_task(self._send_later(message, make_image))
+                elif self.enabled_proactive_images:
                     reply_text = reply
 
                     async def maybe_image() -> Attachment | None:

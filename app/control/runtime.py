@@ -74,6 +74,9 @@ FIELDS = {
         Field("enabled.deadlines", "bool", lambda s: True),
         Field("enabled.daily_summary", "bool", lambda s: bool(s.daily_digest_time)),
         Field("enabled.team_report", "bool", lambda s: bool(s.team_report_time)),
+        # Image generation (Pollinations.ai, free, no API key).
+        Field("enabled.images", "bool", lambda s: True),
+        Field("enabled.proactive_images", "bool", lambda s: True),
     )
 }
 
