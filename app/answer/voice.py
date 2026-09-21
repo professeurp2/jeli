@@ -2,11 +2,13 @@
 by voice — when it was asked by voice, or when the member asks for a voice reply.
 
 Listening: the voice note goes to the answer model as audio, which writes down what was said.
-Speaking: a speech model reads the answer aloud (the words only: quotes, links and mentions stay in
-the text that follows it); WAHA turns the audio into a WhatsApp voice note. When any step fails, the
-member gets the written answer instead: a voice reply is a courtesy, never a condition.
+Speaking: Gemini TTS (primary, more natural and emotional) → edge-tts (fallback, free, no quota).
+The audio bytes returned by speak() are self-describing: RIFF header = WAV (from Gemini PCM),
+no RIFF header = MP3 (from edge-tts). WAHA has convert:True so it transcodes to OGG/Opus anyway.
+When any step fails, the member gets the written answer instead: a voice reply is a courtesy.
 """
 
+import asyncio
 import io
 import logging
 import re
@@ -20,15 +22,20 @@ from app.answer.llm import LLM, LLMUnavailable
 
 log = logging.getLogger(__name__)
 
-# edge-tts: free, no API key, natural voices — primary TTS.
+# Gemini TTS — primary TTS engine: more natural, emotionally expressive, instruction-following.
+# Uses the same API key pool as the LLM (existing rotation in LLM._clients).
+GEMINI_TTS_MODEL = "gemini-2.5-flash-preview-tts"
+GEMINI_TTS_VOICES = {"fr": "Aoede", "en": "Aoede"}  # warm, expressive multilingual voice
+GEMINI_TTS_TIMEOUT = 20.0
+
+# edge-tts — fallback when Gemini TTS quota is exhausted or unavailable.
 # Each entry: (voice name, SSML mstts:express-as style) for a warmer, more emotional delivery.
-# Styles verified against Microsoft's TTS voice gallery.
 EDGE_VOICES = {
     "fr": ("fr-FR-DeniseNeural", "cheerful"),
     "en": ("en-US-AriaNeural", "chat"),
 }
-AUDIO_MIMETYPE = "audio/mpeg"
-AUDIO_BYTES_PER_SECOND = 16_000  # edge-tts MP3 at ~128 kbps
+AUDIO_MIMETYPE = "audio/mpeg"  # edge-tts output
+AUDIO_BYTES_PER_SECOND = 16_000  # edge-tts MP3 at ~128 kbps (used for recording-delay timing)
 SAMPLE_RATE = 24_000  # WAV helper: 16-bit mono PCM at 24 kHz (used by tests)
 # edge-tts has no hard limit; cap at ~3 min of speech so voice notes stay listenable.
 MAX_SPOKEN_CHARS = 3_000
@@ -159,6 +166,18 @@ def wav(pcm: bytes, rate: int = SAMPLE_RATE) -> bytes:
     return out.getvalue()
 
 
+def audio_mimetype(audio: bytes) -> str:
+    """Detect the MIME type from the audio's magic bytes (no dependency on TTS engine used)."""
+    return "audio/wav" if audio[:4] == b"RIFF" else AUDIO_MIMETYPE
+
+
+def audio_seconds(audio: bytes) -> float:
+    """Approximate duration: WAV 24 kHz 16-bit mono vs MP3 ~128 kbps."""
+    if audio[:4] == b"RIFF":
+        return len(audio) / (SAMPLE_RATE * 2)  # 2 bytes per sample, mono
+    return len(audio) / AUDIO_BYTES_PER_SECOND
+
+
 class Voice:
     def __init__(self, llm: LLM):
         self.llm = llm  # listens with the answer models; speaks with its client
@@ -188,17 +207,46 @@ class Voice:
             return ""
         return seen.description.strip()
 
-    async def speak(self, text: str, language: str = "en") -> bytes | None:
-        """The text read aloud as an MP3 file; None when TTS fails.
-        Long replies are truncated at a sentence boundary: the full text is sent alongside."""
-        text = text.strip()
-        if not text:
+    async def _speak_gemini(self, text: str, language: str) -> bytes | None:
+        """Gemini TTS on all available API keys; returns WAV bytes or None on failure/quota."""
+        if not self.llm._clients:
             return None
-        if len(text) > MAX_SPOKEN_CHARS:
-            cutoff = text[:MAX_SPOKEN_CHARS].rfind(". ")
-            text = text[:cutoff + 1] if cutoff > 300 else text[:MAX_SPOKEN_CHARS]
+        voice_name = GEMINI_TTS_VOICES.get(language, "Aoede")
+        lang_label = "French" if language == "fr" else "English"
+        prompt = (
+            f"Read the following message in {lang_label} as a warm, friendly assistant "
+            "who genuinely cares — conversational, natural and emotionally present:\n\n" + text
+        )
+        config = types.GenerateContentConfig(
+            response_modalities=["AUDIO"],
+            speech_config=types.SpeechConfig(
+                voice_config=types.VoiceConfig(
+                    prebuilt_voice_config=types.PrebuiltVoiceConfig(voice_name=voice_name)
+                )
+            ),
+        )
+        for idx, client in enumerate(self.llm._clients):
+            try:
+                response = await asyncio.wait_for(
+                    client.aio.models.generate_content(
+                        model=GEMINI_TTS_MODEL,
+                        contents=prompt,
+                        config=config,
+                    ),
+                    timeout=GEMINI_TTS_TIMEOUT,
+                )
+                if response.candidates:
+                    pcm = response.candidates[0].content.parts[0].inline_data.data
+                    if pcm:
+                        return wav(pcm)
+            except Exception as error:
+                log.warning("Gemini TTS key %d failed: %s: %s", idx, type(error).__name__, error)
+        return None
+
+    async def _speak_edge(self, text: str, language: str) -> bytes | None:
+        """edge-tts fallback: free, no quota, SSML expressive styles."""
         voice, style = EDGE_VOICES.get(language, EDGE_VOICES["en"])
-        ssml = _ssml(for_speech(text), voice, style)
+        ssml = _ssml(text, voice, style)
         try:
             communicate = edge_tts.Communicate(ssml, voice)
             audio = bytearray()
@@ -211,3 +259,19 @@ class Voice:
         except Exception as error:
             log.error("edge-tts failed: %s: %s", type(error).__name__, error)
         return None
+
+    async def speak(self, text: str, language: str = "en") -> bytes | None:
+        """The text read aloud; None when all TTS engines fail.
+        Tries Gemini TTS first (more natural, emotional), falls back to edge-tts on quota/error.
+        Long replies are truncated at a sentence boundary: the full text is sent alongside."""
+        text = text.strip()
+        if not text:
+            return None
+        if len(text) > MAX_SPOKEN_CHARS:
+            cutoff = text[:MAX_SPOKEN_CHARS].rfind(". ")
+            text = text[:cutoff + 1] if cutoff > 300 else text[:MAX_SPOKEN_CHARS]
+        speech = for_speech(text)
+        audio = await self._speak_gemini(speech, language)
+        if audio:
+            return audio
+        return await self._speak_edge(speech, language)

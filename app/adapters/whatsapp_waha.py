@@ -33,7 +33,7 @@ from app.answer.language import TEXTS, detect_language
 from app.answer.react import emotion_emoji, is_correction
 from app.answer import illustrator
 from app.answer.illustrator import asks_for_image
-from app.answer.voice import AUDIO_BYTES_PER_SECOND, AUDIO_MIMETYPE, MAX_SPOKEN_CHARS, asks_for_voice, sources, spoken, without_voice_request
+from app.answer.voice import MAX_SPOKEN_CHARS, audio_mimetype, audio_seconds, asks_for_voice, sources, spoken, without_voice_request
 from app.config import Settings
 from app.control.guard import Guard
 from app.models import Attachment, IncomingMessage, Reply
@@ -474,10 +474,11 @@ class Waha:
 
     async def send_voice(self, chat_id: str, audio: bytes, reply_to: str | None = None) -> None:
         """A voice note: WAHA converts the audio to OGG/Opus for WhatsApp."""
-        ext = AUDIO_MIMETYPE.split("/")[-1]
+        mime = audio_mimetype(audio)
+        ext = mime.split("/")[-1]
         payload = {
             "chatId": chat_id,
-            "file": {"mimetype": AUDIO_MIMETYPE, "filename": f"jeli.{ext}", "data": base64.b64encode(audio).decode()},
+            "file": {"mimetype": mime, "filename": f"jeli.{ext}", "data": base64.b64encode(audio).decode()},
             "convert": True,
         }
         if reply_to:
@@ -751,7 +752,7 @@ class Waha:
                 audio = await self.voice.speak(spoken(reply), language)
             if reply:
                 # Answer generation counts as typing time: only wait for what is left.
-                busy = min(VOICE_RECORDING_SECONDS, len(audio) / AUDIO_BYTES_PER_SECOND) if audio else typing_duration(reply)
+                busy = min(VOICE_RECORDING_SECONDS, audio_seconds(audio)) if audio else typing_duration(reply)
                 await asyncio.sleep(max(0.0, busy - (time.monotonic() - typing_since)))
                 # Still "typing…" while other answers go out first.
                 await self.spacer.wait_turn()

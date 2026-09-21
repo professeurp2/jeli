@@ -30,7 +30,7 @@ def hit(chunk_id, ids, similarity, started_at):
 
 
 # As search returns them: most relevant first (here the later conversation), not in time order.
-HITS = [hit(2, ["m4"], 0.74, T0 + timedelta(days=1)), hit(1, ["m1", "m2", "m3"], 0.70, T0)]
+HITS = [hit(2, ["m4"], 0.80, T0 + timedelta(days=1)), hit(1, ["m1", "m2", "m3"], 0.76, T0)]
 
 
 RECORDING = Recording(

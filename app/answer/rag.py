@@ -56,7 +56,7 @@ CANDIDATE_CHUNKS = 12  # retrieved, before leaving out ignored authors
 QUOTES_SHOWN = 1
 # The model found nothing, yet the group discussed something this close: show it rather than a
 # flat "I don't know".
-NEAR_SIMILARITY = 0.68
+NEAR_SIMILARITY = 0.75
 NAMES_TTL_SECONDS = 600
 
 
