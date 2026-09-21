@@ -3,6 +3,7 @@
 import logging
 from datetime import datetime, timedelta, timezone
 
+from app.answer.citations import is_ignored
 from app.ingest.chunker import chunk_messages
 from app.kb.embeddings import BATCH_SIZE, MODEL, Embedder
 from app.kb.store import Store
@@ -26,11 +27,17 @@ def document_page(message_sent_at: datetime, shared_at: datetime) -> int:
     return max(1, int((message_sent_at - shared_at).total_seconds()))
 
 
-async def index_pending(store: Store, embedder: Embedder, settle: timedelta | None = None) -> int:
+async def index_pending(
+    store: Store,
+    embedder: Embedder,
+    settle: timedelta | None = None,
+    ignored: set[str] = frozenset(),
+) -> int:
     """Chunk and embed every message not indexed yet. Returns the number of chunks created.
 
     With `settle`, a chat's last chunk is left pending while its conversation may still be
     going on (last message more recent than `settle`), so it is not cut in the middle.
+    `ignored`: author keys whose messages are excluded from indexing (e.g. other bots).
     """
     created = 0
     for chat_id in await store.pending_chats():
@@ -41,7 +48,10 @@ async def index_pending(store: Store, embedder: Embedder, settle: timedelta | No
         elif chat_id.startswith(DOCUMENT_PREFIX):
             document = (await store.documents([chat_id])).get(chat_id)
             header = document_header(document.title) if document else None
-        chunks = chunk_messages(await store.pending_messages(chat_id), header=header)
+        messages = await store.pending_messages(chat_id)
+        if ignored:
+            messages = [m for m in messages if not is_ignored(m, ignored)]
+        chunks = chunk_messages(messages, header=header)
         if settle and chunks and chunks[-1].ended_at > datetime.now(timezone.utc) - settle:
             chunks = chunks[:-1]
         for start in range(0, len(chunks), BATCH_SIZE):
