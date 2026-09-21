@@ -33,6 +33,8 @@ class IncomingMessage:
     # Jeli downloads it and asks Gemini to describe it, then prepends the description to the text.
     image_url: str | None = None
     image_mimetype: str = ""
+    # A WhatsApp sticker: Jeli reacts with a warm emoji instead of answering.
+    is_sticker: bool = False
 
 
 @dataclass(frozen=True)

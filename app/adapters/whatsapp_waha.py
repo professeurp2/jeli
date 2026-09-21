@@ -176,7 +176,8 @@ def parse_message(event: dict, bot_name: str) -> IncomingMessage | None:
         text = poll_text(*poll)  # a poll: its question and options, to be remembered with its votes
     voice = _voice_note(payload)
     image = _image_media(payload)
-    if payload.get("fromMe") or not chat_id or chat_id.endswith(IGNORED_CHAT_SUFFIXES) or not (text or voice or image):
+    is_sticker = payload.get("type") == "sticker"
+    if payload.get("fromMe") or not chat_id or chat_id.endswith(IGNORED_CHAT_SUFFIXES) or not (text or voice or image or is_sticker):
         return None
 
     me = event.get("me") or {}
@@ -232,6 +233,7 @@ def parse_message(event: dict, bot_name: str) -> IncomingMessage | None:
         quoted_context=quoted_context,
         image_url=image["url"] if image else None,
         image_mimetype=image.get("mimetype", "") if image else "",
+        is_sticker=is_sticker,
     )
 
 
@@ -600,6 +602,10 @@ class Waha:
         if self.suspended:
             return  # the message is still remembered (ingested separately)
         try:
+            # Stickers: react warmly without going to the LLM.
+            if message.is_sticker and not message.is_private and not self.paused and message.chat_id not in self.silent_groups:
+                await self.send_reaction(message.chat_id, message.message_id, random.choice(["😄", "❤️", "🙌", "😊", "🌟"]))
+                return
             if message.voice_url:
                 message = await self._listen(message)
                 if message is None:

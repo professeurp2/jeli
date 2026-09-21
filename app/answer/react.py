@@ -84,9 +84,32 @@ _ENCOURAGE = re.compile(
     re.IGNORECASE,
 )
 
+# Direct emoji → reaction mapping: catches pure emoji messages (e.g. "❤️", "🔥🔥")
+# that the regex patterns above would miss (they look for words, not bare glyphs).
+# Order matters: first match wins, so put the most distinctive emojis first.
+_EMOJI_REACTIONS: list[tuple[str, str]] = [
+    # Sad / condolences
+    ("😔", "😢"), ("😞", "😢"), ("😟", "😢"), ("🥺", "😢"),
+    # Love / affection
+    ("❤️", "❤️"), ("🧡", "❤️"), ("💛", "❤️"), ("💚", "❤️"), ("💙", "❤️"), ("💜", "❤️"),
+    ("🖤", "❤️"), ("🤍", "❤️"), ("💕", "❤️"), ("💖", "❤️"), ("💗", "❤️"), ("💓", "❤️"),
+    ("💞", "❤️"), ("💝", "❤️"), ("🥰", "❤️"), ("😍", "❤️"), ("😘", "❤️"), ("🫶", "❤️"),
+    # Funny / laugh (beyond what the regex already covers)
+    ("🤪", "😄"), ("😜", "😄"),
+    # Hype / fire / encouragement
+    ("🔥", "💪"), ("⚡", "💪"), ("🌟", "💪"), ("✨", "💪"), ("🤩", "💪"),
+    ("👊", "💪"), ("✊", "💪"), ("🤜", "💪"),
+    # OK / agreement
+    ("👍", "👍"), ("✅", "👍"), ("💯", "👍"),
+    # Thinking
+    ("🤔", "🤔"), ("🧐", "🤔"),
+]
+
 
 def emotion_emoji(text: str) -> str | None:
     """Return the emoji to react with based on the message's emotional tone, or None."""
+    if not text:
+        return None
     if _SAD.search(text):
         return "😢"
     if _FUNNY.search(text):
@@ -99,6 +122,10 @@ def emotion_emoji(text: str) -> str | None:
         return "💪"
     if _GREETING.search(text):
         return "👋"
+    # Fallback: direct emoji glyph scan — handles pure emoji messages the regexes miss.
+    for glyph, reaction in _EMOJI_REACTIONS:
+        if glyph in text:
+            return reaction
     return None
 
 
