@@ -94,10 +94,11 @@ Do NOT suggest an image for:
 - Casual conversation, greetings or thanks
 - An answer that is already a direct quote
 
-If yes: write a concise English FLUX prompt (under 60 words). Prefer styles like
-"clear educational infographic", "timeline diagram", "comparison chart illustration",
-"step-by-step visual guide". Also write a short caption (≤8 words) in the language
-of the original question.
+If yes: write a concise English FLUX prompt (under 55 words, NOT including the mandatory suffix below).
+ALWAYS end the prompt with this exact suffix (do not paraphrase it):
+"flat vector infographic, white background, bold text labels, high contrast colours, clean minimal design"
+Never dark background, never photorealistic, never blurry.
+Also write a short caption (≤8 words) in the language of the original question.
 """
 
 # Minimum answer length before considering a proactive image (very short replies never need one).
@@ -182,7 +183,11 @@ async def suggest_if_useful(question: str, answer: str, llm: LLM) -> ImagePrompt
         )
         if decision.should_illustrate and decision.prompt.strip():
             log.info("Proactive image suggested for question: %.60s", question)
-            return ImagePrompt(prompt=decision.prompt, caption=decision.caption)
+            prompt = decision.prompt.strip().rstrip(".,")
+            _STYLE = "flat vector infographic, white background, bold text labels, high contrast colours"
+            if "infographic" not in prompt.lower() and "flat" not in prompt.lower():
+                prompt = f"{prompt}, {_STYLE}"
+            return ImagePrompt(prompt=prompt, caption=decision.caption)
     except LLMUnavailable:
         log.debug("Proactive image skipped: LLM unavailable")
     return None
