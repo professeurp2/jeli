@@ -15,6 +15,7 @@ import re
 from pydantic import BaseModel
 
 from app.answer.conversation import CLOSING, Turn
+from app.answer.illustrator import asks_for_image, topic_from_request
 from app.answer.intents import looks_like_question
 from app.answer.language import TEXTS
 from app.answer.llm import LLM, LLMUnavailable
@@ -113,6 +114,8 @@ class Understander:
             return Understood(kind="social", reply=texts["thanks_reply"], standalone=text, queries=[])
         if ABOUT_JELI.search(text):
             return Understood(kind="about_jeli", reply=texts["about_jeli"], standalone=text, queries=[])
+        if asks_for_image(text) and not topic_from_request(text):
+            return Understood(kind="social", reply=texts["image_what"], standalone=text, queries=[])
         clear_question = looks_like_question(text) and len(text.split()) >= 4
         might_be_vague = len(text.split()) < 5 or bool(VAGUE_SIGNAL.search(text))
         if self.llm is None or (clear_question and not might_be_vague and not turns and not FILE_REQUEST.search(text)):

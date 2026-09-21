@@ -713,17 +713,21 @@ class Waha:
                 llm = self.voice.llm
                 msg_text = message.text
                 if asks_for_image(msg_text or ""):
-                    # Explicit image request: build prompt from the user's message.
-                    async def make_image() -> Attachment | None:
-                        ip = await illustrator.build_prompt(msg_text, llm)
-                        if not ip:
-                            return None
-                        data = await illustrator.generate(ip.prompt)
-                        if not data:
-                            return None
-                        return Attachment("jeli.jpg", "image/jpeg", data, caption=ip.caption)
+                    # Explicit image request: extract the subject, generate only when one exists.
+                    # (When the request has no subject, understand() already asked the member what
+                    # to illustrate — so there is nothing to generate here.)
+                    topic = illustrator.topic_from_request(msg_text or "")
+                    if topic:
+                        async def make_image() -> Attachment | None:
+                            ip = await illustrator.build_prompt(topic, llm)
+                            if not ip:
+                                return None
+                            data = await illustrator.generate(ip.prompt)
+                            if not data:
+                                return None
+                            return Attachment("jeli.jpg", "image/jpeg", data, caption=ip.caption)
 
-                    asyncio.create_task(self._send_later(message, make_image))
+                        asyncio.create_task(self._send_later(message, make_image))
                 else:
                     # Proactive: let the LLM decide if the answer would benefit from a visual.
                     reply_text = reply
