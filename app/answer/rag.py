@@ -53,7 +53,7 @@ log = logging.getLogger(__name__)
 
 RETRIEVED_CHUNKS = 6  # excerpts given to the model
 CANDIDATE_CHUNKS = 12  # retrieved, before leaving out ignored authors
-QUOTES_SHOWN = 1
+QUOTES_SHOWN = 0  # citations désactivées — trop souvent hors sujet
 # The model found nothing, yet the group discussed something this close: show it rather than a
 # flat "I don't know".
 NEAR_SIMILARITY = 0.75

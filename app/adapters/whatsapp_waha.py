@@ -775,9 +775,9 @@ class Waha:
                 await self.send_reply(message, clean_reply)
             await self.deliver_files(message, reply)
             if self.voice:
-                llm = self.voice.llm
+                llm = getattr(self.voice, "llm", None)
                 msg_text = message.text
-                if asks_for_image(msg_text or ""):
+                if llm and asks_for_image(msg_text or ""):
                     if self.enabled_images:
                         topic = illustrator.topic_from_request(msg_text or "")
                         if topic:
@@ -793,7 +793,7 @@ class Waha:
                                 return Attachment("jeli.jpg", "image/jpeg", data, caption=ip.caption)
 
                             asyncio.create_task(self._send_later(message, make_image))
-                elif self.enabled_proactive_images:
+                elif llm and self.enabled_proactive_images:
                     reply_text = reply
                     _msg_snap = message
                     _lang_snap = language
@@ -815,19 +815,12 @@ class Waha:
                     task.add_done_callback(self._later.discard)
 
     async def _send_voice_reply(self, message: IncomingMessage, reply: str, audio: bytes) -> bool:
-        """The answer as a voice note replying to the member, then its sources in writing (a voice
-        note cannot quote). False when the voice note could not be sent: the text goes instead."""
+        """The answer as a voice note. False when it could not be sent: the text goes instead."""
         try:
             await self.send_voice(message.chat_id, audio, reply_to=message.message_id)
         except httpx.HTTPError:
             log.warning("Voice note for message %s not sent: answering in writing", message.message_id)
             return False
-        written = sources(reply)
-        source_message = getattr(reply, "reply_to", None)
-        if written or source_message:
-            await self.spacer.wait_turn()
-            # Said in this chat: point at the message itself, as WhatsApp does.
-            await self.send_text(message.chat_id, written or "📌", reply_to=source_message or message.message_id)
         return True
 
     async def _step_in_if_needed(self, message: IncomingMessage) -> None:

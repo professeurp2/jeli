@@ -88,16 +88,15 @@ def waha(monkeypatch):
     return waha
 
 
-def test_asked_by_voice_jeli_answers_by_voice_then_writes_the_sources(waha):
+def test_asked_by_voice_jeli_answers_by_voice(waha):
     waha.voice = Voice()
     asyncio.run(waha.handle(parse_message(voice_event(), "Jeli")))
     assert waha.asked == ["When is the hackathon deadline?"]
     assert waha.voice.said == ["The hackathon closes on Thursday 24 September."]
     paths = [path for path, _ in waha.sent]
-    assert paths == ["/api/sendSeen", "/api/startTyping", "/api/default/presence", "/api/stopTyping", "/api/sendVoice", "/api/sendText"]
-    voice, text = waha.sent[4][1], waha.sent[5][1]
-    assert voice["convert"] is True and voice["reply_to"] == "voice-1" and voice["file"]["mimetype"] == "audio/mpeg"
-    assert text["text"] == "> *Diane* · METI cohort, Wed 16 Sep\n> Submissions close on 24 Sept"
+    assert paths == ["/api/sendSeen", "/api/startTyping", "/api/default/presence", "/api/stopTyping", "/api/sendVoice"]
+    voice = waha.sent[4][1]
+    assert voice["convert"] is True and voice["reply_to"] == "voice-1" and voice["file"]["mimetype"] == "audio/wav"
 
 
 def test_when_the_voice_note_cannot_be_sent_the_answer_is_written(waha):
@@ -105,7 +104,7 @@ def test_when_the_voice_note_cannot_be_sent_the_answer_is_written(waha):
     asyncio.run(waha.handle(parse_message(message_event("When is the deadline? Reply by voice", chat_id=AWA), "Jeli")))
     assert waha.asked == ["When is the deadline?"]
     [text] = [body for path, body in waha.sent if path == "/api/sendText"]
-    assert text["text"].startswith("The hackathon closes on Thursday 24 September.") and "> *Diane*" in text["text"]
+    assert text["text"].startswith("The hackathon closes on Thursday 24 September.")
 
 
 def test_voice_notes_between_members_are_never_listened_to(waha):

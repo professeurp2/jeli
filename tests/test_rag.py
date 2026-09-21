@@ -77,12 +77,11 @@ def ask(answerer, question="When is the bootcamp?"):
     return asyncio.run(answerer.answer(question, asker="+223 70 00 00 00"))
 
 
-def test_grounded_answer_quotes_its_source_the_whatsapp_way(monkeypatch):
+def test_grounded_answer_returns_clean_text_without_citations(monkeypatch):
     llm = FakeLLM(GeneratedAnswer(answered=True, answer="It moved to 25 September.", sources=[1]))
     reply = ask(make_answerer(llm, monkeypatch=monkeypatch))
-    # A WhatsApp quote block: who said it, where and when, and what they said.
-    assert reply == "It moved to 25 September.\n\n> *Awa Traoré* · METI cohort, Sat 12 Sep\n> The bootcamp moves to 25 September."
-    assert reply.reply_to is None and not reply.mentions  # a reply to the member's own question
+    assert reply == "It moved to 25 September."
+    assert reply.reply_to is None and not reply.mentions
 
 
 def test_a_source_said_in_this_chat_is_replied_to(monkeypatch):
@@ -137,16 +136,14 @@ def test_unrelated_questions_get_i_dont_know_without_calling_the_model(monkeypat
 def test_answers_without_real_sources_become_i_dont_know(monkeypatch, generated):
     far = [hit(1, ["m1"], 0.64, T0)]
     assert ask(make_answerer(FakeLLM(generated), hits=far, monkeypatch=monkeypatch)) == TEXTS["en"]["dont_know"]
-    # When the group discussed something close, Jeli shows it rather than a flat "I don't know".
+    # When the group discussed something close, Jeli uses dont_know_near (no citations shown).
     near = ask(make_answerer(FakeLLM(generated), monkeypatch=monkeypatch))
-    assert near.startswith(TEXTS["en"]["dont_know_near"]) and "> *Moussa* · METI cohort, Sun 13 Sep" in near
+    assert near.startswith(TEXTS["en"]["dont_know_near"])
 
 
-def test_when_no_model_is_available_jeli_points_to_the_most_relevant_sources(monkeypatch):
+def test_when_no_model_is_available_jeli_uses_fallback_text(monkeypatch):
     reply = ask(make_answerer(FakeLLM(error=LLMUnavailable()), monkeypatch=monkeypatch))
     assert reply.startswith(TEXTS["en"]["fallback"])
-    # Only the most relevant excerpt is shown (QUOTES_SHOWN = 1).
-    assert "> *Moussa* · METI cohort, Sun 13 Sep\n> Pitch deck due Friday 6 pm." in reply
     assert "UTC" not in reply and "[1]" not in reply
 
 
@@ -157,8 +154,7 @@ def test_answers_from_a_call_link_to_the_moment_it_was_said(monkeypatch):
     [prompt] = llm.prompts
     assert "Call recording «Module 1 class session» (15 September 2026)" in prompt
     assert "[12:34] Charles Botom: Every team member" in prompt
-    assert "> 🎥 *Module 1 class session* · Tue 15 Sep, at 12:34\n> Charles Botom: Every team member needs" in reply
-    assert "> https://youtu.be/6q4uPBO_sDc?t=754" in reply
+    assert reply == "Everyone in the team must complete it."
 
 
 class FakeDuplicateLLM:
@@ -174,7 +170,6 @@ def test_a_question_already_answered_in_the_group_gets_the_earlier_answer(monkey
     llm = FakeDuplicateLLM(AlreadyAnswered(already_answered=True, answer="It moved to 25 September.", sources=[1]))
     reply = asyncio.run(make_answerer(llm, monkeypatch=monkeypatch).already_answered("When is the bootcamp?", 0.7))
     assert reply.startswith(TEXTS["en"]["already_covered"] + " It moved to 25 September.")
-    assert "> *Awa Traoré* · METI cohort, Sat 12 Sep" in reply
 
 
 @pytest.mark.parametrize(
