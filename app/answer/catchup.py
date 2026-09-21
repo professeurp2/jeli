@@ -23,38 +23,37 @@ CACHE_SECONDS = 600  # when the whole jury asks at once, one summary serves them
 SYSTEM = f"""\
 You write catch-up digests for members of a WhatsApp community who missed messages.
 {PROGRAMMES}
-From the messages below (and the list of call recordings), extract what a member who missed them
-needs to know:
-- highlights: the organisers' announcements first (lines marked "(organiser)"), then polls and the main discussions;
-- decisions: what was decided or confirmed;
-- deadlines: deadlines and upcoming dates, always with the date;
-- open_questions: questions members asked that nobody answered.
-At most {MAX_ITEMS} items per list, most important first, each under 25 words.
-Formatting rules:
-- Lead each item with the key fact (a time, a name, a decision) in *bold* using WhatsApp syntax
-  (*text*, single asterisk each side) — e.g. "*15h00 CAT* : Open Hour avec @Diane."
-- Add the day at the start of an item ONLY when messages span more than one calendar day AND
-  that item's day differs from the previous item. For single-day digests, omit dates entirely —
-  the header already states the period.
-- Preserve @Name mentions when they appear in the source (e.g. @Diane, @Gift); never include
-  raw phone numbers.
-- Skip greetings, thanks, chit-chat. Say which programme an item concerns when it is not obvious.
+Each message is timestamped. From the messages below (and the list of call recordings), pick the
+most important things a member who missed this SPECIFIC PERIOD needs to know.
+
+Critical rule: report only what is NEW in this period — things announced, decided or scheduled
+DURING these messages. Do NOT report past events that members merely mention or reference (e.g.
+"the session last week was…" is a reference to the past, not news; skip it unless something new
+was said about it). Upcoming deadlines and future events scheduled during this period are news.
+
+Mix announcements (lines marked "(organiser)" first), decisions, upcoming deadlines and unanswered
+questions into ONE flat list ordered by importance — no section headers, no categories.
+
+Rules:
+- At most {MAX_ITEMS} items, most important first, each under 25 words.
+- Lead each item with a *bold* key phrase (WhatsApp syntax: *text*), e.g.:
+    "*15h00 CAT* : Open Hour avec @Gift — assister si possible."
+    "*Soumission hackathon* (jeu. 24 sept.) : chatbot + code source + notes d'installation."
+- Always include the date for deadlines and scheduled future events (inline, not as a prefix).
+- Preserve @Name mentions from the source; never include raw phone numbers.
+- Skip greetings, thanks, chit-chat and repeated items.
+- Say which programme an item concerns when it is not obvious.
 - Never include URLs or links.
 Use only what the messages say: never add outside knowledge.
 """
 
 
 class Digest(BaseModel):
-    highlights: list[str]
-    decisions: list[str]
-    deadlines: list[str]
-    open_questions: list[str]
+    items: list[str]
 
 
 FRENCH_DAYS = ["lun.", "mar.", "mer.", "jeu.", "ven.", "sam.", "dim."]
 FRENCH_MONTHS = ["janv.", "févr.", "mars", "avr.", "mai", "juin", "juil.", "août", "sept.", "oct.", "nov.", "déc."]
-DAY_EXAMPLES = {"en": "Thu 18 Sep", "fr": "jeu. 18 sept."}
-
 
 def _day(moment: datetime, language: str = "en") -> str:
     moment = moment.astimezone(timezone.utc)
@@ -133,7 +132,7 @@ class Catchup:
         prompt = (
             "Messages, oldest first:\n" + "\n".join(lines)
             + ("\n\nCall recordings available:\n" + "\n".join(sessions) if sessions else "")
-            + f"\n\nWrite every item in {LANGUAGES[language]}, with days written like \"{DAY_EXAMPLES[language]}\"."
+            + f"\n\nWrite every item in {LANGUAGES[language]}."
         )
         try:
             digest = await self.llm.generate(prompt, Digest, system=SYSTEM, timeout=TIMEOUT_SECONDS)
@@ -141,20 +140,16 @@ class Catchup:
             log.error("No model available for the catch-up digest")
             return texts["catchup_unavailable"].format(since=_day(since, language), messages=len(messages))
 
-        sections = [
-            (texts["catchup_highlights"], digest.highlights),
-            (texts["catchup_decisions"], digest.decisions),
-            (texts["catchup_deadlines"], digest.deadlines),
-            (texts["catchup_questions"], digest.open_questions),
-        ]
-        body = [f"{title}\n" + "\n".join(f"• {item.strip()}" for item in items[:MAX_ITEMS]) for title, items in sections if items]
+        parts: list[str] = []
+        if digest.items:
+            parts.append("\n".join(f"• {item.strip()}" for item in digest.items[:MAX_ITEMS]))
         if recordings:
-            items = [
+            rec_lines = [
                 f"• {r.title} ({_day(r.recorded_at, language)})"
                 + (f"\n  {r.source_url}" if is_youtube(r.source_url or "") or drive_id(r.source_url or "") else "")
                 for r in recordings
             ]
-            body.append(texts["catchup_recordings"] + "\n" + "\n".join(items))
+            parts.append(texts["catchup_recordings"] + "\n" + "\n".join(rec_lines))
         if coming_up:
-            body.append(coming_up)
-        return header + "\n\n" + "\n\n".join(body)
+            parts.append(coming_up)
+        return header + "\n\n" + "\n\n".join(parts)
