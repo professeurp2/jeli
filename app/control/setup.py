@@ -8,6 +8,7 @@ from app.control.runtime import Runtime
 from app.control.schedule import next_daily, next_weekly, parse_clock, parse_schedule
 from app.jobs.daily_digest import post_daily_digests
 from app.jobs.team_report import send_team_reports
+from app.answer.citations import ignored_keys
 from app.kb.indexer import index_pending
 
 # The scan shares the Gemini quota with answers: a backlog (a fresh import) is drained a few
@@ -36,7 +37,7 @@ def build_activities(state, settings: Settings, runtime: Runtime) -> dict[str, A
     if store and embedder:
 
         async def learn() -> str:
-            created = await index_pending(store, embedder, settle=SETTLE)
+            created = await index_pending(store, embedder, settle=SETTLE, ignored=ignored_keys(runtime["ignored_authors"]))
             return f"learned {_plural(created, 'new conversation')}" if created else "nothing new to learn"
 
         activities["memory"] = Activity(
