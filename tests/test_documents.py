@@ -109,7 +109,7 @@ def test_a_member_gets_the_document_they_ask_for():
     store = Store()
     asyncio.run(Documents(store, None).add("Guidelines.pdf", pdf_of(GUIDELINES), shared_by="Diane", shared_at=T0))
     reply = asyncio.run(Documents(store, LLM(FileChoice(document=1, translate_to=""))).reply("send me the guidelines", "en"))
-    assert isinstance(reply, Reply) and reply.startswith("📄 Here is «Guidelines», shared by Diane on Thu 17 Sep.")
+    assert isinstance(reply, Reply) and reply.startswith("📄 Here's «Guidelines», shared by Diane on Thu 17 Sep.")
     assert reply.attachment.filename == "Guidelines.pdf" and reply.attachment.data.startswith(b"%PDF")
     assert asyncio.run(Documents(store, LLM(FileChoice(document=0, translate_to=""))).reply("what is the prize?", "en")) is None
 

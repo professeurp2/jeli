@@ -62,7 +62,7 @@ def test_a_question_about_a_session_being_transcribed_is_told_so():
                         progress="0:00–30:00: 42 segments")
     awareness = Awareness(Store(), None, FakeSessions([job]))
     reply = asyncio.run(awareness.explain("What was said in the Module 2 class?", "en"))
-    assert reply.startswith("⏳ The recording of «Wadhwani Ignite — Module 2 class» (shared by Diane,")
+    assert reply.startswith("⏳ «Wadhwani Ignite — Module 2 class» (shared by Diane,")
     assert "the first 30 minutes are done" in reply
     assert progress_words("", "fr") == "elle vient de commencer"
 

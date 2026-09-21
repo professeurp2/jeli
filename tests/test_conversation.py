@@ -118,4 +118,4 @@ def test_a_catch_up_says_when_jeli_does_not_follow_the_groups_yet():
             return datetime(2026, 9, 18, 20, 3, tzinfo=timezone.utc)
 
     digest = asyncio.run(Catchup(Store(), None).summarize(datetime(2026, 9, 19, 12, 0, tzinfo=timezone.utc), "fr"))
-    assert digest.startswith("Je ne reçois pas encore les messages des groupes : ma mémoire s'arrête le ven. 18 sept. à 20:03 GMT")
+    assert digest.startswith("Je ne suis pas encore dans le groupe, donc ma mémoire s'arrête le ven. 18 sept. à 20:03 GMT")

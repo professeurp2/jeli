@@ -121,7 +121,7 @@ def test_upcoming_deadlines_reply_and_digest_section():
     section = asyncio.run(deadlines.coming_up_section("fr", days=3, today=today))
     assert section.splitlines() == ["⏰ À venir", "• mar. 22 sept. — Complete Module 1 activities (appel, Charles Bolton, jeu. 17 sept.)"]
     assert asyncio.run(deadlines.coming_up_section("en", days=1, today=today)) is None
-    assert asyncio.run(Deadlines(FakeStore([])).upcoming_reply("fr", today=today)) == "Aucune échéance annoncée pour les 14 prochains jours."
+    assert asyncio.run(Deadlines(FakeStore([])).upcoming_reply("fr", today=today)) == "Rien d'urgent dans les 14 prochains jours — profite ! 😌"
 
 
 def test_two_wordings_of_one_deadline_are_one_deadline():

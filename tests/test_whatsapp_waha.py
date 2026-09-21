@@ -285,7 +285,7 @@ def test_a_member_cannot_make_jeli_flood_the_group(waha_env, calls, monkeypatch)
         post_event(client, other)
     texts = sent_texts(calls)
     assert len(texts) == 4  # msg-0, msg-1 answered; msg-2 gets the flood explanation; msg-other answered
-    assert "short break" in texts[2]["text"] or "peu de temps" in texts[2]["text"]
+    assert "short breather" in texts[2]["text"] or "petite pause" in texts[2]["text"]
 
 
 def make_waha(handler):

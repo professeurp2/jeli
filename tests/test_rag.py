@@ -145,8 +145,7 @@ def test_answers_without_real_sources_become_i_dont_know(monkeypatch, generated)
 def test_when_no_model_is_available_jeli_points_to_the_most_relevant_sources(monkeypatch):
     reply = ask(make_answerer(FakeLLM(error=LLMUnavailable()), monkeypatch=monkeypatch))
     assert reply.startswith(TEXTS["en"]["fallback"])
-    # The most relevant excerpt comes first, even though it is the more recent one.
-    assert reply.index("Sun 13 Sep") < reply.index("Sat 12 Sep")
+    # Only the most relevant excerpt is shown (QUOTES_SHOWN = 1).
     assert "> *Moussa* · METI cohort, Sun 13 Sep\n> Pitch deck due Friday 6 pm." in reply
     assert "UTC" not in reply and "[1]" not in reply
 
