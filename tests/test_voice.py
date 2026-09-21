@@ -117,3 +117,57 @@ def test_voice_notes_between_members_are_never_listened_to(waha):
     waha.follow_up = lambda message: message.text.endswith("?")
     asyncio.run(waha.handle(parse_message(voice_event(GROUP), "Jeli")))
     assert waha.asked == ["When is the hackathon deadline?"]
+
+
+class _FakeModels:
+    def __init__(self, behaviour):
+        self.behaviour, self.calls = behaviour, 0
+
+    async def generate_content(self, **kwargs):
+        self.calls += 1
+        return await self.behaviour()
+
+
+def _tts_voice(behaviours):
+    from types import SimpleNamespace
+    from app.answer.llm import LLM
+    from app.answer.voice import Voice
+
+    llm = LLM(["k"], ["m"])
+    models = [_FakeModels(b) for b in behaviours]
+    llm._clients = [SimpleNamespace(aio=SimpleNamespace(models=m)) for m in models]
+    return Voice(llm), models
+
+
+def test_a_slow_gemini_voice_is_given_up_quickly_and_then_skipped(monkeypatch):
+    from app.answer import voice as voice_module
+
+    async def hang():
+        await asyncio.sleep(30)
+
+    monkeypatch.setattr(voice_module, "GEMINI_TTS_TIMEOUT", 0.05)
+    speaker, models = _tts_voice([hang] * 14)
+    assert asyncio.run(speaker._speak_gemini("hello", "en")) is None
+    # Two slow failures rest each model: 2 keys on each of the 2 models, not 14 keys.
+    assert sum(m.calls for m in models) == 4
+    assert asyncio.run(speaker._speak_gemini("hello", "en")) is None
+    assert sum(m.calls for m in models) == 4  # both models resting: no call at all
+
+
+def test_a_key_over_quota_rests_alone_and_the_next_key_speaks(monkeypatch):
+    from types import SimpleNamespace
+    from google.genai import errors
+
+    async def over_quota():
+        raise errors.ClientError(429, {"error": {"code": 429, "message": "quota", "status": "RESOURCE_EXHAUSTED"}})
+
+    async def speaks():
+        pcm = SimpleNamespace(inline_data=SimpleNamespace(data=b"\x00\x00" * 100))
+        return SimpleNamespace(candidates=[SimpleNamespace(content=SimpleNamespace(parts=[pcm]))])
+
+    speaker, models = _tts_voice([over_quota, over_quota, speaks])
+    audio = asyncio.run(speaker._speak_gemini("hello", "en"))
+    assert audio and audio[:4] == b"RIFF"
+    assert [m.calls for m in models] == [1, 1, 1]
+    asyncio.run(speaker._speak_gemini("hello", "en"))  # the two keys over quota are skipped
+    assert [m.calls for m in models] == [1, 1, 2]

@@ -12,10 +12,11 @@ import asyncio
 import io
 import logging
 import re
+import time
 import wave
 
 import edge_tts
-from google.genai import types
+from google.genai import errors, types
 from pydantic import BaseModel
 
 from app.answer.llm import LLM, LLMUnavailable
@@ -29,7 +30,13 @@ log = logging.getLogger(__name__)
 GEMINI_TTS_MODELS = ["gemini-3.1-flash-tts-preview", "gemini-2.5-flash-preview-tts"]
 GEMINI_TTS_MODEL = GEMINI_TTS_MODELS[0]
 GEMINI_TTS_VOICES = {"fr": "Aoede", "en": "Aoede"}  # warm, expressive multilingual voice
-GEMINI_TTS_TIMEOUT = 20.0
+GEMINI_TTS_TIMEOUT = 12.0  # per attempt
+# Measured 21 Sep: the 3.1 preview timed out on every key in turn (20 s each, before the fallback
+# voice). Bounded: 30 s in all; two slow failures rest the model; a key over quota (429) rests alone.
+GEMINI_TTS_TOTAL_SECONDS = 30.0
+GEMINI_TTS_SLOW_FAILURES = 2
+GEMINI_TTS_REST_SECONDS = 300
+GEMINI_TTS_KEY_REST_SECONDS = 3600
 
 # edge-tts — fallback when Gemini TTS quota is exhausted or unavailable.
 # edge-tts (7.x) escapes what it is given and builds its own SSML: it must receive plain text,
@@ -169,6 +176,9 @@ class Voice:
     def __init__(self, llm: LLM):
         self.llm = llm  # listens with the answer models; speaks with its client
         self.voice_name: str = "Aoede"  # overridden by Runtime (dashboard → apply.py)
+        self._tts_resting: dict[str, float] = {}  # Gemini TTS model → monotonic time it is skipped until
+        self._tts_key_resting: dict[tuple[int, str], float] = {}  # (key, model) over quota
+        self._tts_cursor = 0  # next key to try, so the free quota is spread over the keys
 
     async def listen(self, audio: bytes, mimetype: str) -> str | None:
         """What the member said. Returns "" when nothing was heard (silence/noise/oversized audio),
@@ -217,19 +227,42 @@ class Voice:
                 )
             ),
         )
+        clients = self.llm._clients
+        deadline = time.monotonic() + GEMINI_TTS_TOTAL_SECONDS
         for model in GEMINI_TTS_MODELS:
-            for idx, client in enumerate(self.llm._clients):
+            if self._tts_resting.get(model, 0.0) > time.monotonic():
+                continue
+            slow = 0  # timeouts and server errors: the model is at fault, not one key
+            for step in range(len(clients)):
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    return None
+                idx = (self._tts_cursor + step) % len(clients)
+                if self._tts_key_resting.get((idx, model), 0.0) > time.monotonic():
+                    continue
                 try:
                     response = await asyncio.wait_for(
-                        client.aio.models.generate_content(model=model, contents=prompt, config=config),
-                        timeout=GEMINI_TTS_TIMEOUT,
+                        clients[idx].aio.models.generate_content(model=model, contents=prompt, config=config),
+                        timeout=min(GEMINI_TTS_TIMEOUT, remaining),
                     )
                     if response.candidates:
                         pcm = response.candidates[0].content.parts[0].inline_data.data
                         if pcm:
+                            self._tts_cursor = (idx + 1) % len(clients)
                             return wav(pcm)
                 except Exception as error:
                     log.warning("Gemini TTS %s key %d failed: %s: %s", model, idx, type(error).__name__, error)
+                    if isinstance(error, errors.APIError) and error.code == 429:
+                        self._tts_key_resting[(idx, model)] = time.monotonic() + GEMINI_TTS_KEY_REST_SECONDS
+                        continue  # this key's daily quota is spent: the next key may have some left
+                    slow += 1
+                    if slow >= GEMINI_TTS_SLOW_FAILURES:
+                        break
+            if slow:
+                # Skip the model for a while instead of paying the same wait on every message
+                # before the fallback voice.
+                self._tts_resting[model] = time.monotonic() + GEMINI_TTS_REST_SECONDS
+                log.warning("Gemini TTS %s resting for %d s", model, GEMINI_TTS_REST_SECONDS)
         return None
 
     async def _speak_edge(self, text: str, language: str) -> bytes | None:
