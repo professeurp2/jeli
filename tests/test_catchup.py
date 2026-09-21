@@ -73,10 +73,10 @@ class FakeLLM:
 
 
 DIGEST = Digest(
-    highlights=["Hackathon submissions close Thu 24 Sep"],
-    decisions=[],
-    deadlines=["Thu 24 Sep: hackathon submission"],
-    open_questions=["Where is the Module 1 recording?"],
+    items=[
+        "*Hackathon submissions* (Thu 24 Sep): submit chatbot + code + install notes.",
+        "*Recording unavailable* — Module 1 class session link not yet shared.",
+    ],
 )
 
 
@@ -84,14 +84,14 @@ def test_digest_sections_and_recordings():
     llm = FakeLLM(DIGEST)
     digest = asyncio.run(Catchup(FakeStore(), llm, ignored_authors=["OtherBot"], chat_labels={"meti": "METI cohort"}).summarize(MONDAY, "en"))
     assert digest.startswith("🗓️ Catch-up since Mon 14 Sep (2 messages)")
-    assert "📣 Highlights\n• Hackathon submissions close Thu 24 Sep" in digest
-    assert "✅ Decisions" not in digest  # empty sections are left out
-    assert "❓ Still unanswered\n• Where is the Module 1 recording?" in digest
+    assert "• *Hackathon submissions*" in digest
+    assert "• *Recording unavailable*" in digest
+    assert "📣" not in digest and "✅" not in digest and "❓" not in digest  # no section headers
     assert "🎥 Recorded sessions\n• Module 1 class session (Tue 15 Sep)\n  https://youtu.be/6q4uPBO_sDc" in digest
     [prompt] = llm.prompts
     assert "METI cohort · Awa Traoré: Submissions close" in prompt
     assert "I am a bot" not in prompt and "818 554 6555" not in prompt
-    assert prompt.endswith('Write every item in English, with days written like "Thu 18 Sep".')
+    assert prompt.endswith("Write every item in English.")
 
 
 def test_the_same_catchup_is_summarised_once():
