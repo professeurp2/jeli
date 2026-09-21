@@ -147,6 +147,14 @@ def test_a_clarifying_question_is_what_the_model_wrote():
     assert asyncio.run(responder.respond(message("C'était quand ça ?"))) == "Tu parles de la session MIT du 16 ou du coaching Wadhwani du 17 ?"
 
 
+def test_an_answer_claimed_from_the_brief_must_be_in_the_brief():
+    from app.answer.rag import from_brief
+
+    brief = "The programme is funded by METI Japan and run with UNDP timbuktoo. Wadhwani Ignite: the 14-week entrepreneurship programme."
+    assert from_brief(brief, "What is Wadhwani Ignite?", "Wadhwani Ignite is the entrepreneurship programme.")
+    assert not from_brief(brief, "What is the capital of Japan?", "Tokyo is the capital of Japan.")
+
+
 def test_citation_ids_never_leak_into_the_answer_text():
     from app.answer.rag import clean_answer, clean_title
 

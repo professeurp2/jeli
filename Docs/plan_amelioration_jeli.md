@@ -283,4 +283,20 @@ Ordre de priorité si le temps manque : C1 → C2 → C9.1 → C3 (variante mini
 | C9 Qualité | `scripts/evaluate.py` réparé, 41 cas dont 18 de compréhension ; retours 👍/👎 et corrections enregistrés (`jeli.feedback`, événement `message.reaction` à activer côté WAHA). | Juge LLM, exécution nocturne, page dashboard. |
 | C10 Proactivité | Inchangé (règle anti-ban). | Accueil personnalisé des nouveaux en DM. |
 
-Migration de schéma appliquée en production (tables `conversations`, `briefs`, `members`, `feedback`, colonne `search` FR+EN). 216 tests passent. À faire par l'équipe : fusionner et pousser la branche (CI → Railway), ajouter `message.reaction` à `WHATSAPP_HOOK_EVENTS` sur le service WAHA, puis relancer l'hygiène pour le nouveau format de chunks.
+Migration de schéma appliquée en production (tables `conversations`, `briefs`, `members`, `feedback`, colonne `search` FR+EN). 218 tests passent.
+
+**Évaluation du 21 septembre au soir** (`python -m scripts.evaluate`, base de production nettoyée, une seule clé locale dont le quota `gemini-3.6-flash` était épuisé : tout est passé par les modèles de repli) :
+
+| Jeu | Résultat | Latence |
+|---|---|---|
+| Compréhension (18 cas : recap d'aujourd'hui, « 4 » après une liste, « en vocal », « Thank you Jeli », personne malvoyante, résumé quotidien d'un autre bot, combien de documents, échéances, fichier, suite de conversation, « source ? », image…) | **18/18** | médiane 0,9 s |
+| Réponses (18 cas : hackathon, Diane et les créneaux, sessions enregistrées, questions générales sur les programmes, questions hors sujet) | **18/18** après correction (17/18 au premier passage : « capitale du Japon » répondue depuis le brief → garde-fou ajouté) | médiane 2,4 s, max 3,6 s, 0 au-dessus de 10 s |
+| Déjà répondu dans le groupe (5 cas) | 4/5 (« les cours MIT ont-ils commencé ? » resté silencieux : prudence du modèle de repli) | médiane 2,7 s |
+
+Deux défauts vus dans les sorties et corrigés dans la foulée : des bots (« meti_bot », « Nexus Bot ») cités comme sources parce que leur *nom* n'était pas dans la liste ignorée (ajoutés, ainsi que « UniPods METI community bot ») ; des marques `[3.1]` laissées dans le texte (nettoyées).
+
+**À faire par l'équipe :**
+1. Fusionner et pousser la branche (CI → Railway). Au redémarrage, Jeli charge la nouvelle liste d'auteurs ignorés, vérifie ses modèles, lit les conversations en base et écrit son brief dans les deux minutes.
+2. Ajouter `message.reaction` à `WHATSAPP_HOOK_EVENTS` sur le service WAHA (retours 👍/👎).
+3. Relancer `python -m scripts.hygiene --apply --keep-deadlines-off` une fois déployé : les chunks reprennent le nouveau format (en-tête lisible) et sortent les messages des bots ajoutés (le serveur en cours d'exécution indexait encore avec son ancienne liste).
+4. Vérifier `ORGANISERS` sur Railway (Diane, Gift, Jeovaire, Munira) : le brief écrit ce soir depuis ce poste n'avait pas cette liste et n'a donc pas lu leurs annonces ; le serveur le réécrira avec.

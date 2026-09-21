@@ -101,6 +101,17 @@ def supports(source: str, answer: str) -> bool:
     return bool(shared_words) or bool(shared_numbers)
 
 
+def from_brief(brief: str, question: str, answer: str) -> bool:
+    """An answer said to come from the brief really does: what it adds to the question (its
+    content words not already in the question) is in the brief. Measured: with the brief
+    mentioning "METI Japan", a lite model answered "Tokyo is the capital of Japan" as background."""
+    added = _content_words(answer) - _content_words(question)
+    if not added:
+        return False
+    known = _content_words(brief)
+    return len(added & known) / len(added) >= 0.6
+
+
 def _display_label(raw: str) -> str:
     """Return the label for display; '' when it looks like a raw filename (underscores, no spaces)."""
     if not raw or ("_" in raw and " " not in raw):
@@ -352,10 +363,11 @@ class Answerer:
 
         answer = clean_answer(generated.answer)
         cited = self._verified(generated.sources, excerpts, answer)
-        if not generated.answered or not answer or (not cited and not generated.from_background):
+        background_only = not cited and generated.from_background and from_brief(self.brief, question, answer)
+        if not generated.answered or not answer or (not cited and not background_only):
             near = bool(hits) and max(hit.similarity for hit in hits) >= NEAR_SIMILARITY
             return await self._no_answer(question, language, excerpts if near else [], member=member)
-        self._cache[key] = (self._clock(), answer, cited, generated.from_background and not cited)
+        self._cache[key] = (self._clock(), answer, cited, background_only)
         return self._reply(answer, cited, chat_id, asker_id, factual=bool(cited))
 
     async def _state(self) -> str:
