@@ -55,8 +55,11 @@ IMAGE_REQUEST = re.compile(
     rf"\b{_HCLIT}{_SCLIT}\s+{_ART}{_IMG}\b"
     # "image de/of X"
     rf"|\b{_IMG}\s+(?:de|d{_APO}|du|des|of|about|showing|depicting)\b"
-    # "par/avec/with (une) image"
-    rf"|\b(?:par|avec|with)\s+{_ART}{_IMG}\b"
+    # "par/avec/with/by/via (une) image"
+    rf"|\b(?:par|avec|with|by|via|using)\s+{_ART}{_IMG}\b"
+    # bare "illustrate" / "illustre ça"
+    rf"|\billustrate\b"
+    rf"|\billustre[rz]?\s+(?:ça|cela|ceci|ce|le|la|l{_APO}|tout|this|that|it)\b"
     # "répond par/en image"
     rf"|\brepond[sz]?\s+{_HCLIT}{_SCLIT}\s+(?:en|par)\s+{_ART}{_IMG}\b"
     rf"|\brepond[sz]?\s+(?:en|par)\s+{_ART}{_IMG}\b"
@@ -125,7 +128,7 @@ def asks_for_image(text: str) -> bool:
 
 # 1. Remove trailing image qualifiers ("par une image", "repond par image", …)
 _STRIP_TAIL = re.compile(
-    r"\s*[,.]?\s*(?:par|avec|with)\s+(?:une?\s+|an?\s+)?(?:image|photo|illustration|schéma|schema|dessin|diagramm?e?|visuel|figure|picture|diagram|visual|graphic|chart|infographic)\s*$"
+    r"\s*[,.]?\s*(?:par|avec|with|by|via|using)\s+(?:une?\s+|an?\s+)?(?:image|photo|illustration|schéma|schema|dessin|diagramm?e?|visuel|figure|picture|diagram|visual|graphic|chart|infographic)\s*$"
     rf"|\s*[,.]?\s*repond[sz]?\s+(?:en|par)\s+(?:une?\s+)?(?:image|photo|visuel|illustration|schéma)\s*$"
     rf"|\s*sous\s+forme\s+(?:d{_APO}(?:une?\s+)?)?(?:image|visuelle?)\s*$"
     r"|\s*in\s+(?:image|visual|diagram|picture)\s+form\s*$",
@@ -135,7 +138,7 @@ _STRIP_TAIL = re.compile(
 _STRIP_HEAD = re.compile(
     r"^\s*(?:génère?|générer|genere?|generer|crée?|créer|cree?|creer|dessine?|dessiner"
     r"|montre?|montrer|illustre?|illustrer|fais|faire|envoie?|envoyer|partage?|partager"
-    r"|make|draw|show|create|generate|produce|send|share|visualize?)\b"
+    r"|make|draw|show|create|generate|produce|send|share|visualize?|illustrate)\b"
     r"\s*(?:-?(?:moi|lui|leur|nous|me|us|them)\s*)*",
     re.IGNORECASE,
 )

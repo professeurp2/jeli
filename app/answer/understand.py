@@ -115,10 +115,13 @@ class Understander:
             return Understood(kind="social", reply=texts["greeting_reply"], standalone=text, queries=[])
         if CLOSING.match(text):
             return Understood(kind="social", reply=texts["thanks_reply"], standalone=text, queries=[])
+        # The member's own words, without the quoted message the responder prepends.
+        own = text.rsplit("]\n", 1)[-1] if text.startswith("[Message cité:") else text
+        if asks_for_image(own) and not topic_from_request(own):
+            key = "image_coming" if own != text else "image_what"  # a quote is the subject to draw
+            return Understood(kind="social", reply=texts[key], standalone=text, queries=[])
         if ABOUT_JELI.search(text):
             return Understood(kind="about_jeli", reply=texts["about_jeli"], standalone=text, queries=[])
-        if asks_for_image(text) and not topic_from_request(text):
-            return Understood(kind="social", reply=texts["image_what"], standalone=text, queries=[])
         clear_question = looks_like_question(text) and len(text.split()) >= 4
         might_be_vague = len(text.split()) < 5 or bool(VAGUE_SIGNAL.search(text))
         if self.llm is None or (clear_question and not might_be_vague and not turns and not FILE_REQUEST.search(text)):

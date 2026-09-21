@@ -804,7 +804,7 @@ class Waha:
                 msg_text = message.text
                 if llm and asks_for_image(msg_text or ""):
                     if self.enabled_images:
-                        topic = illustrator.topic_from_request(msg_text or "")
+                        topic = illustrator.topic_from_request(msg_text or "") or message.quoted_context
                         if topic:
                             async def make_image() -> Attachment | None:
                                 if not self.enabled_images:
