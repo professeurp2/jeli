@@ -35,7 +35,7 @@ from app.answer import illustrator
 from app.answer.illustrator import asks_for_image
 from app.answer.voice import MAX_SPOKEN_CHARS, audio_mimetype, audio_seconds, asks_for_voice, sources, spoken, without_voice_request
 from app.config import Settings
-from app.control.guard import Guard
+from app.control.guard import Guard, REPEAT_WINDOW, member_key as guard_member_key
 from app.models import Attachment, IncomingMessage, Reply
 
 log = logging.getLogger(__name__)
@@ -284,6 +284,8 @@ class Waha:
         self.status: str | None = None
         # Tracks the last time Jeli explained a refusal to each member (to avoid repeating every message).
         self._last_explained: dict[str, float] = {}
+        # Deferred answers for repeated messages: answered after the repeat window expires.
+        self._pending_repeats: dict[str, asyncio.Task] = {}
         # Set by the team from the dashboard: Jeli keeps remembering the groups but sends nothing.
         self.suspended = False
         # Groups where Jeli listens and ingests, but never replies (listen-only / silent mode).
@@ -644,6 +646,22 @@ class Waha:
         language = detect_language(message.text)
         text = TEXTS[language][f"guard_{reason}" if reason != "flood" else "guard_cooling_down"]
         await self.send_text(message.chat_id, text, reply_to=message.message_id)
+        if reason == "repeat":
+            # Cancel any existing deferred answer for this member and reschedule:
+            # after the repeat window, Jeli answers the last repeated message automatically.
+            mk = guard_member_key(message)
+            old = self._pending_repeats.pop(mk, None)
+            if old:
+                old.cancel()
+            fresh = dataclasses.replace(message, sent_at=datetime.now(timezone.utc))
+
+            async def _answer_after_window(msg=fresh, _mk=mk) -> None:
+                await asyncio.sleep(REPEAT_WINDOW)
+                self._pending_repeats.pop(_mk, None)
+                await self._converse(msg)
+
+            task = asyncio.create_task(_answer_after_window())
+            self._pending_repeats[mk] = task
 
     async def _see(self, message: IncomingMessage) -> IncomingMessage:
         """Download and describe an image; the description is prepended to the message text so the
@@ -694,6 +712,11 @@ class Waha:
     async def _converse(self, message: IncomingMessage) -> None:
         """Answer like a person would: read, type (or record) for a while, then reply (WAHA's
         recommended sequence). Asked by voice, or asked for a voice reply: a voice note."""
+        # If a deferred answer was queued (repeat-window), cancel it: the member sent a new message.
+        mk = guard_member_key(message)
+        pending = self._pending_repeats.pop(mk, None)
+        if pending:
+            pending.cancel()
         # Admin commands bypass all rate limits, silence and suspension.
         if self._is_admin(message) and await self._try_admin_command(message):
             return
