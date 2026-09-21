@@ -307,6 +307,7 @@ class Waha:
         # Image generation toggles (set from the dashboard via apply.py).
         self.enabled_images: bool = True          # explicit "génère une image de…" requests
         self.enabled_proactive_images: bool = True  # proactive suggestion after a rich answer
+        self.proactive_image_rate: float = 1.0    # fraction of eligible answers that get an offer
         # Probabilistic voice: fraction of messages Jeli answers by voice (0.0 – 1.0).
         self.voice_rate: float = 0.20
         self.voice_intro_rate: float = 0.80
@@ -794,7 +795,7 @@ class Waha:
                                 return Attachment("jeli.jpg", "image/jpeg", data, caption=ip.caption)
 
                             asyncio.create_task(self._send_later(message, make_image))
-                elif llm and self.enabled_proactive_images:
+                elif llm and self.enabled_proactive_images and (self.proactive_image_rate >= 1.0 or random.random() < self.proactive_image_rate):
                     reply_text = reply
                     _msg_snap = message
                     _lang_snap = language

@@ -181,6 +181,7 @@ def audio_seconds(audio: bytes) -> float:
 class Voice:
     def __init__(self, llm: LLM):
         self.llm = llm  # listens with the answer models; speaks with its client
+        self.voice_name: str = "Aoede"  # overridden by Runtime (dashboard → apply.py)
 
     async def listen(self, audio: bytes, mimetype: str) -> str | None:
         """What the member said. Returns "" when nothing was heard (silence/noise/oversized audio),
@@ -211,7 +212,7 @@ class Voice:
         """Gemini TTS on all available API keys; returns WAV bytes or None on failure/quota."""
         if not self.llm._clients:
             return None
-        voice_name = GEMINI_TTS_VOICES.get(language, "Aoede")
+        voice_name = self.voice_name or GEMINI_TTS_VOICES.get(language, "Aoede")
         lang_label = "French" if language == "fr" else "English"
         prompt = (
             f"Read the following message in {lang_label} as a warm, friendly assistant "

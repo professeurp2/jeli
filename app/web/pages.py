@@ -1540,10 +1540,30 @@ async def settings_page(request: Request, member: Member) -> HTMLResponse:
         + _row("At most, per group and per hour", "Jeli speaks uninvited rarely, to stay discreet.", number("duplicate_replies_per_hour", 1, 20) + '<span class="muted small">times</span>')
     )
     images = (
-        _row("Generate images on request", "When a member asks for an image, diagram or illustration, Jeli generates one via Pollinations.ai (free, no API key) and sends it inline.",
+        _row("Generate images on request", "When a member asks for an image, diagram or illustration, Jeli generates one (Imagen 3 via Gemini, or Pollinations.ai as fallback) and sends it inline.",
              f'<label class="check"><input type="checkbox" name="enabled_images"{" checked" if runtime["enabled.images"] else ""}> On</label>')
-        + _row("Suggest images proactively", "After a rich answer (statistics, deadlines, comparisons…), Jeli decides whether a visual would help and generates one automatically.",
+        + _row("Suggest images proactively", "After a rich answer (statistics, deadlines, comparisons…), Jeli decides whether a visual would help and offers one automatically.",
                f'<label class="check"><input type="checkbox" name="enabled_proactive_images"{" checked" if runtime["enabled.proactive_images"] else ""}> On</label>')
+        + _row("How often (proactive images)", "How many of those eligible answers actually get an image offer. 100 % = always; 50 % = half the time.",
+               f'<input type="range" name="proactive_image_rate" min="0" max="100" step="5" value="{round(runtime["proactive_image_rate"] * 100)}" oninput="this.nextElementSibling.textContent=this.value+\'%\'" style="width:120px">'
+               f'<output>{round(runtime["proactive_image_rate"] * 100)}%</output>')
+    )
+    _VOICE_PERSONALITIES = [
+        ("Aoede", "Warm"),
+        ("Puck", "Playful"),
+        ("Charon", "Clear"),
+        ("Kore", "Calm"),
+        ("Fenrir", "Deep"),
+    ]
+    voice_settings = (
+        _row("Voice replies — general", "Fraction of regular messages Jeli answers by voice, even without being asked. 0 % = never; 20 % = about 1 in 5.",
+             f'<input type="range" name="voice_rate" min="0" max="100" step="5" value="{round(runtime["voice_rate"] * 100)}" oninput="this.nextElementSibling.textContent=this.value+\'%\'" style="width:120px">'
+             f'<output>{round(runtime["voice_rate"] * 100)}%</output>')
+        + _row("Voice replies — first contact", "When someone talks to Jeli for the first time (or introduces themselves), this rate applies instead.",
+               f'<input type="range" name="voice_intro_rate" min="0" max="100" step="5" value="{round(runtime["voice_intro_rate"] * 100)}" oninput="this.nextElementSibling.textContent=this.value+\'%\'" style="width:120px">'
+               f'<output>{round(runtime["voice_intro_rate"] * 100)}%</output>')
+        + _row("Voice personality", "The character of Jeli's voice. Warm is expressive and conversational; Clear is more neutral and professional.",
+               _segmented("voice_name", runtime["voice_name"], _VOICE_PERSONALITIES))
     )
     pace = (
         ui.notice("warn", "WhatsApp blocks numbers that behave like machines. Raise these only if members really need it.")
@@ -1559,7 +1579,9 @@ async def settings_page(request: Request, member: Member) -> HTMLResponse:
         + '<div style="height:20px"></div>'
         + ui.card("Earlier answers", f'<div class="rows">{pointers}</div>', icon_name="sparkle")
         + '<div style="height:20px"></div>'
-        + ui.card("Images", f'<div class="rows">{images}</div>', icon_name="picture", description="Powered by Pollinations.ai — free, no API key.")
+        + ui.card("Images", f'<div class="rows">{images}</div>', icon_name="picture", description="Imagen 3 (Gemini) primary — Pollinations.ai fallback.")
+        + '<div style="height:20px"></div>'
+        + ui.card("Voice", f'<div class="rows">{voice_settings}</div>', icon_name="mic", description="How often Jeli replies by voice, and which personality it uses.")
         + '<div style="height:20px"></div>'
         + ui.card("Pace", f'<div class="rows">{pace}</div>', icon_name="shield", description="Protects Jeli's WhatsApp number.")
         + f'<div class="actions" style="margin-top:20px">{ui.button("Save the settings", kind="primary", icon_name="check")}</div>',
@@ -1578,6 +1600,10 @@ SETTING_WORDS = {
     "duplicate_replies_per_hour": "earlier answers per hour",
     "enabled.images": "image generation on request",
     "enabled.proactive_images": "proactive image suggestions",
+    "proactive_image_rate": "proactive image rate",
+    "voice_rate": "voice reply rate",
+    "voice_intro_rate": "voice reply rate for first contact",
+    "voice_name": "voice personality",
     "whatsapp_user_limit": "answers per member",
     "whatsapp_hourly_limit": "answers per hour",
     "whatsapp_min_send_interval_seconds": "pause between messages",
@@ -1596,11 +1622,15 @@ async def settings_change(request: Request, member: Change) -> RedirectResponse:
         "duplicate_detection": bool(form.get("duplicate_detection")),
         "enabled.images": bool(form.get("enabled_images")),
         "enabled.proactive_images": bool(form.get("enabled_proactive_images")),
+        "proactive_image_rate": str(int(str(form.get("proactive_image_rate", "100"))) / 100),
         "duplicate_min_similarity": POINTER_CARE.get(str(form.get("pointer_care")), 0.70),
         "duplicate_replies_per_hour": form.get("duplicate_replies_per_hour", ""),
         "whatsapp_user_limit": form.get("whatsapp_user_limit", ""),
         "whatsapp_hourly_limit": form.get("whatsapp_hourly_limit", ""),
         "whatsapp_min_send_interval_seconds": form.get("whatsapp_min_send_interval_seconds", ""),
+        "voice_rate": str(int(str(form.get("voice_rate", "20"))) / 100),
+        "voice_intro_rate": str(int(str(form.get("voice_intro_rate", "80"))) / 100),
+        "voice_name": form.get("voice_name", "Aoede"),
     }
     runtime = _state(request).runtime
     for key, value in changes.items():

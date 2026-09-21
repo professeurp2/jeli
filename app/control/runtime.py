@@ -74,13 +74,17 @@ FIELDS = {
         Field("enabled.deadlines", "bool", lambda s: True),
         Field("enabled.daily_summary", "bool", lambda s: bool(s.daily_digest_time)),
         Field("enabled.team_report", "bool", lambda s: bool(s.team_report_time)),
-        # Image generation (Pollinations.ai, free, no API key).
+        # Image generation (Imagen 3 primary, Pollinations.ai fallback).
         Field("enabled.images", "bool", lambda s: True),
         Field("enabled.proactive_images", "bool", lambda s: True),
+        # Fraction of eligible answers that trigger a proactive image offer (0–1).
+        Field("proactive_image_rate", "float", lambda s: 1.0, 0.0, 1.0),
         # Probabilistic voice: Jeli replies by voice on this fraction of messages (0–1).
         # voice_intro_rate applies to first contact or self-introductions.
         Field("voice_rate", "float", lambda s: 0.20, 0.0, 1.0),
         Field("voice_intro_rate", "float", lambda s: 0.80, 0.0, 1.0),
+        # Gemini TTS voice personality (voice name passed to the TTS model).
+        Field("voice_name", "choice", lambda s: "Aoede", choices=("Aoede", "Puck", "Charon", "Kore", "Fenrir")),
     )
 }
 
