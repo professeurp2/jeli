@@ -47,6 +47,8 @@ def apply(state, runtime) -> None:
         whatsapp.user_limiter.limit = runtime["whatsapp_user_limit"]
         whatsapp.hourly_limiter.limit = runtime["whatsapp_hourly_limit"]
         whatsapp.spacer.min_interval = runtime["whatsapp_min_send_interval_seconds"]
+        whatsapp.enabled_images = runtime["enabled.images"]
+        whatsapp.enabled_proactive_images = runtime["enabled.proactive_images"]
 
     for activity in getattr(state, "activities", {}).values():
         activity.wake()  # schedules and on/off switches may have changed

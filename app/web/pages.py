@@ -1539,6 +1539,12 @@ async def settings_page(request: Request, member: Member) -> HTMLResponse:
         + _row("How similar must the question be?", "Careful: only near-identical questions.", _segmented("pointer_care", pointer_care, [("careful", "Careful"), ("balanced", "Balanced")]))
         + _row("At most, per group and per hour", "Jeli speaks uninvited rarely, to stay discreet.", number("duplicate_replies_per_hour", 1, 20) + '<span class="muted small">times</span>')
     )
+    images = (
+        _row("Generate images on request", "When a member asks for an image, diagram or illustration, Jeli generates one via Pollinations.ai (free, no API key) and sends it inline.",
+             f'<label class="check"><input type="checkbox" name="enabled_images"{" checked" if runtime["enabled.images"] else ""}> On</label>')
+        + _row("Suggest images proactively", "After a rich answer (statistics, deadlines, comparisons…), Jeli decides whether a visual would help and generates one automatically.",
+               f'<label class="check"><input type="checkbox" name="enabled_proactive_images"{" checked" if runtime["enabled.proactive_images"] else ""}> On</label>')
+    )
     pace = (
         ui.notice("warn", "WhatsApp blocks numbers that behave like machines. Raise these only if members really need it.")
         + '<div style="height:8px"></div>'
@@ -1552,6 +1558,8 @@ async def settings_page(request: Request, member: Member) -> HTMLResponse:
         ui.card("Answers", f'<div class="rows">{answers}</div>', icon_name="chat")
         + '<div style="height:20px"></div>'
         + ui.card("Earlier answers", f'<div class="rows">{pointers}</div>', icon_name="sparkle")
+        + '<div style="height:20px"></div>'
+        + ui.card("Images", f'<div class="rows">{images}</div>', icon_name="picture", description="Powered by Pollinations.ai — free, no API key.")
         + '<div style="height:20px"></div>'
         + ui.card("Pace", f'<div class="rows">{pace}</div>', icon_name="shield", description="Protects Jeli's WhatsApp number.")
         + f'<div class="actions" style="margin-top:20px">{ui.button("Save the settings", kind="primary", icon_name="check")}</div>',
@@ -1568,6 +1576,8 @@ SETTING_WORDS = {
     "duplicate_detection": "pointing to earlier answers",
     "duplicate_min_similarity": "how similar a repeated question must be",
     "duplicate_replies_per_hour": "earlier answers per hour",
+    "enabled.images": "image generation on request",
+    "enabled.proactive_images": "proactive image suggestions",
     "whatsapp_user_limit": "answers per member",
     "whatsapp_hourly_limit": "answers per hour",
     "whatsapp_min_send_interval_seconds": "pause between messages",
@@ -1584,6 +1594,8 @@ async def settings_change(request: Request, member: Change) -> RedirectResponse:
         "follow_up_minutes": form.get("follow_up_minutes", "5"),
         "auto_sessions": bool(form.get("auto_sessions")),
         "duplicate_detection": bool(form.get("duplicate_detection")),
+        "enabled.images": bool(form.get("enabled_images")),
+        "enabled.proactive_images": bool(form.get("enabled_proactive_images")),
         "duplicate_min_similarity": POINTER_CARE.get(str(form.get("pointer_care")), 0.70),
         "duplicate_replies_per_hour": form.get("duplicate_replies_per_hour", ""),
         "whatsapp_user_limit": form.get("whatsapp_user_limit", ""),
