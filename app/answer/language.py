@@ -86,6 +86,7 @@ TEXTS = {
         "voice_not_heard": "Hey, I got your voice note but couldn't quite make it out 🎤 Could you try again, or just type your question? I'm here either way!",
         "voice_reply_unavailable": "Couldn't send a voice reply right now — something came up on my end 🎤 Here's my answer in text:",
         "image_what": "What would you like an image of? 🎨 Describe the subject and I'll illustrate it!",
+        "image_offer": "📊 I can illustrate that — reply *yes* if you'd like an image!",
     },
     "fr": {
         "dont_know": "Hmm, je n'ai rien trouvé là-dessus dans les échanges du groupe. Tu peux poser la question directement aux organisateurs, ou essayer /search avec un mot-clé.",
@@ -147,5 +148,6 @@ TEXTS = {
         "voice_not_heard": "Hey, j'ai reçu ton vocal mais j'ai pas réussi à le saisir 🎤 Tu peux réessayer, ou juste écrire ta question ? Je suis là dans tous les cas !",
         "voice_reply_unavailable": "Je n'arrive pas à t'envoyer un vocal là — il se passe un truc de mon côté 🎤 Voilà ma réponse en texte :",
         "image_what": "De quoi voudrais-tu une image ? 🎨 Décris le sujet et j'illustre !",
+        "image_offer": "📊 Je peux illustrer ça — réponds *oui* si tu veux une image !",
     },
 }

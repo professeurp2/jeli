@@ -60,6 +60,13 @@ _INTRO = re.compile(
     re.IGNORECASE,
 )
 ADMIN_DURATION = re.compile(r"(\d+)\s*(h|hours?|heures?|m|min|minutes?)", re.IGNORECASE)
+# Short affirmative answers that confirm a pending image offer.
+_YES = re.compile(
+    r"^\s*(?:oui|yes|yep|yeah|ok(?:ay)?|bien\s+s[uû]r|carrement|absolument|go|vas-y|allons-y|affirmative|of\s+course|sure|please|s[''']il\s+te\s+pla[iî]t)\s*[!.]*\s*$",
+    re.IGNORECASE,
+)
+# Pending image offers expire after this many seconds (one follow-up window).
+_IMAGE_OFFER_TTL = 300
 # Documents Jeli keeps when a member shares them in a group.
 DOCUMENT_TYPES = (".pdf", ".docx", ".txt", ".md")
 MAX_DOCUMENT_BYTES = 15 * 1024 * 1024
@@ -303,6 +310,8 @@ class Waha:
         self.voice_intro_rate: float = 0.80
         # Members Jeli has already talked to: first contact triggers voice_intro_rate.
         self._seen_members: set[str] = set()
+        # Pending proactive image offers: chat_id → (ImagePrompt, expiry_timestamp).
+        self._pending_image_offers: dict[str, tuple] = {}
         # Whether this member was talking with Jeli a moment ago (set by the responder).
         self.in_conversation = None
         self._later: set[asyncio.Task] = set()
@@ -684,6 +693,22 @@ class Waha:
         if refusal is not None:
             await self._explain_refusal(message, refusal)
             return
+        # Check if this is a short "yes" confirming a pending image offer for this chat.
+        if (
+            self.enabled_images
+            and _YES.match(message.text or "")
+            and message.chat_id in self._pending_image_offers
+        ):
+            ip, expiry = self._pending_image_offers.pop(message.chat_id)
+            if time.monotonic() < expiry and self.voice:
+                async def _make_offered_image(ip=ip) -> "Attachment | None":
+                    data = await illustrator.generate(ip.prompt)
+                    if not data:
+                        return None
+                    return Attachment("jeli.jpg", "image/jpeg", data, caption=ip.caption)
+                await self.send_reaction(message.chat_id, message.message_id, "📊")
+                asyncio.create_task(self._send_later(message, _make_offered_image))
+                return
         # When someone corrects Jeli, acknowledge immediately and delete the wrong message.
         if is_correction(message.text) and message.chat_id in self._last_sent:
             wrong_id = self._last_sent.pop(message.chat_id)
@@ -745,7 +770,7 @@ class Waha:
                 if asks_for_image(msg_text or ""):
                     if self.enabled_images:
                         topic = illustrator.topic_from_request(msg_text or "")
-                        if topic and illustrator.has_statistical_content(msg_text or ""):
+                        if topic:
                             async def make_image() -> Attachment | None:
                                 if not self.enabled_images:
                                     return None
@@ -760,19 +785,24 @@ class Waha:
                             asyncio.create_task(self._send_later(message, make_image))
                 elif self.enabled_proactive_images:
                     reply_text = reply
+                    _msg_snap = message
+                    _lang_snap = language
 
-                    async def maybe_image() -> Attachment | None:
+                    async def _offer_image_if_useful() -> None:
                         if not self.enabled_proactive_images:
-                            return None
+                            return
                         ip = await illustrator.suggest_if_useful(msg_text or "", reply_text, llm)
                         if not ip:
-                            return None
-                        data = await illustrator.generate(ip.prompt)
-                        if not data:
-                            return None
-                        return Attachment("jeli.jpg", "image/jpeg", data, caption=ip.caption)
+                            return
+                        # Store the prompt and send a short offer instead of generating immediately.
+                        self._pending_image_offers[_msg_snap.chat_id] = (ip, time.monotonic() + _IMAGE_OFFER_TTL)
+                        offer_text = TEXTS[_lang_snap]["image_offer"]
+                        await self.spacer.wait_turn()
+                        await self.send_text(_msg_snap.chat_id, offer_text)
 
-                    asyncio.create_task(self._send_later(message, maybe_image))
+                    task = asyncio.create_task(_offer_image_if_useful())
+                    self._later.add(task)
+                    task.add_done_callback(self._later.discard)
 
     async def _send_voice_reply(self, message: IncomingMessage, reply: str, audio: bytes) -> bool:
         """The answer as a voice note replying to the member, then its sources in writing (a voice
