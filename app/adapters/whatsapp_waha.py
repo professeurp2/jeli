@@ -721,7 +721,7 @@ class Waha:
                 if asks_for_image(msg_text or ""):
                     if self.enabled_images:
                         topic = illustrator.topic_from_request(msg_text or "")
-                        if topic:
+                        if topic and illustrator.has_statistical_content(msg_text or ""):
                             async def make_image() -> Attachment | None:
                                 ip = await illustrator.build_prompt(topic, llm)
                                 if not ip:

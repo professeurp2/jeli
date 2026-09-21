@@ -132,6 +132,20 @@ _STRIP_NOUN = re.compile(
 )
 
 
+_STATS_PATTERN = re.compile(
+    r"\d+\s*%"                              # percentage: 60%, 80 %
+    r"|\d+\s*/\s*\d+"                       # fraction: 3/4, 1/3
+    r"|\b(?:taux|score|proportion|ratio|moyenne|average|rate"
+    r"|pourcentage|percent|statistique|chiffre|données?|data)\b",
+    re.IGNORECASE,
+)
+
+
+def has_statistical_content(text: str) -> bool:
+    """Return True when the text contains statistics worth illustrating as a chart."""
+    return bool(_STATS_PATTERN.search(text or ""))
+
+
 def topic_from_request(text: str) -> str:
     """Extract the subject to illustrate, stripping trigger verbs and image-noun phrases.
     Returns an empty string when the request has no identifiable subject
