@@ -80,9 +80,9 @@ FIELDS = {
         # Fraction of eligible answers that trigger a proactive image offer (0–1).
         Field("proactive_image_rate", "float", lambda s: 1.0, 0.0, 1.0),
         # Probabilistic voice: Jeli replies by voice on this fraction of messages (0–1).
-        # voice_intro_rate applies to first contact or self-introductions.
-        Field("voice_rate", "float", lambda s: 0.20, 0.0, 1.0),
-        Field("voice_intro_rate", "float", lambda s: 0.80, 0.0, 1.0),
+        # voice_rate=0 means voice only when explicitly asked or on first contact.
+        Field("voice_rate", "float", lambda s: 0.0, 0.0, 1.0),
+        Field("voice_intro_rate", "float", lambda s: 0.50, 0.0, 1.0),
         # Gemini TTS voice personality (voice name passed to the TTS model).
         Field("voice_name", "choice", lambda s: "Aoede", choices=("Aoede", "Puck", "Charon", "Kore", "Fenrir")),
     )

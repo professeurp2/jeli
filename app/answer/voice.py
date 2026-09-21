@@ -213,7 +213,11 @@ class Voice:
         if not self.llm._clients:
             return None
         voice_name = self.voice_name or GEMINI_TTS_VOICES.get(language, "Aoede")
-        lang_label = "French" if language == "fr" else "English"
+        _LANG_LABELS = {
+            "fr": "French", "en": "English", "sw": "Swahili",
+            "rw": "Kinyarwanda", "ln": "Lingala", "wo": "Wolof", "am": "Amharic",
+        }
+        lang_label = _LANG_LABELS.get(language, "English")
         prompt = (
             f"Read the following message in {lang_label} as a warm, friendly assistant "
             "who genuinely cares — conversational, natural and emotionally present:\n\n" + text

@@ -1,6 +1,7 @@
-"""The cohort writes in French and English: Jeli answers in the language of the question."""
+"""Jeli answers in the language of the question: French, English, and African languages."""
 
 import re
+from collections import defaultdict
 
 FRENCH = set(
     """
@@ -16,14 +17,39 @@ ENGLISH = set(
     hello hi thanks please
     """.split()
 )
+# African language word lists — common words members are likely to use.
+SWAHILI = set(
+    "habari karibu asante ndiyo hapana bado sawa tafadhali wewe mimi sisi kweli sijui ninahitaji naomba "
+    "ninajua unajua anajua tunajua mnajua wanajua leo kesho jana ni kwa na au lakini pia".split()
+)
+KINYARWANDA = set(
+    "muraho murakoze yego oya reka neza aho kandi nta ni ye mu na bite buri kuki ejo ubu ".split()
+)
+LINGALA = set(
+    "mbote ndeko biso bino yango lokola pona oyo mpe te azali kozala mama papa nakobanga nalobi".split()
+)
+WOLOF = set(
+    "waaw deedeet jërejëf baal ma akk man jàng lii bii dem xam sunu sama mo dem dox nit".split()
+)
 
 
 def detect_language(text: str) -> str:
-    """'fr' or 'en'. Short or mixed texts default to English, the cohort's common language."""
-    words = re.findall(r"[\w'’-]+", text.lower())
-    french = sum(word in FRENCH for word in words) + len(re.findall(r"[éèêàùçôîœ]", text.lower()))
-    english = sum(word in ENGLISH for word in words)
-    return "fr" if french > english else "en"
+    """Language code of the text. Supports EN, FR, and several African languages.
+    Short or mixed texts default to English when no language clearly wins."""
+    # Amharic — Ethiopic script, unique Unicode block: easy to detect reliably.
+    if re.search(r"[ሀ-፿]", text):
+        return "am"
+    words = re.findall(r"[\w’’-]+", text.lower())
+    scores = {
+        "fr": sum(w in FRENCH for w in words) + len(re.findall(r"[éèêàùçôîœ]", text.lower())),
+        "en": sum(w in ENGLISH for w in words),
+        "sw": sum(w in SWAHILI for w in words),
+        "rw": sum(w in KINYARWANDA for w in words),
+        "ln": sum(w in LINGALA for w in words),
+        "wo": sum(w in WOLOF for w in words),
+    }
+    best = max(scores, key=scores.get)
+    return best if scores[best] > 0 else "en"
 
 
 TEXTS = {
@@ -151,3 +177,7 @@ TEXTS = {
         "image_offer": "📊 Je peux illustrer ça — réponds *oui* si tu veux une image !",
     },
 }
+# African languages fall back to English for system messages (guard texts, UI strings).
+# The LLM itself responds in the detected language; only these UI strings use the fallback.
+_TEXTS_FALLBACK = defaultdict(lambda: TEXTS["en"], TEXTS)
+TEXTS = _TEXTS_FALLBACK  # type: ignore[assignment]

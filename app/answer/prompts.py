@@ -49,7 +49,15 @@ Rules:
 """
 
 
-LANGUAGES = {"fr": "French", "en": "English"}
+LANGUAGES = {
+    "fr": "French",
+    "en": "English",
+    "sw": "Swahili",
+    "rw": "Kinyarwanda",
+    "ln": "Lingala",
+    "wo": "Wolof",
+    "am": "Amharic",
+}
 
 # R7: a member asked the group, not Jeli. Speaking up uninvited must be rare and certain.
 DUPLICATE_SYSTEM = f"""\
