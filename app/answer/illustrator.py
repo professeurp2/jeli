@@ -1,22 +1,26 @@
-"""Image generation via Pollinations.ai (free, no API key required).
+"""Image generation: Imagen 3 (primary, via Gemini API keys) → Pollinations FLUX (fallback).
 
 Used when a member asks Jeli to generate or show an image to illustrate a concept.
-The LLM first turns the request into an optimised English prompt, then Pollinations
-renders it with the FLUX model and returns a JPEG.
+The LLM first turns the request into an optimised English prompt, then Imagen 3
+renders it and returns a JPEG. Pollinations is used when all Gemini keys fail.
 """
 
+import asyncio
 import logging
 import re
 import urllib.parse
 
 import httpx
+from google.genai import types
 from pydantic import BaseModel
 
 from app.answer.llm import LLM, LLMUnavailable
 
 log = logging.getLogger(__name__)
 
-GENERATE_TIMEOUT = 45.0  # Pollinations can be slow on first requests
+IMAGEN_MODEL = "imagen-3.0-generate-001"
+IMAGEN_TIMEOUT = 30.0
+GENERATE_TIMEOUT = 45.0  # Pollinations fallback — can be slow on first requests
 
 # Image nouns, articles, and clitic pronouns as named fragments for readability.
 _IMG = r"(?:image|photo|illustration|schéma|schema|dessin|diagramm?e?|visuel|figure|picture|diagram|visual|graphic|chart|infographic)"
@@ -193,8 +197,42 @@ async def suggest_if_useful(question: str, answer: str, llm: LLM) -> ImagePrompt
     return None
 
 
-async def generate(prompt: str) -> bytes | None:
-    """Fetch a FLUX image from Pollinations.ai. Returns JPEG bytes or None on failure."""
+async def _imagen_generate(prompt: str, llm: LLM) -> bytes | None:
+    """Generate with Imagen 3 using all available Gemini API keys. Returns JPEG bytes or None."""
+    if not llm._clients:
+        return None
+    config = types.GenerateImagesConfig(
+        number_of_images=1,
+        output_mime_type="image/jpeg",
+        aspect_ratio="1:1",
+    )
+    for idx, client in enumerate(llm._clients):
+        try:
+            response = await asyncio.wait_for(
+                client.aio.models.generate_images(
+                    model=IMAGEN_MODEL,
+                    prompt=prompt,
+                    config=config,
+                ),
+                timeout=IMAGEN_TIMEOUT,
+            )
+            if response.generated_images:
+                data = response.generated_images[0].image.image_bytes
+                if data:
+                    log.info("Imagen 3 generated image (%d bytes) for prompt: %.80s", len(data), prompt)
+                    return data
+        except Exception as error:
+            log.warning("Imagen 3 key %d failed: %s: %s", idx, type(error).__name__, error)
+    return None
+
+
+async def generate(prompt: str, llm: LLM | None = None) -> bytes | None:
+    """Generate an image. Tries Imagen 3 first (via Gemini keys), falls back to Pollinations FLUX."""
+    if llm is not None:
+        data = await _imagen_generate(prompt, llm)
+        if data:
+            return data
+        log.info("Imagen 3 failed for all keys — falling back to Pollinations")
     url = (
         "https://image.pollinations.ai/prompt/"
         + urllib.parse.quote(prompt)
@@ -206,7 +244,7 @@ async def generate(prompt: str) -> bytes | None:
             response.raise_for_status()
             ct = response.headers.get("content-type", "")
             if ct.startswith("image/"):
-                log.info("Image generated (%d bytes) for prompt: %.80s", len(response.content), prompt)
+                log.info("Pollinations generated image (%d bytes) for prompt: %.80s", len(response.content), prompt)
                 return response.content
             log.warning("Pollinations returned unexpected content-type: %s", ct)
     except Exception as error:

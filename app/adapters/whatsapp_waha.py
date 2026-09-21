@@ -708,8 +708,9 @@ class Waha:
         ):
             ip, expiry = self._pending_image_offers.pop(message.chat_id)
             if time.monotonic() < expiry and self.voice:
-                async def _make_offered_image(ip=ip) -> "Attachment | None":
-                    data = await illustrator.generate(ip.prompt)
+                _llm = getattr(self.voice, "llm", None)
+                async def _make_offered_image(ip=ip, _llm=_llm) -> "Attachment | None":
+                    data = await illustrator.generate(ip.prompt, _llm)
                     if not data:
                         return None
                     return Attachment("jeli.jpg", "image/jpeg", data, caption=ip.caption)
@@ -787,7 +788,7 @@ class Waha:
                                 ip = await illustrator.build_prompt(topic, llm)
                                 if not ip:
                                     return None
-                                data = await illustrator.generate(ip.prompt)
+                                data = await illustrator.generate(ip.prompt, llm)
                                 if not data:
                                     return None
                                 return Attachment("jeli.jpg", "image/jpeg", data, caption=ip.caption)
