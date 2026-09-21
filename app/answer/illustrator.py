@@ -22,7 +22,12 @@ IMAGE_REQUEST = re.compile(
     r"\b(?:génère?|genere?|générer|generer|crée?|créer|dessine?|montre?|illustre?|illustrer|fais\s+une?|make|draw|show|create|generate|produce)\s+(?:une?\s+|an?\s+)?(?:image|photo|illustration|schéma|schema|dessin|diagramm?e?|visuel|figure|picture|diagram|visual|graphic|chart|infographic)\b"
     r"|\bimage\s+(?:de|d[''‛]|du|des|of|about|showing|depicting)\b"
     r"|\bmontre[- ]moi\s+(?:une?\s+)?(?:image|photo|illustration|schéma|dessin|diagramme|visuel)\b"
-    r"|\bshow\s+me\s+(?:a\s+|an\s+)?(?:image|picture|diagram|visual|chart|illustration)\b",
+    r"|\bshow\s+me\s+(?:a\s+|an\s+)?(?:image|picture|diagram|visual|chart|illustration)\b"
+    r"|\bpar une? (?:image|photo|illustration|schéma|schema|dessin|diagramme?|visuel)\b"
+    r"|\bavec une? (?:image|photo|illustration|schéma|schema|dessin|diagramme?|visuel)\b"
+    r"|\brepond[sz]?\s+(?:(?:moi|lui|leur)\s+)?(?:en|par)\s+(?:image|photo|visuel|illustration|schéma)\b"
+    r"|\bwith (?:an? )?(?:image|picture|diagram|visual|chart|illustration)\b"
+    r"|\bin (?:image|visual|diagram|picture) form\b",
     re.IGNORECASE,
 )
 
