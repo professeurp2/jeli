@@ -26,6 +26,7 @@ import time
 from pathlib import Path
 
 from app.answer.brief import Brief
+from app.answer.citations import ignored_keys
 from app.answer.conversation import Turn
 from app.answer.language import TEXTS, detect_language
 from app.answer.llm import LLM
@@ -71,6 +72,11 @@ async def main(path: Path, show_answers: bool, pause: float, only: str | None) -
     try:
         llm = LLM(settings.api_key_list, settings.answer_models)
         answerer = build_answerer(settings, store, llm)
+        # As in production: the team's settings from the dashboard win over the environment.
+        saved = await store.load_settings()
+        answerer.ignored = ignored_keys(saved.get("ignored_authors") or settings.ignored_author_list) | ignored_keys(saved.get("muted_members") or [])
+        answerer.organisers = ignored_keys(saved.get("organisers") or settings.organiser_list)
+        answerer.chat_labels = saved.get("chat_labels") or settings.chat_label_map
         brief = Brief(store, llm)
         answerer.brief = await brief.load()
         understander = Understander(llm)

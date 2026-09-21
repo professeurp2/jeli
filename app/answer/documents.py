@@ -238,7 +238,8 @@ class Documents:
             raise ValueError("this file cannot be opened") from error
         if not any(page.strip() for page in pages):
             raise ValueError("no text found in this file (a scan?)")
-        title = " ".join(title.split())[:120] or title_of(filename)
+        # A caption names the document, formatting and paperclip aside ("📎 *Hackathon Guidelines*").
+        title = " ".join(re.sub(r"[*_~`]", "", title).replace("📎", "").split())[:120] or title_of(filename)
         shared_at = shared_at or datetime.now(timezone.utc)
         document = Document(
             id=f"{DOCUMENT_PREFIX}{slugify(title)}-{hashlib.sha256(data).hexdigest()[:10]}",

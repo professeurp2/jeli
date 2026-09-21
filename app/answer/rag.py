@@ -66,6 +66,8 @@ NAMES_TTL_SECONDS = 600
 CACHE_SECONDS = 600  # the same question asked again (a jury in a row) costs one model call
 SOURCE_MODES = ("one", "ask", "off")
 CONTENT_WORD = re.compile(r"[^\W\d_]{4,}")
+# "[3.1]", "[1.1, 3.6]" the model sometimes leaves in the answer text: ids are for "sources" only.
+CITATION_MARK = re.compile(r"\s*\*?\[\d+(?:\.\d+)?(?:\s*,\s*\d+(?:\.\d+)?)*\]\.?\*?\.?")
 TOKEN_NUMBER = re.compile(r"\d[\d:h.,/-]*\d|\d")
 STOPWORDS = set(
     """
@@ -104,6 +106,17 @@ def _display_label(raw: str) -> str:
     if not raw or ("_" in raw and " " not in raw):
         return ""
     return raw
+
+
+def clean_answer(text: str) -> str:
+    """The answer without citation ids the model wrote into it ("… as stated [3.1]." → "… as stated.")."""
+    cleaned = CITATION_MARK.sub(lambda m: "." if "." in m.group(0).split("]")[-1] else "", text)
+    return re.sub(r"[ \t]+([.,;:!?])", r"\1", cleaned).strip()
+
+
+def clean_title(title: str) -> str:
+    """A document's title as captions give it ("📎 *Hackathon Guidelines*") shown plainly."""
+    return " ".join(re.sub(r"[*_~`]", "", title).replace("📎", "").split())
 
 
 def parse_source(value) -> tuple[int, int | None] | None:
@@ -194,7 +207,7 @@ class Excerpt:
             return recording_quote(self.recording, message.sent_at - self.recording.recorded_at, message.author, message.text)
         if self.document:
             page = document_page(message.sent_at, self.document.shared_at)
-            return quote(f"📄 *{self.document.title}*, page {page}", best_snippet(message.text, words))
+            return quote(f"📄 *{clean_title(self.document.title)}*, page {page}", best_snippet(message.text, words))
         role = " · organiser" if self.by_organiser(message) else ""
         clean = _display_label(self.chat_label)
         label = f" · {clean}" if clean else ""
@@ -337,7 +350,7 @@ class Answerer:
                 return self._quotes(texts["fallback"], excerpts, question, shown=2)
             return await self._no_answer(question, language, member=member)
 
-        answer = generated.answer.strip()
+        answer = clean_answer(generated.answer)
         cited = self._verified(generated.sources, excerpts, answer)
         if not generated.answered or not answer or (not cited and not generated.from_background):
             near = bool(hits) and max(hit.similarity for hit in hits) >= NEAR_SIMILARITY
@@ -403,7 +416,7 @@ class Answerer:
             generated = await self.llm.generate(prompt, AlreadyAnswered, system=DUPLICATE_SYSTEM)
         except LLMUnavailable:
             return None
-        answer = generated.answer.strip()
+        answer = clean_answer(generated.answer)
         cited = self._verified(generated.sources, excerpts, answer)
         if not generated.already_answered or not cited or not answer:
             return None

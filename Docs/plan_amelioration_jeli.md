@@ -268,4 +268,19 @@ Ordre de priorité si le temps manque : C1 → C2 → C9.1 → C3 (variante mini
 
 ---
 
-*Rien de ce plan n'est encore codé : ce document est le seul changement sur la branche `claude/chatbot-rag-improvement-plan-49cb10`. Aucune donnée de production n'a été modifiée (lectures seules).*
+## 8. Réalisé le 21 septembre au soir (commit `fc03396`, branche `claude/chatbot-rag-improvement-plan-49cb10`)
+
+| Chantier | Fait | Reste |
+|---|---|---|
+| C1 Hygiène | `scripts/hygiene.py` exécuté en production : 3 alias fusionnés en `meti-cohort-2026`, **945 doublons supprimés** (3 517 → 2 572 messages), « Nexus Bot » (nom + identifiant) ajouté aux auteurs ignorés, extraction des échéances réactivée, chunks supprimés et réindexés par le serveur. Modèles image (`gemini-3.1-flash-image`, `gemini-2.5-flash-image`) et TTS (`gemini-3.1-flash-tts-preview`) corrigés ; vérification des modèles au démarrage. | Relancer `python -m scripts.hygiene --apply --keep-deadlines-off` **après le déploiement** pour que les chunks prennent le nouveau format (en-tête lisible). |
+| C2 Latence | Repli borné à 4 tentatives (meilleur modèle sur 2 clés, puis les suivants), paires en repos exclues, cache des réponses 10 min, recherche lancée en parallèle de la compréhension. | Quota par clé sur le dashboard. |
+| C3 Cerveau | Compréhension v2 : une seule porte d'entrée (`understand.py`) avec toutes les intentions, la langue, la période, la session, les options de clarification ; regex conservées en repli hors modèle. | L'agent à outils complet (function calling) reste pour la fenêtre de test. |
+| C4 Mémoire | Conversations persistées (`jeli.conversations`, 30 min, 8 tours), profil membre (`jeli.members`), brief communautaire (`jeli.briefs`, activité toutes les 6 h, injecté dans tous les prompts). | Réglage « effacer un membre » sur le dashboard. |
+| C5 Recherche | En-têtes de chunk lisibles sans horodatage brut, plein-texte français + anglais, bonus de récence, 16 candidats → 8 extraits, quasi-doublons fusionnés. | Résumé « Sujet : » par chunk ; `gemini-embedding-2` après le 24. |
+| C6 Sources | Citation au message `[n.m]`, vérification par recouvrement (mot, nombre ou date), une source affichée sous les réponses factuelles, « source ? » pour le reste, réglage dashboard (une / sur demande / jamais). | — |
+| C7 Voix | Persona unique dans les 6 prompts, questions de clarification à options, langue donnée par le modèle, réactions limitées aux vraies émotions (10/h/groupe). | Deux bulles ; émotion transmise à la TTS. |
+| C8 Ingestion | Images postées dans les groupes décrites et mémorisées (60/jour). | Liens ; vocaux des organisateurs. |
+| C9 Qualité | `scripts/evaluate.py` réparé, 41 cas dont 18 de compréhension ; retours 👍/👎 et corrections enregistrés (`jeli.feedback`, événement `message.reaction` à activer côté WAHA). | Juge LLM, exécution nocturne, page dashboard. |
+| C10 Proactivité | Inchangé (règle anti-ban). | Accueil personnalisé des nouveaux en DM. |
+
+Migration de schéma appliquée en production (tables `conversations`, `briefs`, `members`, `feedback`, colonne `search` FR+EN). 216 tests passent. À faire par l'équipe : fusionner et pousser la branche (CI → Railway), ajouter `message.reaction` à `WHATSAPP_HOOK_EVENTS` sur le service WAHA, puis relancer l'hygiène pour le nouveau format de chunks.

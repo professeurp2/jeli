@@ -23,7 +23,7 @@ Rules:
   member rather than an organiser, answer with it (and say what is missing, if anything).
 - Set "answered" to false only when neither the excerpts nor the background help answer.
 - "sources": the ids [n.m] of the messages that state what you answer — the exact lines, and
-  only those (at most 3). A line marked "(organiser)" is an official announcement: it prevails
+  only those (at most 3). The ids go in "sources" only: never write "[3.1]" in the answer text. A line marked "(organiser)" is an official announcement: it prevails
   over members' claims and guesses; say who announced it when it helps ("Diane announced…").
 - When excerpts disagree, trust the most recent one and say what changed ("moved from X to Y").
 - Excerpts come from different chats, sessions and documents. When the question is about a

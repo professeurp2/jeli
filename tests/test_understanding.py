@@ -147,6 +147,15 @@ def test_a_clarifying_question_is_what_the_model_wrote():
     assert asyncio.run(responder.respond(message("C'était quand ça ?"))) == "Tu parles de la session MIT du 16 ou du coaching Wadhwani du 17 ?"
 
 
+def test_citation_ids_never_leak_into_the_answer_text():
+    from app.answer.rag import clean_answer, clean_title
+
+    assert clean_answer("Teams can have up to 5 members, as stated in the guidelines [3.1].") == "Teams can have up to 5 members, as stated in the guidelines."
+    assert clean_answer("Together on their own dashboards [1.1, 3.6, 3.7]. Only one person inputs [2.2].") == "Together on their own dashboards. Only one person inputs."
+    assert clean_answer("She reminded everyone *[3.1].*") == "She reminded everyone."
+    assert clean_title("📎 *Hackathon Guidelines*") == "Hackathon Guidelines"
+
+
 def test_sources_must_share_something_with_the_answer():
     assert supports("The bootcamp moves to 25 September.", "It moved to 25 September.")
     assert supports("Build phase: Friday 18 to Thursday 24 September.", "Le build phase se termine jeudi 24 septembre.")
