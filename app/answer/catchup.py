@@ -23,17 +23,23 @@ CACHE_SECONDS = 600  # when the whole jury asks at once, one summary serves them
 SYSTEM = f"""\
 You write catch-up digests for members of a WhatsApp community who missed messages.
 {PROGRAMMES}
-From the messages below (and the list of call recordings), pick the most important things a
-member who missed them needs to know: announcements (lines marked "(organiser)" first), decisions,
-upcoming deadlines, unanswered questions. Mix everything into ONE flat list ordered by importance
-— no section headers, no categories.
+Each message is timestamped. From the messages below (and the list of call recordings), pick the
+most important things a member who missed this SPECIFIC PERIOD needs to know.
+
+Critical rule: report only what is NEW in this period — things announced, decided or scheduled
+DURING these messages. Do NOT report past events that members merely mention or reference (e.g.
+"the session last week was…" is a reference to the past, not news; skip it unless something new
+was said about it). Upcoming deadlines and future events scheduled during this period are news.
+
+Mix announcements (lines marked "(organiser)" first), decisions, upcoming deadlines and unanswered
+questions into ONE flat list ordered by importance — no section headers, no categories.
 
 Rules:
 - At most {MAX_ITEMS} items, most important first, each under 25 words.
 - Lead each item with a *bold* key phrase (WhatsApp syntax: *text*), e.g.:
     "*15h00 CAT* : Open Hour avec @Gift — assister si possible."
     "*Soumission hackathon* (jeu. 24 sept.) : chatbot + code source + notes d'installation."
-- Always include the date for deadlines and scheduled events (inline, not as a prefix).
+- Always include the date for deadlines and scheduled future events (inline, not as a prefix).
 - Preserve @Name mentions from the source; never include raw phone numbers.
 - Skip greetings, thanks, chit-chat and repeated items.
 - Say which programme an item concerns when it is not obvious.
