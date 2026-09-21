@@ -30,6 +30,8 @@ from app.adapters.pacing import SendSpacer, SlidingWindowLimiter, reading_delay,
 from app.answer.citations import is_ignored, poll_text
 from app.answer.language import TEXTS, detect_language
 from app.answer.react import emotion_emoji, is_correction
+from app.answer import illustrator
+from app.answer.illustrator import asks_for_image
 from app.answer.voice import AUDIO_BYTES_PER_SECOND, AUDIO_MIMETYPE, MAX_SPOKEN_CHARS, asks_for_voice, sources, spoken, without_voice_request
 from app.config import Settings
 from app.control.guard import Guard
@@ -454,6 +456,21 @@ class Waha:
             payload["reply_to"] = reply_to
         await self._post("/api/sendVoice", payload)
 
+    async def send_image(self, chat_id: str, attachment: Attachment, reply_to: str | None = None) -> None:
+        """Send an image that appears inline in WhatsApp (not as a downloadable file)."""
+        payload = {
+            "chatId": chat_id,
+            "file": {
+                "mimetype": attachment.mimetype,
+                "filename": attachment.filename,
+                "data": base64.b64encode(attachment.data).decode(),
+            },
+            "caption": attachment.caption,
+        }
+        if reply_to:
+            payload["reply_to"] = reply_to
+        await self._post("/api/sendImage", payload)
+
     async def send_file(self, chat_id: str, attachment: Attachment, reply_to: str | None = None) -> None:
         payload = {
             "chatId": chat_id,
@@ -472,7 +489,10 @@ class Waha:
         if self.suspended or self.paused or not self.hourly_limiter.allow("all"):
             return
         await self.spacer.wait_turn()
-        await self.send_file(message.chat_id, attachment, reply_to=message.message_id)
+        if attachment.mimetype.startswith("image/"):
+            await self.send_image(message.chat_id, attachment, reply_to=message.message_id)
+        else:
+            await self.send_file(message.chat_id, attachment, reply_to=message.message_id)
 
     async def _send_later(self, message: IncomingMessage, pending) -> None:
         """A file being made (a translation): sent when ready, or the reason it could not be."""
@@ -689,6 +709,20 @@ class Waha:
                 await self.spacer.wait_turn()
                 await self.send_reply(message, reply)
             await self.deliver_files(message, reply)
+            if asks_for_image(message.text or "") and self.voice:
+                llm = self.voice.llm
+                msg_text = message.text
+
+                async def make_image() -> Attachment | None:
+                    ip = await illustrator.build_prompt(msg_text, llm)
+                    if not ip:
+                        return None
+                    data = await illustrator.generate(ip.prompt)
+                    if not data:
+                        return None
+                    return Attachment("jeli.jpg", "image/jpeg", data, caption=ip.caption)
+
+                asyncio.create_task(self._send_later(message, make_image))
 
     async def _send_voice_reply(self, message: IncomingMessage, reply: str, audio: bytes) -> bool:
         """The answer as a voice note replying to the member, then its sources in writing (a voice
