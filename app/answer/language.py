@@ -56,14 +56,26 @@ TEXTS = {
     "en": {
         "dont_know": "Hmm, I don't have anything on that in the group's history yet. Best to ask an organiser directly, or try /search to browse what's been shared.",
         "dont_know_near": "I couldn't find a clear answer, but these discussions from the group might help:",
-        "greeting_reply": "Hey! 👋 I'm Jeli — your group's memory. I keep track of sessions, announcements, decisions and deadlines. What can I help you with?",
+        "greeting_reply": "Hey! 👋 I'm Jeli — the group's assistant griot. I follow sessions, announcements, decisions and deadlines. What can I help you with?",
         "thanks_reply": "Anytime! 😊",
         "welcome_new": "Welcome! 🙏 Great to have you here.",
         "session_in_progress": "⏳ «{title}» (shared by {who}, {day}) is still being transcribed — {progress}. Give me a few more minutes and I'll have the full details for you!",
         "about_jeli": (
-            "Hey, I'm Jeli 👋 Think of me as the group's memory — I follow everything: chats, call recordings, "
-            "and the METI UniPods AI Programme documents (MIT, Wadhwani, Ethiopian AI Institute, Cohort 1). "
-            "Ask me anything — I'll tell you where it came from, and I'll always be honest when I don't know."
+            "Hey, I'm Jeli 👋\n\n"
+            "I'm the group's *assistant griot* — like the storytellers of old, I keep the community's memory alive: "
+            "every chat, every recorded session, every document from the METI UniPods AI Programme.\n\n"
+            "*📚 What I know*\n"
+            "• Group chats & announcements\n"
+            "• Recorded meetings & call transcripts — ask me to recap the last one!\n"
+            "• Programme documents — MIT, Wadhwani, Ethiopian AI Institute, Cohort 1\n\n"
+            "*🎤 Voice & text*\n"
+            "Send me a message or a voice note — I listen and reply both ways.\n\n"
+            "*⚡ Quick commands*\n"
+            "/catchup — what you missed since you were last here\n"
+            "/recap — summary of any recorded session\n"
+            "/deadlines — what's due in the next 2 weeks\n"
+            "/search <topic> — find where the group talked about it\n\n"
+            "Ask me anything. I always say where it comes from — and I'll be straight with you when I don't know."
         ),
         "sources": "Sources",
         "fallback": "Things are a bit busy right now, but here's where the group discussed this — ask me again in a minute for a full answer:",
@@ -96,9 +108,12 @@ TEXTS = {
         "recap_choose": "Which session would you like? Reply with its number (e.g. 4) or /recap 4:",
         "recap_unavailable": "I can't write the recap right now — try again in a few minutes.",
         "help": (
-            "Hey, I'm Jeli 👋 I'm the group's memory. Ask me anything — what was decided, what's coming up, "
-            "what the METI UniPods AI Programme says about MIT, Wadhwani or the Ethiopian AI Institute. "
-            "Just mention me (@Jeli), reply to one of my messages, or start with \"Jeli,\".\n\n"
+            "Hey, I'm Jeli 👋 the group's *assistant griot* — I keep the memory of everything that's been "
+            "shared, discussed or decided.\n\n"
+            "Ask me anything — what was decided, what's coming up, what the METI UniPods AI Programme says "
+            "about MIT, Wadhwani or the Ethiopian AI Institute. "
+            "Mention me (@Jeli), reply to one of my messages, or start with \"Jeli,\". "
+            "You can also send a voice note 🎤 — I listen and answer both ways.\n\n"
             "/catchup — catch up on what you missed\n"
             "/recap — get a summary of a recorded session\n"
             "/deadlines — see what's due in the next two weeks\n"
@@ -117,15 +132,26 @@ TEXTS = {
     "fr": {
         "dont_know": "Hmm, je n'ai rien trouvé là-dessus dans les échanges du groupe. Tu peux poser la question directement aux organisateurs, ou essayer /search avec un mot-clé.",
         "dont_know_near": "Je n'ai pas trouvé de réponse claire, mais ces discussions du groupe pourraient t'aider :",
-        "greeting_reply": "Salut ! 👋 Moi c'est Jeli — la mémoire du groupe. Je suis tout : sessions, annonces, décisions, échéances. Je t'aide avec quoi ?",
+        "greeting_reply": "Salut ! 👋 Moi c'est Jeli — l'assistant griot du groupe. Je suis les sessions, annonces, décisions et échéances. Je t'aide avec quoi ?",
         "thanks_reply": "Avec plaisir ! 😊",
         "welcome_new": "Bienvenue ! 🙏 Ravi de t'avoir parmi nous.",
         "session_in_progress": "⏳ «{title}» (partagé par {who}, {day}) est encore en cours de transcription — {progress}. Encore quelques minutes et j'aurai tous les détails pour toi !",
         "about_jeli": (
-            "Salut, c'est Jeli 👋 Pense à moi comme à la mémoire du groupe — je suis tout : les échanges, "
-            "les sessions enregistrées, et les documents du programme METI UniPods AI (MIT, Wadhwani, "
-            "Institut Éthiopien d'IA, Cohorte 1). Pose-moi n'importe quelle question — je te dis d'où ça "
-            "vient, et je suis honnête quand je ne sais pas."
+            "Salut, c'est Jeli 👋\n\n"
+            "Je suis l'*assistant griot* du groupe — comme les griots de tradition, je garde vivante la mémoire "
+            "de la communauté : chaque échange, chaque session enregistrée, chaque document du programme METI UniPods AI.\n\n"
+            "*📚 Ce que je connais*\n"
+            "• Discussions et annonces du groupe\n"
+            "• Réunions enregistrées & transcriptions — demande-moi de résumer le dernier meeting !\n"
+            "• Documents du programme — MIT, Wadhwani, Institut Éthiopien d'IA, Cohorte 1\n\n"
+            "*🎤 Vocal & texte*\n"
+            "Envoie-moi un message ou un vocal — j'écoute et je réponds dans les deux cas.\n\n"
+            "*⚡ Commandes rapides*\n"
+            "/catchup — rattraper ce que tu as manqué\n"
+            "/recap — résumé d'une session enregistrée\n"
+            "/deadlines — les prochaines échéances\n"
+            "/search <sujet> — trouver où on en a parlé\n\n"
+            "Pose-moi n'importe quelle question. Je dis toujours d'où ça vient — et je suis honnête quand je ne sais pas."
         ),
         "sources": "Sources",
         "fallback": "C'est un peu chargé là, mais voici où le groupe en a parlé — redemande-moi dans une minute pour une réponse complète :",
@@ -158,9 +184,12 @@ TEXTS = {
         "recap_choose": "Quelle session tu veux ? Réponds avec son numéro (ex. 4) ou /recap 4 :",
         "recap_unavailable": "Je ne peux pas rédiger ce résumé là — réessaie dans quelques minutes.",
         "help": (
-            "Salut, c'est Jeli 👋 la mémoire du groupe. Pose-moi n'importe quelle question — ce qui a été "
-            "décidé, ce qui arrive, ce que dit le programme METI UniPods AI sur MIT, Wadhwani ou l'Institut "
-            "Éthiopien d'IA. Mentionne-moi (@Jeli), réponds à un de mes messages, ou commence par « Jeli, ».\n\n"
+            "Salut, c'est Jeli 👋 l'*assistant griot* du groupe — je garde la mémoire de tout ce qui a été "
+            "partagé, discuté ou décidé.\n\n"
+            "Pose-moi n'importe quelle question — ce qui a été décidé, ce qui arrive, ce que dit le programme "
+            "METI UniPods AI sur MIT, Wadhwani ou l'Institut Éthiopien d'IA. "
+            "Mentionne-moi (@Jeli), réponds à un de mes messages, ou commence par « Jeli, ». "
+            "Tu peux aussi envoyer un vocal 🎤 — j'écoute et je réponds dans les deux cas.\n\n"
             "/catchup — rattraper ce que tu as manqué\n"
             "/recap — résumé d'une session enregistrée\n"
             "/deadlines — les prochaines échéances\n"
