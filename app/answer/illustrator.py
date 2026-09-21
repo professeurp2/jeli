@@ -1,16 +1,14 @@
-"""Image generation: Imagen 3 (primary, via Gemini API keys) → Pollinations FLUX (fallback).
+"""Image generation via Gemini (primary: Flash native image output → secondary: Imagen 3).
 
-Used when a member asks Jeli to generate or show an image to illustrate a concept.
-The LLM first turns the request into an optimised English prompt, then Imagen 3
-renders it and returns a JPEG. Pollinations is used when all Gemini keys fail.
+The LLM turns the member's request into an optimised English prompt; Gemini Flash renders it
+using response_modalities=["IMAGE"], which works on standard (free) API keys.
+Imagen 3 is tried afterwards in case a paid API key is available.
 """
 
 import asyncio
 import logging
 import re
-import urllib.parse
 
-import httpx
 from google.genai import types
 from pydantic import BaseModel
 
@@ -24,7 +22,6 @@ GEMINI_IMAGE_TIMEOUT = 30.0
 # Imagen 3: higher quality but requires a paid / Vertex AI API key — tried as secondary.
 IMAGEN_MODEL = "imagen-3.0-generate-001"
 IMAGEN_TIMEOUT = 20.0
-GENERATE_TIMEOUT = 45.0  # Pollinations fallback — can be slow on first requests
 
 # Image nouns, articles, and clitic pronouns as named fragments for readability.
 _IMG = r"(?:image|photo|illustration|schéma|schema|dessin|diagramm?e?|visuel|figure|picture|diagram|visual|graphic|chart|infographic)"
@@ -257,30 +254,14 @@ async def _imagen_generate(prompt: str, llm: LLM) -> bytes | None:
 
 
 async def generate(prompt: str, llm: LLM | None = None) -> bytes | None:
-    """Generate an image.
-    Order: Gemini Flash native (free keys) → Imagen 3 (paid keys) → Pollinations FLUX."""
-    if llm is not None:
-        data = await _gemini_image_generate(prompt, llm)
-        if data:
-            return data
-        data = await _imagen_generate(prompt, llm)
-        if data:
-            return data
-        log.info("All Gemini image generation failed — falling back to Pollinations")
-    url = (
-        "https://image.pollinations.ai/prompt/"
-        + urllib.parse.quote(prompt)
-        + "?model=flux&width=1024&height=1024&nologo=true"
-    )
-    try:
-        async with httpx.AsyncClient(timeout=GENERATE_TIMEOUT, follow_redirects=True) as client:
-            response = await client.get(url)
-            response.raise_for_status()
-            ct = response.headers.get("content-type", "")
-            if ct.startswith("image/"):
-                log.info("Pollinations generated image (%d bytes) for prompt: %.80s", len(response.content), prompt)
-                return response.content
-            log.warning("Pollinations returned unexpected content-type: %s", ct)
-    except Exception as error:
-        log.error("Image generation failed: %s: %s", type(error).__name__, error)
+    """Generate an image via Gemini: Flash native first, Imagen 3 as secondary."""
+    if llm is None:
+        return None
+    data = await _gemini_image_generate(prompt, llm)
+    if data:
+        return data
+    data = await _imagen_generate(prompt, llm)
+    if data:
+        return data
+    log.warning("Image generation failed for all Gemini keys: %.80s", prompt)
     return None

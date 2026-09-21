@@ -292,7 +292,17 @@ class Documents:
         who, day = self.who(document.shared_by), short_day(document.shared_at)
         if not target or target == document.language:
             file = await self.attachment(document, caption=document.title)
-            return Reply(texts["file_here"].format(title=document.title, who=who, day=day), attachment=file) if file else None
+            if file:
+                return Reply(texts["file_here"].format(title=document.title, who=who, day=day), attachment=file)
+            # Document is indexed (Jeli can answer questions about it) but the file itself was not
+            # stored — typically a chat export that included text but not the attached file.
+            return Reply(
+                f"📄 I've read «{document.title}» and can answer questions about it, "
+                f"but I don't have the file to send. Ask {who} to share it again in the group!"
+                if language == "en" else
+                f"📄 J'ai lu «{document.title}» et je peux répondre à vos questions dessus, "
+                f"mais je n'ai pas le fichier pour l'envoyer. Demandez à {who} de le repartager dans le groupe !"
+            )
         if target not in LANGUAGE_NAMES:
             names = LANGUAGE_NAMES if language == "en" else NAMES_FR
             return Reply(texts["file_language_unsupported"].format(languages=", ".join(names.values())))
