@@ -84,7 +84,7 @@ FIELDS = {
         Field("voice_rate", "float", lambda s: 0.0, 0.0, 1.0),
         Field("voice_intro_rate", "float", lambda s: 0.50, 0.0, 1.0),
         # Gemini TTS voice personality (voice name passed to the TTS model).
-        Field("voice_name", "choice", lambda s: "Aoede", choices=("Aoede", "Puck", "Charon", "Kore", "Fenrir")),
+        Field("voice_name", "choice", lambda s: "aoede", choices=("aoede", "puck", "charon", "kore", "fenrir")),
     )
 }
 

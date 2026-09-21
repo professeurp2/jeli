@@ -1549,11 +1549,11 @@ async def settings_page(request: Request, member: Member) -> HTMLResponse:
                f'<output>{round(runtime["proactive_image_rate"] * 100)}%</output>')
     )
     _VOICE_PERSONALITIES = [
-        ("Aoede", "Warm"),
-        ("Puck", "Playful"),
-        ("Charon", "Clear"),
-        ("Kore", "Calm"),
-        ("Fenrir", "Deep"),
+        ("aoede", "Warm"),
+        ("puck", "Playful"),
+        ("charon", "Clear"),
+        ("kore", "Calm"),
+        ("fenrir", "Deep"),
     ]
     voice_settings = (
         _row("Voice replies — general", "Fraction of regular messages Jeli answers by voice, even without being asked. 0 % = never; 20 % = about 1 in 5.",
@@ -1579,7 +1579,7 @@ async def settings_page(request: Request, member: Member) -> HTMLResponse:
         + '<div style="height:20px"></div>'
         + ui.card("Earlier answers", f'<div class="rows">{pointers}</div>', icon_name="sparkle")
         + '<div style="height:20px"></div>'
-        + ui.card("Images", f'<div class="rows">{images}</div>', icon_name="picture", description="Imagen 3 (Gemini) primary — Pollinations.ai fallback.")
+        + ui.card("Images", f'<div class="rows">{images}</div>', icon_name="picture", description="AI-generated images — high-quality primary engine with a free fallback.")
         + '<div style="height:20px"></div>'
         + ui.card("Voice", f'<div class="rows">{voice_settings}</div>', icon_name="mic", description="How often Jeli replies by voice, and which personality it uses.")
         + '<div style="height:20px"></div>'

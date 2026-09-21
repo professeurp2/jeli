@@ -212,7 +212,7 @@ class Voice:
         """Gemini TTS on all available API keys; returns WAV bytes or None on failure/quota."""
         if not self.llm._clients:
             return None
-        voice_name = self.voice_name or GEMINI_TTS_VOICES.get(language, "Aoede")
+        voice_name = (self.voice_name or GEMINI_TTS_VOICES.get(language, "Aoede")).title()
         _LANG_LABELS = {
             "fr": "French", "en": "English", "sw": "Swahili",
             "rw": "Kinyarwanda", "ln": "Lingala", "wo": "Wolof", "am": "Amharic",
