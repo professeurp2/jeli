@@ -30,7 +30,7 @@ TEXTS = {
     "en": {
         "dont_know": "I couldn't find that in what the groups have discussed so far. Ask the organisers, or try /search with a keyword.",
         "dont_know_near": "I couldn't find a clear answer in the groups. The closest discussions:",
-        "greeting_reply": "Hello! 👋 I'm Jeli, the group's memory. Ask me anything about the programme, the sessions or the deadlines.",
+        "greeting_reply": "Hello! 👋 I'm Jeli. I keep track of everything shared in this group — sessions, announcements, decisions, deadlines. Ask me anything!",
         "thanks_reply": "You're welcome! 🙌",
         "session_in_progress": "⏳ The recording of «{title}» (shared by {who}, {day}) is being transcribed right now — {progress}. Ask me again in a few minutes and I'll tell you what was said.",
         "about_jeli": (
@@ -90,7 +90,7 @@ TEXTS = {
     "fr": {
         "dont_know": "Je n'ai pas trouvé cela dans les échanges des groupes. Demandez aux organisateurs, ou essayez /search avec un mot-clé.",
         "dont_know_near": "Je n'ai pas trouvé de réponse claire dans les groupes. Les discussions les plus proches :",
-        "greeting_reply": "Bonjour ! 👋 Je suis Jeli, la mémoire du groupe. Posez-moi vos questions sur le programme, les séances ou les échéances.",
+        "greeting_reply": "Bonjour ! 👋 Je suis Jeli. Je suis au courant de tout ce qui est partagé dans ce groupe — sessions, annonces, décisions, échéances. Posez-moi vos questions !",
         "thanks_reply": "Avec plaisir ! 🙌",
         "session_in_progress": "⏳ L'enregistrement de «{title}» (partagé par {who}, {day}) est en cours de transcription — {progress}. Redemandez-moi dans quelques minutes et je vous dirai ce qui s'y est dit.",
         "about_jeli": (
