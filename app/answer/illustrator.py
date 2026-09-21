@@ -18,8 +18,12 @@ from app.answer.llm import LLM, LLMUnavailable
 
 log = logging.getLogger(__name__)
 
+# Gemini native image generation: works on standard (free) API keys.
+GEMINI_IMAGE_MODEL = "gemini-2.0-flash-preview-image-generation"
+GEMINI_IMAGE_TIMEOUT = 30.0
+# Imagen 3: higher quality but requires a paid / Vertex AI API key — tried as secondary.
 IMAGEN_MODEL = "imagen-3.0-generate-001"
-IMAGEN_TIMEOUT = 30.0
+IMAGEN_TIMEOUT = 20.0
 GENERATE_TIMEOUT = 45.0  # Pollinations fallback — can be slow on first requests
 
 # Image nouns, articles, and clitic pronouns as named fragments for readability.
@@ -197,8 +201,34 @@ async def suggest_if_useful(question: str, answer: str, llm: LLM) -> ImagePrompt
     return None
 
 
+async def _gemini_image_generate(prompt: str, llm: LLM) -> bytes | None:
+    """Generate with Gemini Flash native image output (standard API keys, no Vertex AI needed)."""
+    if not llm._clients:
+        return None
+    config = types.GenerateContentConfig(response_modalities=["IMAGE", "TEXT"])
+    for idx, client in enumerate(llm._clients):
+        try:
+            response = await asyncio.wait_for(
+                client.aio.models.generate_content(
+                    model=GEMINI_IMAGE_MODEL,
+                    contents=prompt,
+                    config=config,
+                ),
+                timeout=GEMINI_IMAGE_TIMEOUT,
+            )
+            if response.candidates:
+                for part in response.candidates[0].content.parts:
+                    if part.inline_data and part.inline_data.data:
+                        data = part.inline_data.data
+                        log.info("Gemini image (%d bytes) for prompt: %.80s", len(data), prompt)
+                        return data
+        except Exception as error:
+            log.warning("Gemini image key %d failed: %s: %s", idx, type(error).__name__, error)
+    return None
+
+
 async def _imagen_generate(prompt: str, llm: LLM) -> bytes | None:
-    """Generate with Imagen 3 using all available Gemini API keys. Returns JPEG bytes or None."""
+    """Generate with Imagen 3 (requires paid / Vertex AI API key). Returns JPEG bytes or None."""
     if not llm._clients:
         return None
     config = types.GenerateImagesConfig(
@@ -227,12 +257,16 @@ async def _imagen_generate(prompt: str, llm: LLM) -> bytes | None:
 
 
 async def generate(prompt: str, llm: LLM | None = None) -> bytes | None:
-    """Generate an image. Tries Imagen 3 first (via Gemini keys), falls back to Pollinations FLUX."""
+    """Generate an image.
+    Order: Gemini Flash native (free keys) → Imagen 3 (paid keys) → Pollinations FLUX."""
     if llm is not None:
+        data = await _gemini_image_generate(prompt, llm)
+        if data:
+            return data
         data = await _imagen_generate(prompt, llm)
         if data:
             return data
-        log.info("Imagen 3 failed for all keys — falling back to Pollinations")
+        log.info("All Gemini image generation failed — falling back to Pollinations")
     url = (
         "https://image.pollinations.ai/prompt/"
         + urllib.parse.quote(prompt)
