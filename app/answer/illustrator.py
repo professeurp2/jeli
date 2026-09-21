@@ -9,6 +9,7 @@ import asyncio
 import logging
 import re
 
+from google import genai
 from google.genai import types
 from pydantic import BaseModel
 
@@ -17,7 +18,13 @@ from app.answer.llm import LLM, LLMUnavailable
 log = logging.getLogger(__name__)
 
 # Gemini native image generation: works on standard (free) API keys.
-GEMINI_IMAGE_MODEL = "gemini-2.0-flash-preview-image-generation"
+# The preview model lives on v1alpha, not v1beta (SDK default) — tried with dedicated clients.
+# Fallback: gemini-2.0-flash-exp also supports IMAGE modality on v1beta.
+_GEMINI_IMAGE_CANDIDATES = [
+    ("gemini-2.0-flash-preview-image-generation", "v1alpha"),
+    ("gemini-2.0-flash-exp-image-generation", "v1alpha"),
+    ("gemini-2.0-flash-exp", "v1beta"),
+]
 GEMINI_IMAGE_TIMEOUT = 30.0
 # Imagen 3: higher quality but requires a paid / Vertex AI API key — tried as secondary.
 IMAGEN_MODEL = "imagen-3.0-generate-001"
@@ -199,28 +206,42 @@ async def suggest_if_useful(question: str, answer: str, llm: LLM) -> ImagePrompt
 
 
 async def _gemini_image_generate(prompt: str, llm: LLM) -> bytes | None:
-    """Generate with Gemini Flash native image output (standard API keys, no Vertex AI needed)."""
-    if not llm._clients:
+    """Generate with Gemini Flash native image output (standard API keys, no Vertex AI needed).
+
+    The preview model is on v1alpha, not the SDK default v1beta, so we create dedicated
+    per-key clients with the right API version.  Three (model, api_version) pairs are tried
+    in order so a name change or promotion won't silently break generation.
+    """
+    api_keys = llm._api_keys
+    if not api_keys:
         return None
     config = types.GenerateContentConfig(response_modalities=["IMAGE", "TEXT"])
-    for idx, client in enumerate(llm._clients):
-        try:
-            response = await asyncio.wait_for(
-                client.aio.models.generate_content(
-                    model=GEMINI_IMAGE_MODEL,
-                    contents=prompt,
-                    config=config,
-                ),
-                timeout=GEMINI_IMAGE_TIMEOUT,
-            )
-            if response.candidates:
-                for part in response.candidates[0].content.parts:
-                    if part.inline_data and part.inline_data.data:
-                        data = part.inline_data.data
-                        log.info("Gemini image (%d bytes) for prompt: %.80s", len(data), prompt)
-                        return data
-        except Exception as error:
-            log.warning("Gemini image key %d failed: %s: %s", idx, type(error).__name__, error)
+    for model_name, api_version in _GEMINI_IMAGE_CANDIDATES:
+        for idx, key in enumerate(api_keys):
+            client = genai.Client(api_key=key, http_options=types.HttpOptions(api_version=api_version))
+            try:
+                response = await asyncio.wait_for(
+                    client.aio.models.generate_content(
+                        model=model_name,
+                        contents=prompt,
+                        config=config,
+                    ),
+                    timeout=GEMINI_IMAGE_TIMEOUT,
+                )
+                if response.candidates:
+                    for part in response.candidates[0].content.parts:
+                        if part.inline_data and part.inline_data.data:
+                            data = part.inline_data.data
+                            log.info(
+                                "Gemini image (%s/%s, %d bytes) for prompt: %.80s",
+                                model_name, api_version, len(data), prompt,
+                            )
+                            return data
+            except Exception as error:
+                log.warning(
+                    "Gemini image %s/%s key %d: %s: %s",
+                    model_name, api_version, idx, type(error).__name__, error,
+                )
     return None
 
 

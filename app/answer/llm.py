@@ -50,9 +50,11 @@ class LLM:
         self.models = models
         if client:
             self._clients = [client]
+            self._api_keys: list[str] = []
         else:
             keys = [api_keys] if isinstance(api_keys, str) else api_keys
-            self._clients = [genai.Client(api_key=k) for k in keys if k]
+            self._api_keys = [k for k in keys if k]
+            self._clients = [genai.Client(api_key=k) for k in self._api_keys]
         self._next_key = 0  # round-robin cursor: advanced after each success
         self._clock = clock
         # Cooldown per (key_index, model_name) pair.
