@@ -20,8 +20,13 @@ from app.answer.llm import LLM, LLMUnavailable
 
 log = logging.getLogger(__name__)
 
-# edge-tts: free, no API key, natural voices — primary TTS
-EDGE_VOICES = {"fr": "fr-FR-DeniseNeural", "en": "en-US-AriaNeural"}
+# edge-tts: free, no API key, natural voices — primary TTS.
+# Each entry: (voice name, SSML mstts:express-as style) for a warmer, more emotional delivery.
+# Styles verified against Microsoft's TTS voice gallery.
+EDGE_VOICES = {
+    "fr": ("fr-FR-DeniseNeural", "cheerful"),
+    "en": ("en-US-AriaNeural", "chat"),
+}
 AUDIO_MIMETYPE = "audio/mpeg"
 AUDIO_BYTES_PER_SECOND = 16_000  # edge-tts MP3 at ~128 kbps
 SAMPLE_RATE = 24_000  # WAV helper: 16-bit mono PCM at 24 kHz (used by tests)
@@ -127,6 +132,23 @@ def sources(reply: str) -> str:
     return "\n".join(kept + links).strip()
 
 
+def _ssml(text: str, voice: str, style: str) -> str:
+    """Wrap plain text in SSML with an expressive style for a warmer, more emotional delivery."""
+    escaped = text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+    lang = voice[:5]  # "en-US" or "fr-FR"
+    return (
+        '<speak version="1.0" xmlns="http://www.w3.org/2001/10/synthesis" '
+        'xmlns:mstts="https://www.w3.org/2001/mstts" '
+        f'xml:lang="{lang}">'
+        f'<voice name="{voice}">'
+        f'<mstts:express-as style="{style}">'
+        f'{escaped}'
+        '</mstts:express-as>'
+        '</voice>'
+        '</speak>'
+    )
+
+
 def wav(pcm: bytes, rate: int = SAMPLE_RATE) -> bytes:
     out = io.BytesIO()
     with wave.open(out, "wb") as file:
@@ -175,9 +197,10 @@ class Voice:
         if len(text) > MAX_SPOKEN_CHARS:
             cutoff = text[:MAX_SPOKEN_CHARS].rfind(". ")
             text = text[:cutoff + 1] if cutoff > 300 else text[:MAX_SPOKEN_CHARS]
-        voice = EDGE_VOICES.get(language, EDGE_VOICES["en"])
+        voice, style = EDGE_VOICES.get(language, EDGE_VOICES["en"])
+        ssml = _ssml(for_speech(text), voice, style)
         try:
-            communicate = edge_tts.Communicate(for_speech(text), voice)
+            communicate = edge_tts.Communicate(ssml, voice)
             audio = bytearray()
             async for chunk in communicate.stream():
                 if chunk["type"] == "audio":
