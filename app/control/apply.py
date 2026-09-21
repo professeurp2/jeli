@@ -7,7 +7,9 @@ BUILT_IN_LABELS = {"team": "Team"}
 
 
 def apply(state, runtime) -> None:
-    ignored = ignored_keys(runtime["ignored_authors"])
+    # Blocked members (muted_members) are also excluded as sources: if Jeli won't answer
+    # someone, it shouldn't quote them either.
+    ignored = ignored_keys(runtime["ignored_authors"]) | ignored_keys(runtime["muted_members"])
     labels = {**BUILT_IN_LABELS, **runtime["chat_labels"]}
     organisers = ignored_keys(runtime["organisers"])
     for name in ("answerer", "catchup", "extractor"):
