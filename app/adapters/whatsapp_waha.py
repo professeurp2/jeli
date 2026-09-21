@@ -709,20 +709,39 @@ class Waha:
                 await self.spacer.wait_turn()
                 await self.send_reply(message, reply)
             await self.deliver_files(message, reply)
-            if asks_for_image(message.text or "") and self.voice:
+            if self.voice:
                 llm = self.voice.llm
                 msg_text = message.text
+                if asks_for_image(msg_text or ""):
+                    # Explicit image request: extract the subject, generate only when one exists.
+                    # (When the request has no subject, understand() already asked the member what
+                    # to illustrate — so there is nothing to generate here.)
+                    topic = illustrator.topic_from_request(msg_text or "")
+                    if topic:
+                        async def make_image() -> Attachment | None:
+                            ip = await illustrator.build_prompt(topic, llm)
+                            if not ip:
+                                return None
+                            data = await illustrator.generate(ip.prompt)
+                            if not data:
+                                return None
+                            return Attachment("jeli.jpg", "image/jpeg", data, caption=ip.caption)
 
-                async def make_image() -> Attachment | None:
-                    ip = await illustrator.build_prompt(msg_text, llm)
-                    if not ip:
-                        return None
-                    data = await illustrator.generate(ip.prompt)
-                    if not data:
-                        return None
-                    return Attachment("jeli.jpg", "image/jpeg", data, caption=ip.caption)
+                        asyncio.create_task(self._send_later(message, make_image))
+                else:
+                    # Proactive: let the LLM decide if the answer would benefit from a visual.
+                    reply_text = reply
 
-                asyncio.create_task(self._send_later(message, make_image))
+                    async def maybe_image() -> Attachment | None:
+                        ip = await illustrator.suggest_if_useful(msg_text or "", reply_text, llm)
+                        if not ip:
+                            return None
+                        data = await illustrator.generate(ip.prompt)
+                        if not data:
+                            return None
+                        return Attachment("jeli.jpg", "image/jpeg", data, caption=ip.caption)
+
+                    asyncio.create_task(self._send_later(message, maybe_image))
 
     async def _send_voice_reply(self, message: IncomingMessage, reply: str, audio: bytes) -> bool:
         """The answer as a voice note replying to the member, then its sources in writing (a voice

@@ -70,8 +70,77 @@ class ImagePrompt(BaseModel):
     caption: str
 
 
+class IllustrationDecision(BaseModel):
+    should_illustrate: bool
+    prompt: str   # English FLUX prompt; empty string when should_illustrate is False
+    caption: str  # Short caption in the question's language; empty when should_illustrate is False
+
+
+SUGGEST_SYSTEM = """\
+You decide whether a WhatsApp answer would be significantly clearer with a visual illustration.
+
+Suggest an image ONLY when the content is genuinely hard to grasp from text alone:
+- Several statistics, numbers or proportions → bar chart / pie chart infographic
+- Multiple deadlines or a sequence of events → timeline diagram
+- Two or more programmes, options or approaches compared side by side → comparison diagram
+- A multi-step process or workflow → step-by-step flowchart
+- A concept that is inherently spatial, structural or visual → diagram or illustration
+
+Do NOT suggest an image for:
+- A single-fact or one-number answer
+- A yes / no or very short answer
+- A list of names, links or people
+- Casual conversation, greetings or thanks
+- An answer that is already a direct quote
+
+If yes: write a concise English FLUX prompt (under 60 words). Prefer styles like
+"clear educational infographic", "timeline diagram", "comparison chart illustration",
+"step-by-step visual guide". Also write a short caption (≤8 words) in the language
+of the original question.
+"""
+
+# Minimum answer length before considering a proactive image (very short replies never need one).
+_MIN_ANSWER_LEN = 120
+
+
 def asks_for_image(text: str) -> bool:
     return bool(IMAGE_REQUEST.search(text or ""))
+
+
+# --- Topic extraction -----------------------------------------------------------
+
+# 1. Remove trailing image qualifiers ("par une image", "repond par image", …)
+_STRIP_TAIL = re.compile(
+    r"\s*[,.]?\s*(?:par|avec|with)\s+(?:une?\s+|an?\s+)?(?:image|photo|illustration|schéma|schema|dessin|diagramm?e?|visuel|figure|picture|diagram|visual|graphic|chart|infographic)\s*$"
+    rf"|\s*[,.]?\s*repond[sz]?\s+(?:en|par)\s+(?:une?\s+)?(?:image|photo|visuel|illustration|schéma)\s*$"
+    rf"|\s*sous\s+forme\s+(?:d{_APO}(?:une?\s+)?)?(?:image|visuelle?)\s*$"
+    r"|\s*in\s+(?:image|visual|diagram|picture)\s+form\s*$",
+    re.IGNORECASE,
+)
+# 2. Remove leading trigger verb (+ optional clitics)
+_STRIP_HEAD = re.compile(
+    r"^\s*(?:génère?|générer|genere?|generer|crée?|créer|cree?|creer|dessine?|dessiner"
+    r"|montre?|montrer|illustre?|illustrer|fais|faire|envoie?|envoyer|partage?|partager"
+    r"|make|draw|show|create|generate|produce|send|share|visualize?)\b"
+    r"\s*(?:-?(?:moi|lui|leur|nous|me|us|them)\s*)*",
+    re.IGNORECASE,
+)
+# 3. Remove remaining "une image de / a diagram of" noun phrase
+_STRIP_NOUN = re.compile(
+    rf"(?:une?\s+|an?\s+)?(?:image|photo|illustration|schéma|schema|dessin|diagramm?e?|visuel|figure|picture|diagram|visual|graphic|chart|infographic)\s+(?:de|d{_APO}|du|des|of|about|sur|showing|depicting|concernant)?\s*",
+    re.IGNORECASE,
+)
+
+
+def topic_from_request(text: str) -> str:
+    """Extract the subject to illustrate, stripping trigger verbs and image-noun phrases.
+    Returns an empty string when the request has no identifiable subject
+    (e.g. bare "génère une image" with nothing else).
+    """
+    t = _STRIP_TAIL.sub("", text or "").strip()
+    t = _STRIP_HEAD.sub("", t).strip()
+    t = _STRIP_NOUN.sub("", t).strip(" ,.;:!?")
+    return " ".join(t.split())
 
 
 async def build_prompt(text: str, llm: LLM) -> ImagePrompt | None:
@@ -81,6 +150,27 @@ async def build_prompt(text: str, llm: LLM) -> ImagePrompt | None:
     except LLMUnavailable:
         log.warning("Could not build image prompt: LLM unavailable")
         return None
+
+
+async def suggest_if_useful(question: str, answer: str, llm: LLM) -> ImagePrompt | None:
+    """Proactively decide whether the answer would benefit from a visual.
+
+    Returns an ImagePrompt when an image would add real value, None otherwise.
+    Runs in background after the text reply is sent — never blocks the user.
+    """
+    if len(answer) < _MIN_ANSWER_LEN:
+        return None
+    user_input = f"Question: {question}\n\nAnswer: {answer}"
+    try:
+        decision = await llm.generate(
+            user_input, IllustrationDecision, system=SUGGEST_SYSTEM, attempts=1, temperature=0.2
+        )
+        if decision.should_illustrate and decision.prompt.strip():
+            log.info("Proactive image suggested for question: %.60s", question)
+            return ImagePrompt(prompt=decision.prompt, caption=decision.caption)
+    except LLMUnavailable:
+        log.debug("Proactive image skipped: LLM unavailable")
+    return None
 
 
 async def generate(prompt: str) -> bytes | None:
