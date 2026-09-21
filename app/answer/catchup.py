@@ -29,9 +29,17 @@ needs to know:
 - decisions: what was decided or confirmed;
 - deadlines: deadlines and upcoming dates, always with the date;
 - open_questions: questions members asked that nobody answered.
-At most {MAX_ITEMS} items per list, most important first, each under 25 words, starting with its
-day. Merge repeated items. Skip greetings, thanks and chit-chat. Say which
-programme an item is about when it is not obvious. Never include phone numbers or links.
+At most {MAX_ITEMS} items per list, most important first, each under 25 words.
+Formatting rules:
+- Lead each item with the key fact (a time, a name, a decision) in *bold* using WhatsApp syntax
+  (*text*, single asterisk each side) — e.g. "*15h00 CAT* : Open Hour avec @Diane."
+- Add the day at the start of an item ONLY when messages span more than one calendar day AND
+  that item's day differs from the previous item. For single-day digests, omit dates entirely —
+  the header already states the period.
+- Preserve @Name mentions when they appear in the source (e.g. @Diane, @Gift); never include
+  raw phone numbers.
+- Skip greetings, thanks, chit-chat. Say which programme an item concerns when it is not obvious.
+- Never include URLs or links.
 Use only what the messages say: never add outside knowledge.
 """
 
