@@ -81,8 +81,8 @@ class Settings(BaseSettings):
 
     @property
     def api_key_list(self) -> list[str]:
-        """All Gemini keys for quota rotation: primary key first, then extras."""
-        primary = [self.gemini_api_key] if self.gemini_api_key else []
+        """All Gemini keys for quota rotation, deduped. Both env vars accept comma-separated lists."""
+        primary = [k.strip() for k in self.gemini_api_key.split(",") if k.strip()]
         extras = [k.strip() for k in self.gemini_api_keys.split(",") if k.strip()]
         seen = set(primary)
         return primary + [k for k in extras if k not in seen]
