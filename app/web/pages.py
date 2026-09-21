@@ -1540,7 +1540,7 @@ async def settings_page(request: Request, member: Member) -> HTMLResponse:
         + _row("At most, per group and per hour", "Jeli speaks uninvited rarely, to stay discreet.", number("duplicate_replies_per_hour", 1, 20) + '<span class="muted small">times</span>')
     )
     images = (
-        _row("Generate images on request", "When a member asks for an image, diagram or illustration, Jeli generates one (Imagen 3 via Gemini, or Pollinations.ai as fallback) and sends it inline.",
+        _row("Generate images on request", "When a member asks for an image, diagram or illustration, Jeli generates one with a high-quality AI engine and sends it inline.",
              f'<label class="check"><input type="checkbox" name="enabled_images"{" checked" if runtime["enabled.images"] else ""}> On</label>')
         + _row("Suggest images proactively", "After a rich answer (statistics, deadlines, comparisons…), Jeli decides whether a visual would help and offers one automatically.",
                f'<label class="check"><input type="checkbox" name="enabled_proactive_images"{" checked" if runtime["enabled.proactive_images"] else ""}> On</label>')
