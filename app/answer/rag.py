@@ -70,6 +70,13 @@ def _words(text: str) -> set[str]:
     return {w for w in re.findall(r"\w+", text.lower()) if len(w) > 3}
 
 
+def _display_label(raw: str) -> str:
+    """Return the label for display; '' when it looks like a raw filename (underscores, no spaces)."""
+    if not raw or ("_" in raw and " " not in raw):
+        return ""
+    return raw
+
+
 @dataclass(frozen=True)
 class Excerpt:
     number: int  # chronological: how the model sees it
@@ -144,7 +151,8 @@ class Excerpt:
             page = document_page(message.sent_at, self.document.shared_at)
             return quote(f"📄 *{self.document.title}*, page {page}", best_snippet(message.text, words))
         role = " · organiser" if self.by_organiser(message) else ""
-        label = f" · {self.chat_label}" if self.chat_label else ""
+        clean = _display_label(self.chat_label)
+        label = f" · {clean}" if clean else ""
         return quote(f"*{self.name(message)}*{role}{label}, {short_day(message.sent_at)}", best_snippet(message.text, words))
 
 

@@ -36,7 +36,7 @@ from app.answer.illustrator import asks_for_image
 from app.answer.voice import AUDIO_BYTES_PER_SECOND, AUDIO_MIMETYPE, MAX_SPOKEN_CHARS, asks_for_voice, sources, spoken, without_voice_request
 from app.config import Settings
 from app.control.guard import Guard
-from app.models import Attachment, IncomingMessage
+from app.models import Attachment, IncomingMessage, Reply
 
 log = logging.getLogger(__name__)
 
@@ -766,9 +766,12 @@ class Waha:
                     await self.spacer.wait_turn()
                 await self.send_reply(message, reply)
             elif len(spoken(reply)) > MAX_SPOKEN_CHARS:
-                # Voice note was truncated: also send the full written reply beneath it.
+                # Voice note was truncated: send the written reply without source citations
+                # (the member already heard the answer; blockquotes would clutter the text).
+                clean_text = "\n".join(l for l in reply.splitlines() if not l.startswith(">")).strip()
+                clean_reply = Reply(clean_text, reply_to=getattr(reply, "reply_to", None), mentions=getattr(reply, "mentions", ()))
                 await self.spacer.wait_turn()
-                await self.send_reply(message, reply)
+                await self.send_reply(message, clean_reply)
             await self.deliver_files(message, reply)
             if self.voice:
                 llm = self.voice.llm
