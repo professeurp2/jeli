@@ -32,10 +32,11 @@ GEMINI_TTS_VOICES = {"fr": "Aoede", "en": "Aoede"}  # warm, expressive multiling
 GEMINI_TTS_TIMEOUT = 20.0
 
 # edge-tts — fallback when Gemini TTS quota is exhausted or unavailable.
-# Each entry: (voice name, SSML mstts:express-as style) for a warmer, more emotional delivery.
+# edge-tts (7.x) escapes what it is given and builds its own SSML: it must receive plain text,
+# never SSML, or it reads the tags aloud ("Speak version 1.0 xmlns…").
 EDGE_VOICES = {
-    "fr": ("fr-FR-DeniseNeural", "cheerful"),
-    "en": ("en-US-AriaNeural", "chat"),
+    "fr": "fr-FR-DeniseNeural",
+    "en": "en-US-AriaNeural",
 }
 AUDIO_MIMETYPE = "audio/mpeg"  # edge-tts output
 AUDIO_BYTES_PER_SECOND = 16_000  # edge-tts MP3 at ~128 kbps (used for recording-delay timing)
@@ -142,23 +143,6 @@ def sources(reply: str) -> str:
     return "\n".join(kept + links).strip()
 
 
-def _ssml(text: str, voice: str, style: str) -> str:
-    """Wrap plain text in SSML with an expressive style for a warmer, more emotional delivery."""
-    escaped = text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
-    lang = voice[:5]  # "en-US" or "fr-FR"
-    return (
-        '<speak version="1.0" xmlns="http://www.w3.org/2001/10/synthesis" '
-        'xmlns:mstts="https://www.w3.org/2001/mstts" '
-        f'xml:lang="{lang}">'
-        f'<voice name="{voice}">'
-        f'<mstts:express-as style="{style}">'
-        f'{escaped}'
-        '</mstts:express-as>'
-        '</voice>'
-        '</speak>'
-    )
-
-
 def wav(pcm: bytes, rate: int = SAMPLE_RATE) -> bytes:
     out = io.BytesIO()
     with wave.open(out, "wb") as file:
@@ -249,11 +233,10 @@ class Voice:
         return None
 
     async def _speak_edge(self, text: str, language: str) -> bytes | None:
-        """edge-tts fallback: free, no quota, SSML expressive styles."""
-        voice, style = EDGE_VOICES.get(language, EDGE_VOICES["en"])
-        ssml = _ssml(text, voice, style)
+        """edge-tts fallback: free, no quota. Plain text only (see EDGE_VOICES)."""
+        voice = EDGE_VOICES.get(language, EDGE_VOICES["en"])
         try:
-            communicate = edge_tts.Communicate(ssml, voice)
+            communicate = edge_tts.Communicate(text, voice)
             audio = bytearray()
             async for chunk in communicate.stream():
                 if chunk["type"] == "audio":
