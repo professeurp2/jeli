@@ -676,7 +676,10 @@ class Waha:
         chat = {"chatId": message.chat_id}
         language = detect_language(message.text or "")
         by_voice = self.voice is not None and message.reply_by_voice
-        if by_voice:
+        if message.reply_by_voice:
+            # Always strip the voice-request clause so the responder sees the real question,
+            # regardless of whether the voice module is wired up. Without this, "récap,
+            # réponds en vocal" is forwarded intact and the LLM says "je ne peux pas" itself.
             message = dataclasses.replace(message, text=without_voice_request(message.text))
         await asyncio.sleep(reading_delay())
         await self._post_quietly("/api/sendSeen", {**chat, "messageIds": [message.message_id]})
