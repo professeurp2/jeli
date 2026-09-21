@@ -18,16 +18,40 @@ log = logging.getLogger(__name__)
 
 GENERATE_TIMEOUT = 45.0  # Pollinations can be slow on first requests
 
+# Image nouns, articles, and clitic pronouns as named fragments for readability.
+_IMG = r"(?:image|photo|illustration|schéma|schema|dessin|diagramm?e?|visuel|figure|picture|diagram|visual|graphic|chart|infographic)"
+_ART = r"(?:une?\s+|an?\s+|des\s+|the\s+)?"
+# Clitic pronouns that may appear between a verb and an image noun:
+#   - _HCLIT: attached via hyphen (fais-moi, montre-lui)
+#   - _SCLIT: space-separated (crée moi, envoie lui)
+_HCLIT = r"(?:-(?:moi|lui|leur|nous|me|us|them))?"
+_SCLIT = r"(?:\s+(?:moi|lui|leur|nous|me|us|them))*"
+# Any standard or curly apostrophe (not a raw string so \u escapes are interpreted)
+_APO = "[''‘’‛]"
+
 IMAGE_REQUEST = re.compile(
-    r"\b(?:génère?|genere?|générer|generer|crée?|créer|dessine?|montre?|illustre?|illustrer|fais\s+une?|make|draw|show|create|generate|produce)\s+(?:une?\s+|an?\s+)?(?:image|photo|illustration|schéma|schema|dessin|diagramm?e?|visuel|figure|picture|diagram|visual|graphic|chart|infographic)\b"
-    r"|\bimage\s+(?:de|d[''‛]|du|des|of|about|showing|depicting)\b"
-    r"|\bmontre[- ]moi\s+(?:une?\s+)?(?:image|photo|illustration|schéma|dessin|diagramme|visuel)\b"
-    r"|\bshow\s+me\s+(?:a\s+|an\s+)?(?:image|picture|diagram|visual|chart|illustration)\b"
-    r"|\bpar une? (?:image|photo|illustration|schéma|schema|dessin|diagramme?|visuel)\b"
-    r"|\bavec une? (?:image|photo|illustration|schéma|schema|dessin|diagramme?|visuel)\b"
-    r"|\brepond[sz]?\s+(?:(?:moi|lui|leur)\s+)?(?:en|par)\s+(?:image|photo|visuel|illustration|schéma)\b"
-    r"|\bwith (?:an? )?(?:image|picture|diagram|visual|chart|illustration)\b"
-    r"|\bin (?:image|visual|diagram|picture) form\b",
+    # Core: trigger verb + optional clitics (hyphen or space) + space + optional article + image noun
+    rf"\b(?:génère?|générer|genere?|generer"
+    rf"|crée?|créer|cree?|creer"
+    rf"|dessine?|dessiner"
+    rf"|montre?|montrer"
+    rf"|illustre?|illustrer"
+    rf"|fais|faire"
+    rf"|envoie?|envoyer"
+    rf"|partage?|partager"
+    rf"|make|draw|show|create|generate|produce|send|share|visualize?)"
+    rf"\b{_HCLIT}{_SCLIT}\s+{_ART}{_IMG}\b"
+    # "image de/of X"
+    rf"|\b{_IMG}\s+(?:de|d{_APO}|du|des|of|about|showing|depicting)\b"
+    # "par/avec/with (une) image"
+    rf"|\b(?:par|avec|with)\s+{_ART}{_IMG}\b"
+    # "répond par/en image"
+    rf"|\brepond[sz]?\s+{_HCLIT}{_SCLIT}\s+(?:en|par)\s+{_ART}{_IMG}\b"
+    rf"|\brepond[sz]?\s+(?:en|par)\s+{_ART}{_IMG}\b"
+    # "sous forme d'image" / "sous forme d'une image" / "sous forme visuelle"
+    rf"|\bsous\s+forme\s+(?:d{_APO}(?:une?\s+)?)?(?:{_IMG}|visuelle?)\b"
+    # "in image/visual form"
+    rf"|\bin\s+(?:image|visual|diagram|picture)\s+form\b",
     re.IGNORECASE,
 )
 
