@@ -193,6 +193,58 @@ create table if not exists jeli.poll_votes (
     primary key (poll_id, voter)
 );
 
+-- Keyword search with French and English stemming ("échéances" finds "échéance"), next to the
+-- semantic one. Replaces the earlier 'simple' configuration; the column is regenerated at once.
+alter table jeli.chunks drop column if exists search;
+alter table jeli.chunks add column search tsvector generated always as
+    (to_tsvector('french', content) || to_tsvector('english', content)) stored;
+create index if not exists chunks_search on jeli.chunks using gin (search);
+
+-- Exchanges with members, so that Jeli follows a conversation across restarts and deployments.
+-- Private ones are kept one day at most (for the thread), never indexed.
+create table if not exists jeli.conversations (
+    id         bigint generated always as identity primary key,
+    chat_id    text not null,
+    member_key text not null,
+    at         timestamptz not null default now(),
+    is_private boolean not null default false,
+    message    text not null,
+    reply      text not null,
+    sources    jsonb not null default '[]'::jsonb
+);
+create index if not exists conversations_chat_member_at on jeli.conversations (chat_id, member_key, at desc);
+
+-- The community brief (app/answer/brief.py): Jeli's general knowledge of the group, rewritten
+-- every few hours from the documents, the organisers' announcements and the session recaps.
+create table if not exists jeli.briefs (
+    key        text primary key,
+    text       text not null,
+    updated_at timestamptz not null default now()
+);
+
+-- What Jeli knows of each member: name as shown, the language they write in, their own
+-- introduction and recent topics (notes). No phone number beyond the key WhatsApp already uses.
+create table if not exists jeli.members (
+    member_key text primary key,
+    name       text not null default '',
+    language   text not null default '',
+    notes      jsonb not null default '{}'::jsonb,
+    first_seen timestamptz not null default now(),
+    last_seen  timestamptz not null default now()
+);
+
+-- Members' verdicts on Jeli's answers: a 👍/👎 reaction on one of its messages, or a correction.
+create table if not exists jeli.feedback (
+    id         bigint generated always as identity primary key,
+    at         timestamptz not null default now(),
+    chat_id    text not null default '',
+    message_id text not null default '',
+    verdict    text not null,  -- good, bad, correction
+    question   text not null default '',
+    answer     text not null default ''
+);
+create index if not exists feedback_at on jeli.feedback (at desc);
+
 -- Least-privilege application role: data access to the jeli schema only.
 do $$
 begin

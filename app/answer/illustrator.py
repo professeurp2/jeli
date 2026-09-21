@@ -18,13 +18,15 @@ from app.answer.llm import LLM, LLMUnavailable
 log = logging.getLogger(__name__)
 
 # Gemini native image generation: works on standard (free) API keys.
-# The preview model lives on v1alpha, not v1beta (SDK default) — tried with dedicated clients.
-# Fallback: gemini-2.0-flash-exp also supports IMAGE modality on v1beta.
+# Checked on the key on 21 Sep 2026 (ListModels): the gemini-2.0 image previews used before no
+# longer exist (404 in production); these do. app/answer/models_check.py logs at startup which
+# of them the key can still see.
 _GEMINI_IMAGE_CANDIDATES = [
-    ("gemini-2.0-flash-preview-image-generation", "v1alpha"),
-    ("gemini-2.0-flash-exp-image-generation", "v1alpha"),
-    ("gemini-2.0-flash-exp", "v1beta"),
+    ("gemini-3.1-flash-image", "v1beta"),
+    ("gemini-2.5-flash-image", "v1beta"),
+    ("gemini-3.1-flash-lite-image", "v1beta"),
 ]
+IMAGE_MODELS = [model for model, _ in _GEMINI_IMAGE_CANDIDATES]
 GEMINI_IMAGE_TIMEOUT = 30.0
 # Imagen 3: higher quality but requires a paid / Vertex AI API key — tried as secondary.
 IMAGEN_MODEL = "imagen-3.0-generate-001"

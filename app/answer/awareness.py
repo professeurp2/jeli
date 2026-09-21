@@ -18,7 +18,8 @@ from app.answer.citations import display_author, short_day
 from app.answer.intents import SESSION_WORD
 from app.answer.language import TEXTS
 from app.answer.llm import LLM, LLMUnavailable
-from app.answer.prompts import LANGUAGES, PROGRAMMES
+from app.answer.persona import PERSONA, background
+from app.answer.prompts import LANGUAGES
 from app.answer.recaps import match_recordings
 from app.kb.store import Store
 from app.models import Recording
@@ -27,21 +28,18 @@ log = logging.getLogger(__name__)
 
 WINDOW_DONE = re.compile(r"–(\d+(?::\d+){1,2}):")
 
-SYSTEM = f"""\
-You are Jeli, the memory assistant of a WhatsApp community: the UniPods METI AI Innovation Programme,
-cohort 1. A member asked something Jeli found nothing about in the groups' messages, the recorded
-sessions or the shared documents.
-{PROGRAMMES}
-
-Write Jeli's reply, in two or three short, warm sentences, like a helpful member — never a bare
-"I don't know". Say plainly that the groups haven't covered it (or not yet). Then add only what is
-useful from Jeli's state below: a matching session being transcribed (ready soon), scheduled (when),
-or shared as a link Jeli cannot watch (give the link); the day Jeli's memory of the groups stops at,
-if the question is about something recent; a relevant document or deadline. End with one next step:
-ask the organisers, share the recording in the group, or try /search with a keyword. For a general
-question unrelated to the community, say kindly that Jeli only knows what was shared in it.
-Never invent anything about the programme, sessions, people or dates: use only the state given.
-Plain text that reads well on WhatsApp: no headings, no lists.
+SYSTEM = PERSONA + """
+Your task now: a member asked something you found nothing about in the groups' messages, the
+recorded sessions or the shared documents. Write your reply, in one to three short sentences —
+never a bare "I don't know". Say plainly that the groups haven't covered it (or not yet). Then add
+only what is useful from your state below: a matching session being transcribed (ready soon),
+scheduled (when), or shared as a link you cannot watch (give the link); the day your memory of the
+groups stops at, if the question is about something recent; a relevant document or deadline. End
+with one next step: ask the organisers, share the recording in the group, or try /search with a
+keyword. For a general question unrelated to the community, say kindly that you only know what was
+shared in it. If the background brief answers a general question about the community (what a
+programme is, who runs it), answer from it in one sentence instead of saying you don't know.
+Never invent anything about the programme, sessions, people or dates: use only what is given.
 """
 
 
@@ -65,8 +63,9 @@ class Awareness:
         self.llm = llm
         self.sessions = sessions
         self.chat_labels = chat_labels or {}
+        self.brief = ""  # the community brief, background for the explanation
 
-    async def explain(self, question: str, language: str, quotes: str = "") -> str:
+    async def explain(self, question: str, language: str, quotes: str = "", member: str = "") -> str:
         texts = TEXTS[language]
         # A session being transcribed that the question is about: say so, no model needed.
         jobs = self.sessions.in_progress() if self.sessions else []
@@ -84,9 +83,10 @@ class Awareness:
         if self.llm is None:
             return texts["dont_know"] + (f"\n\n{quotes}" if quotes else "")
         prompt = (
-            f"Jeli's state:\n{await self.state()}\n\n"
+            background(self.brief, await self.state(), member)
+            + "\n\n"
             + (f"The closest things the groups said (not an answer):\n{quotes}\n\n" if quotes else "")
-            + f"Question (answer in {LANGUAGES[language]}):\n{question}"
+            + f"Question (answer in {LANGUAGES.get(language, 'English')}):\n{question}"
         )
         try:
             explanation = await self.llm.generate(prompt, Explanation, system=SYSTEM, timeout=6, temperature=0.3, attempts=2)

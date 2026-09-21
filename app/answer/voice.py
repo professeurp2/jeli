@@ -24,7 +24,10 @@ log = logging.getLogger(__name__)
 
 # Gemini TTS — primary TTS engine: more natural, emotionally expressive, instruction-following.
 # Uses the same API key pool as the LLM (existing rotation in LLM._clients).
-GEMINI_TTS_MODEL = "gemini-2.5-flash-preview-tts"
+# Tried in order on every key (checked on the key on 21 Sep 2026: both exist; the free tier
+# allows about 10 requests a day per key and model, hence the rotation and the edge-tts fallback).
+GEMINI_TTS_MODELS = ["gemini-3.1-flash-tts-preview", "gemini-2.5-flash-preview-tts"]
+GEMINI_TTS_MODEL = GEMINI_TTS_MODELS[0]
 GEMINI_TTS_VOICES = {"fr": "Aoede", "en": "Aoede"}  # warm, expressive multilingual voice
 GEMINI_TTS_TIMEOUT = 20.0
 
@@ -230,22 +233,19 @@ class Voice:
                 )
             ),
         )
-        for idx, client in enumerate(self.llm._clients):
-            try:
-                response = await asyncio.wait_for(
-                    client.aio.models.generate_content(
-                        model=GEMINI_TTS_MODEL,
-                        contents=prompt,
-                        config=config,
-                    ),
-                    timeout=GEMINI_TTS_TIMEOUT,
-                )
-                if response.candidates:
-                    pcm = response.candidates[0].content.parts[0].inline_data.data
-                    if pcm:
-                        return wav(pcm)
-            except Exception as error:
-                log.warning("Gemini TTS key %d failed: %s: %s", idx, type(error).__name__, error)
+        for model in GEMINI_TTS_MODELS:
+            for idx, client in enumerate(self.llm._clients):
+                try:
+                    response = await asyncio.wait_for(
+                        client.aio.models.generate_content(model=model, contents=prompt, config=config),
+                        timeout=GEMINI_TTS_TIMEOUT,
+                    )
+                    if response.candidates:
+                        pcm = response.candidates[0].content.parts[0].inline_data.data
+                        if pcm:
+                            return wav(pcm)
+                except Exception as error:
+                    log.warning("Gemini TTS %s key %d failed: %s: %s", model, idx, type(error).__name__, error)
         return None
 
     async def _speak_edge(self, text: str, language: str) -> bytes | None:

@@ -16,7 +16,7 @@ from app.answer.catchup import _day
 from app.answer.citations import display_author, ignored_keys, is_ignored
 from app.answer.language import TEXTS
 from app.answer.llm import LLM
-from app.answer.prompts import PROGRAMMES
+from app.answer.persona import PROGRAMMES
 from app.kb.indexer import DOCUMENT_PREFIX, RECORDING_PREFIX
 from app.kb.store import Store
 from app.models import Deadline, StoredMessage

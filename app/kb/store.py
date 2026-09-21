@@ -23,6 +23,10 @@ on conflict (id) do nothing
 """
 
 # Hybrid retrieval: semantic neighbours and keyword matches, merged by reciprocal rank fusion.
+# Keywords are matched with French and English stemming ("échéances" finds "échéance"); the
+# chunks' search column is built the same way (db/schema.sql). Recent conversations get a small
+# bonus (a quarter more at most, fading over a month): members mostly ask about the latest
+# announcement, and an older repeat of the same words must not win by rank alone.
 SEARCH = """
 with semantic as (
     select id, row_number() over (order by embedding <=> %(embedding)s::vector) as rank
@@ -32,7 +36,7 @@ with semantic as (
 ),
 keyword as (
     select id, row_number() over (order by ts_rank_cd(search, query) desc) as rank
-    from jeli.chunks, to_tsquery('simple', %(keywords)s) as query
+    from jeli.chunks, (select to_tsquery('french', %(keywords)s) || to_tsquery('english', %(keywords)s) || to_tsquery('simple', %(keywords)s)) as q(query)
     where search @@ query
     order by ts_rank_cd(search, query) desc
     limit %(candidates)s
@@ -42,12 +46,14 @@ fused as (
     from (select * from semantic union all select * from keyword) as ranked
     group by id
 )
-select c.id, c.chat_id, c.started_at, c.ended_at, c.authors, c.message_ids, c.content, f.score,
+select c.id, c.chat_id, c.started_at, c.ended_at, c.authors, c.message_ids, c.content,
+       f.score * (1 + %(recency)s * exp(-greatest(extract(epoch from (now() - c.ended_at)), 0) / (86400.0 * 30))) as score,
        1 - (c.embedding <=> %(embedding)s::vector) as similarity
 from fused as f join jeli.chunks as c using (id)
-order by f.score desc
+order by 8 desc
 limit %(limit)s
 """
+RECENCY_BONUS = 0.25
 
 
 @dataclass(frozen=True)
@@ -667,7 +673,10 @@ class Store:
     async def search(
         self, embedding: Sequence[float], keywords: str | None, limit: int = 5, candidates: int = 20
     ) -> list[SearchHit]:
-        params = {"embedding": list(embedding), "keywords": keywords, "limit": limit, "candidates": candidates}
+        params = {
+            "embedding": list(embedding), "keywords": keywords or "", "limit": limit, "candidates": candidates,
+            "recency": RECENCY_BONUS,
+        }
         async with self._pool.connection() as conn:
             rows = await (await conn.execute(SEARCH, params)).fetchall()
         return [
@@ -684,6 +693,100 @@ class Store:
             )
             for row in rows
         ]
+
+    # --- Conversations, kept across restarts -----------------------------------------------------
+
+    async def add_turn(self, chat_id: str, member_key: str, is_private: bool, message: str, reply: str, sources=()) -> None:
+        """One exchange with a member. Private ones are kept a day at most, for the thread only."""
+        async with self._pool.connection() as conn:
+            await conn.execute(
+                "insert into jeli.conversations (chat_id, member_key, is_private, message, reply, sources) "
+                "values (%s, %s, %s, %s, %s, %s)",
+                (chat_id, member_key, is_private, message[:2000], reply[:4000], Jsonb(list(sources))),
+            )
+            await conn.execute("delete from jeli.conversations where is_private and at < now() - interval '1 day'")
+
+    async def turns(self, chat_id: str, member_key: str, since: datetime, limit: int = 8) -> list[dict]:
+        """The latest exchanges of a member in a chat since a moment, oldest first."""
+        async with self._pool.connection() as conn:
+            rows = await (
+                await conn.execute(
+                    "select at, message, reply, sources from jeli.conversations "
+                    "where chat_id = %s and member_key = %s and at >= %s order by id desc limit %s",
+                    (chat_id, member_key, since, limit),
+                )
+            ).fetchall()
+        return list(reversed(rows))
+
+    async def forget_turns(self, member_key: str) -> None:
+        async with self._pool.connection() as conn:
+            await conn.execute("delete from jeli.conversations where member_key = %s", (member_key,))
+
+    # --- The community brief, and what Jeli knows of each member ---------------------------------
+
+    async def save_brief(self, key: str, text: str) -> None:
+        async with self._pool.connection() as conn:
+            await conn.execute(
+                "insert into jeli.briefs (key, text) values (%s, %s) on conflict (key) "
+                "do update set text = excluded.text, updated_at = now()",
+                (key, text),
+            )
+
+    async def load_brief(self, key: str) -> dict | None:
+        async with self._pool.connection() as conn:
+            return await (await conn.execute("select text, updated_at from jeli.briefs where key = %s", (key,))).fetchone()
+
+    async def member(self, member_key: str) -> dict | None:
+        async with self._pool.connection() as conn:
+            return await (
+                await conn.execute(
+                    "select member_key, name, language, notes, first_seen, last_seen from jeli.members where member_key = %s",
+                    (member_key,),
+                )
+            ).fetchone()
+
+    async def remember_member(self, member_key: str, name: str = "", language: str = "", notes: dict | None = None) -> None:
+        """What Jeli learned of a member: their name as shown, the language they write in, notes
+        (their own introduction, what they asked lately). Empty values keep the old ones."""
+        async with self._pool.connection() as conn:
+            await conn.execute(
+                "insert into jeli.members (member_key, name, language, notes) values (%s, %s, %s, %s) "
+                "on conflict (member_key) do update set "
+                "name = case when excluded.name <> '' then excluded.name else jeli.members.name end, "
+                "language = case when excluded.language <> '' then excluded.language else jeli.members.language end, "
+                "notes = jeli.members.notes || excluded.notes, last_seen = now()",
+                (member_key, name[:80], language[:8], Jsonb(notes or {})),
+            )
+
+    async def forget_member_profile(self, member_key: str) -> None:
+        async with self._pool.connection() as conn:
+            await conn.execute("delete from jeli.members where member_key = %s", (member_key,))
+
+    # --- Members' feedback on Jeli's answers ------------------------------------------------------
+
+    async def record_feedback(self, chat_id: str, message_id: str, verdict: str, question: str = "", answer: str = "") -> None:
+        async with self._pool.connection() as conn:
+            await conn.execute(
+                "insert into jeli.feedback (chat_id, message_id, verdict, question, answer) values (%s, %s, %s, %s, %s)",
+                (chat_id, message_id, verdict[:20], question[:1000], answer[:4000]),
+            )
+
+    async def feedback_since(self, since: datetime, limit: int = 200) -> list[dict]:
+        async with self._pool.connection() as conn:
+            return await (
+                await conn.execute(
+                    "select at, chat_id, verdict, question, answer from jeli.feedback where at >= %s order by id desc limit %s",
+                    (since, limit),
+                )
+            ).fetchall()
+
+    async def drop_chunks(self, chat_id: str | None = None) -> int:
+        """Forget the chunks (not the messages) of one chat or all: they are indexed again at the
+        next run of the memory activity, with the current chunk format."""
+        condition, params = ("where chat_id = %s", (chat_id,)) if chat_id else ("", ())
+        async with self._pool.connection() as conn, conn.transaction():
+            await conn.execute(f"update jeli.messages set chunk_id = null {condition}", params)
+            return (await conn.execute(f"delete from jeli.chunks {condition}", params)).rowcount
 
     async def forget(self, chat_id: str | None = None) -> tuple[int, int]:
         """Delete stored messages and chunks (and the recording, for a recording's id), for one chat

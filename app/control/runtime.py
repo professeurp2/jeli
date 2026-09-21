@@ -59,6 +59,11 @@ FIELDS = {
         # Organisers, beyond the groups' admins (names or numbers).
         Field("organisers", "list", lambda s: s.organiser_list),
         Field("answer_min_similarity", "float", lambda s: s.answer_min_similarity, 0.5, 0.8),
+        # Sources under factual answers: one verified source ("one"), kept for "source?" only
+        # ("ask"), or never ("off").
+        Field("sources", "choice", lambda s: "one", choices=("one", "ask", "off")),
+        # The community brief, rewritten every few hours from documents, announcements and recaps.
+        Field("enabled.brief", "bool", lambda s: True),
         Field("duplicate_detection", "bool", lambda s: s.duplicate_detection),
         Field("duplicate_min_similarity", "float", lambda s: s.duplicate_min_similarity, 0.6, 0.9),
         Field("duplicate_replies_per_hour", "int", lambda s: s.duplicate_replies_per_hour, 1, 20),

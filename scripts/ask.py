@@ -14,12 +14,13 @@ from app.kb.store import Store
 from scripts.common import require, run
 
 
-def build_answerer(settings: Settings, store: Store) -> Answerer:
-    key = require(settings.gemini_api_key, "GEMINI_API_KEY")
+def build_answerer(settings: Settings, store: Store, llm: LLM | None = None) -> Answerer:
+    keys = settings.api_key_list
+    require(keys[0] if keys else "", "GEMINI_API_KEY")
     return Answerer(
         store,
-        Embedder(key),
-        LLM(key, settings.answer_models),
+        Embedder(keys),
+        llm or LLM(keys, settings.answer_models),
         min_similarity=settings.answer_min_similarity,
         ignored_authors=settings.ignored_author_list,
         chat_labels=settings.chat_label_map,

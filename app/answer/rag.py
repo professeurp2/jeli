@@ -2,13 +2,18 @@
 
 1. Retrieve the conversation chunks closest to the question — searched with each of its queries
    (the question, its standalone rewording, English and member-language search queries), merged.
+   The search on the raw message starts while the message is still being understood.
 2. If even the best one is not similar enough, there is no answer in the groups: Jeli explains what it
    knows of the situation instead (awareness.py) — never a bare "I don't know".
 3. Otherwise give the model the chunks, rebuilt from their messages (minus ignored authors such as
-   other bots, with phone numbers masked), and ask for an answer that cites them.
-4. Keep only answers that cite at least one real excerpt, and point to the source the WhatsApp way:
-   reply to the source message itself when it was said in this chat (WhatsApp quotes it above the
-   answer; a tap jumps to it), otherwise quote it (a "> " block with its author and day).
+   other bots, with phone numbers masked), each message numbered, with the community brief as
+   background, and ask for an answer that says which messages state it.
+4. Keep only answers whose sources are real: a cited message must share words, a number or a date
+   with the answer (measured on 21 Sep: attribution by word overlap on whole chunks produced
+   "random" references, e.g. a greeting cited under a question about languages, and the sources
+   were switched off altogether). One verified source is then shown the WhatsApp way — a reply to
+   the source message when it was said in this chat, otherwise a short quote — for factual answers
+   only; the rest stays available for "source?".
 5. If every model is down or out of quota, still quote where the group talked about it.
 
 Call recordings and documents are searched like conversations; their quotes give the moment in the
@@ -37,10 +42,10 @@ from app.answer.citations import (
     quote,
     recording_quote,
     short_day,
-    snippet,
 )
 from app.answer.language import TEXTS, detect_language
 from app.answer.llm import LLM, LLMUnavailable
+from app.answer.persona import background
 from app.answer.prompts import DUPLICATE_SYSTEM, SYSTEM, build_prompt
 from app.ingest.transcribe import format_offset
 from app.kb.embeddings import Embedder
@@ -51,23 +56,47 @@ from app.models import Document, IncomingMessage, Recording, Reply, StoredMessag
 
 log = logging.getLogger(__name__)
 
-RETRIEVED_CHUNKS = 6  # excerpts given to the model
-CANDIDATE_CHUNKS = 12  # retrieved, before leaving out ignored authors
-QUOTES_SHOWN = 0  # citations désactivées — trop souvent hors sujet
+RETRIEVED_CHUNKS = 8  # excerpts given to the model
+CANDIDATE_CHUNKS = 16  # retrieved, before leaving out ignored authors and near-duplicates
+QUOTES_SHOWN = 1  # verified sources shown under a factual answer (sources_mode "one")
 # The model found nothing, yet the group discussed something this close: show it rather than a
 # flat "I don't know".
 NEAR_SIMILARITY = 0.75
 NAMES_TTL_SECONDS = 600
+CACHE_SECONDS = 600  # the same question asked again (a jury in a row) costs one model call
+SOURCE_MODES = ("one", "ask", "off")
+CONTENT_WORD = re.compile(r"[^\W\d_]{4,}")
+TOKEN_NUMBER = re.compile(r"\d[\d:h.,/-]*\d|\d")
+STOPWORDS = set(
+    """
+    that this with from have what when where which there their they them been were will would could
+    should about also into over than then some more most very just like only such each other after
+    before because dans pour avec sont cette cela nous vous elles leur leurs mais donc tout tous
+    toute toutes comme plus aussi entre sans même être avoir fait faire
+    """.split()
+)
 
 
 class AlreadyAnswered(BaseModel):
     already_answered: bool
     answer: str
-    sources: list[int]
+    sources: list[str] = []
 
 
 def _words(text: str) -> set[str]:
     return {w for w in re.findall(r"\w+", text.lower()) if len(w) > 3}
+
+
+def _content_words(text: str) -> set[str]:
+    return {w.lower() for w in CONTENT_WORD.findall(text)} - STOPWORDS
+
+
+def supports(source: str, answer: str) -> bool:
+    """A cited message really states something of the answer: they share a content word (names,
+    topics — often the same across languages) or a number, time or date."""
+    shared_words = _content_words(source) & _content_words(answer)
+    shared_numbers = set(TOKEN_NUMBER.findall(source)) & set(TOKEN_NUMBER.findall(answer))
+    return bool(shared_words) or bool(shared_numbers)
 
 
 def _display_label(raw: str) -> str:
@@ -75,6 +104,14 @@ def _display_label(raw: str) -> str:
     if not raw or ("_" in raw and " " not in raw):
         return ""
     return raw
+
+
+def parse_source(value) -> tuple[int, int | None] | None:
+    """"3.2" → (3, 2); "3" → (3, None); anything else → None."""
+    match = re.fullmatch(r"\s*\[?(\d+)(?:\.(\d+))?\]?\s*", str(value))
+    if not match:
+        return None
+    return int(match.group(1)), int(match.group(2)) if match.group(2) else None
 
 
 @dataclass(frozen=True)
@@ -109,17 +146,18 @@ class Excerpt:
     def name(self, message: StoredMessage) -> str:
         return self.names.get(author_key(message.author)) or display_author(message.author)
 
-    def _line(self, message: StoredMessage) -> str:
+    def _line(self, message: StoredMessage, position: int) -> str:
+        tag = f"[{self.number}.{position}]"
         if self.recording:
-            return f"[{format_offset(message.sent_at - self.recording.recorded_at)}] {message.author}: {message.text}"
+            return f"{tag} [{format_offset(message.sent_at - self.recording.recorded_at)}] {message.author}: {message.text}"
         if self.document:
-            return f"[page {document_page(message.sent_at, self.document.shared_at)}] {message.text}"
+            return f"{tag} [page {document_page(message.sent_at, self.document.shared_at)}] {message.text}"
         role = " (organiser)" if self.by_organiser(message) else ""
-        return f"{self.name(message)}{role}: {with_tally(message.text, self.tallies.get(message.id))}"
+        return f"{tag} [{message.sent_at:%d %b %H:%M}] {self.name(message)}{role}: {with_tally(message.text, self.tallies.get(message.id))}"
 
     @property
     def lines(self) -> list[str]:
-        return [self._line(m) for m in self.messages]
+        return [self._line(m, position) for position, m in enumerate(self.messages, 1)]
 
     def for_prompt(self) -> str:
         if self.recording:
@@ -132,19 +170,26 @@ class Excerpt:
             header = f"[{self.number}] {label} · {self.started_at:%d %B %Y}"
         return header + "\n" + "\n".join(self.lines)
 
+    def message_at(self, position: int | None, words: set[str]) -> StoredMessage:
+        """The message a source id points at; without a position, the one that says most of the answer."""
+        if position is not None and 1 <= position <= len(self.messages):
+            return self.messages[position - 1]
+        return self.best_message(words)
+
     def best_message(self, words: set[str]) -> StoredMessage:
         """The message that says what the answer says: most words in common."""
         return max(self.messages, key=lambda m: len(words & _words(m.text)))
 
-    def place(self, words: set[str]) -> tuple:
-        """Where the quote comes from: two quotes from the same place are one."""
-        message = self.best_message(words)
+    def place_of(self, message: StoredMessage) -> tuple:
         if self.document:
             return (self.chat_id, document_page(message.sent_at, self.document.shared_at))
         return (message.id,)
 
-    def quote(self, words: set[str]) -> str:
-        message = self.best_message(words)
+    def place(self, words: set[str]) -> tuple:
+        """Where the quote comes from: two quotes from the same place are one."""
+        return self.place_of(self.best_message(words))
+
+    def quote_message(self, message: StoredMessage, words: set[str]) -> str:
         if self.recording:
             return recording_quote(self.recording, message.sent_at - self.recording.recorded_at, message.author, message.text)
         if self.document:
@@ -154,6 +199,9 @@ class Excerpt:
         clean = _display_label(self.chat_label)
         label = f" · {clean}" if clean else ""
         return quote(f"*{self.name(message)}*{role}{label}, {short_day(message.sent_at)}", best_snippet(message.text, words))
+
+    def quote(self, words: set[str]) -> str:
+        return self.quote_message(self.best_message(words), words)
 
 
 def distinct(excerpts: list[Excerpt], words: set[str]) -> list[Excerpt]:
@@ -169,7 +217,8 @@ def distinct(excerpts: list[Excerpt], words: set[str]) -> list[Excerpt]:
 
 def merge(results: list[list[SearchHit]], limit: int) -> list[SearchHit]:
     """Hits of several queries in one list: a chunk found by several queries ranks higher (fused
-    ranks), and keeps its best similarity."""
+    ranks), and keeps its best similarity. Near-duplicate chunks (mostly the same messages — a
+    history imported twice) count once."""
     scores: dict[int, float] = {}
     best: dict[int, SearchHit] = {}
     for hits in results:
@@ -178,9 +227,30 @@ def merge(results: list[list[SearchHit]], limit: int) -> list[SearchHit]:
             if hit.chunk_id not in best or hit.similarity > best[hit.chunk_id].similarity:
                 best[hit.chunk_id] = hit
     ordered = sorted(best.values(), key=lambda hit: scores[hit.chunk_id], reverse=True)
+    ordered = _without_near_duplicates(ordered)
     closest = sorted(ordered, key=lambda hit: hit.similarity, reverse=True)[:GUARANTEED_SEMANTIC]
     chosen = (closest + [hit for hit in ordered if hit not in closest])[:limit]
     return [hit for hit in ordered if hit in chosen]
+
+
+def _without_near_duplicates(hits: list[SearchHit]) -> list[SearchHit]:
+    kept: list[SearchHit] = []
+    seen: list[set[str]] = []
+    texts: set[str] = set()
+    for hit in hits:
+        ids = set(hit.message_ids)
+        # The content without its header (the header names the chat, which differs between two
+        # imports of the same conversation).
+        body = " ".join(hit.content.split("\n", 1)[-1].split())[:400] if hit.content else ""
+        duplicate = any(
+            (ids and other and len(ids & other) / min(len(ids), len(other)) > 0.5) for other in seen
+        ) or (bool(body) and body in texts)
+        if not duplicate:
+            kept.append(hit)
+            seen.append(ids)
+            if body:
+                texts.add(body)
+    return kept
 
 
 class Answerer:
@@ -192,6 +262,7 @@ class Answerer:
         min_similarity: float,
         ignored_authors: list[str] = (),
         chat_labels: dict[str, str] | None = None,
+        clock=time.monotonic,
     ):
         self.store = store
         self.embedder = embedder
@@ -205,11 +276,28 @@ class Answerer:
         # Keys of the organisers (set from the settings): their announcements rank first.
         self.organisers: set[str] = set()
         self.known_names: dict[str, str] = {}  # number → name, given by the team
+        self.brief = ""  # the community brief (app/answer/brief.py), background for every answer
+        # "one": one verified source under factual answers; "ask": kept for "source?" only; "off".
+        self.sources_mode = "one"
+        self._clock = clock
+        self._cache: dict[tuple[str, str], tuple[float, str, list, bool]] = {}
 
-    async def _search(self, queries: list[str]) -> list[SearchHit]:
+    async def _search(self, queries: list[str], prefetched: list[SearchHit] | None = None) -> list[SearchHit]:
         queries = list(dict.fromkeys(q for q in queries if q.strip()))[:4]
         results = await asyncio.gather(*(search(self.store, self.embedder, q, limit=CANDIDATE_CHUNKS) for q in queries))
-        return merge(list(results), CANDIDATE_CHUNKS)
+        results = list(results) + ([prefetched] if prefetched else [])
+        return merge(results, CANDIDATE_CHUNKS)
+
+    async def prefetch(self, text: str) -> list[SearchHit]:
+        """The search on the raw message, started while the message is still being understood."""
+        try:
+            return await search(self.store, self.embedder, text, limit=CANDIDATE_CHUNKS)
+        except Exception:
+            log.exception("Prefetch failed")
+            return []
+
+    def _cache_key(self, question: str, chat_id: str | None) -> tuple[str, str]:
+        return " ".join(re.findall(r"\w+", question.lower())), chat_id or ""
 
     async def answer(
         self,
@@ -218,38 +306,82 @@ class Answerer:
         chat_id: str | None = None,
         asker_id: str | None = None,
         queries: list[str] = (),
+        language: str | None = None,
+        member: str = "",
+        prefetched: list[SearchHit] | None = None,
     ) -> str:
-        language = detect_language(question)
+        language = language or detect_language(question)
         texts = TEXTS[language]
-        hits = await self._search([question, *queries])
+        key = self._cache_key(question, chat_id)
+        cached = self._cache.get(key)
+        if cached and self._clock() - cached[0] < CACHE_SECONDS:
+            _, answer, cited, from_background = cached
+            return self._reply(answer, cited, chat_id, asker_id, factual=not from_background)
+
+        hits = await self._search([question, *queries], prefetched)
+        state = await self._state()
+        context = background(self.brief, state, member)
         if not hits or max(hit.similarity for hit in hits) < self.min_similarity:
-            return await self._no_answer(question, language)
+            excerpts = []
+        else:
+            excerpts = await self._excerpts(hits)
+        if not excerpts and not self.brief:
+            return await self._no_answer(question, language, member=member)
 
-        excerpts = await self._excerpts(hits)
-        if not excerpts:
-            return await self._no_answer(question, language)
-
-        prompt = build_prompt(question, display_author(asker), [e.for_prompt() for e in excerpts], language)
+        prompt = build_prompt(question, display_author(asker), [e.for_prompt() for e in excerpts], language, context=context)
         try:
             generated = await self.llm.answer(SYSTEM, prompt)
         except LLMUnavailable:
             log.error("No answer model available: quoting the closest sources instead")
-            return self._quotes(texts["fallback"], excerpts, question)
+            if excerpts:
+                return self._quotes(texts["fallback"], excerpts, question, shown=2)
+            return await self._no_answer(question, language, member=member)
 
-        cited = [e for e in excerpts if e.number in set(generated.sources)]
-        if not generated.answered or not cited or not generated.answer.strip():
-            near = max(hit.similarity for hit in hits) >= NEAR_SIMILARITY
-            return await self._no_answer(question, language, excerpts if near else [])
-        return self._reply(generated.answer.strip(), cited, chat_id, asker_id)
+        answer = generated.answer.strip()
+        cited = self._verified(generated.sources, excerpts, answer)
+        if not generated.answered or not answer or (not cited and not generated.from_background):
+            near = bool(hits) and max(hit.similarity for hit in hits) >= NEAR_SIMILARITY
+            return await self._no_answer(question, language, excerpts if near else [], member=member)
+        self._cache[key] = (self._clock(), answer, cited, generated.from_background and not cited)
+        return self._reply(answer, cited, chat_id, asker_id, factual=bool(cited))
 
-    async def _no_answer(self, question: str, language: str, near: list[Excerpt] = ()) -> str:
+    async def _state(self) -> str:
+        state = getattr(self, "state", None)
+        if state is None:
+            return ""
+        try:
+            return await state()
+        except Exception:
+            log.exception("Could not read Jeli's state")
+            return ""
+
+    def _verified(self, sources, excerpts: list[Excerpt], answer: str) -> list[tuple[Excerpt, StoredMessage]]:
+        """The (excerpt, message) pairs the model cited that really state something of the answer."""
+        by_number = {e.number: e for e in excerpts}
+        words = _words(answer)
+        cited: list[tuple[Excerpt, StoredMessage]] = []
+        seen: set[tuple] = set()
+        for value in sources:
+            parsed = parse_source(value)
+            if not parsed or parsed[0] not in by_number:
+                continue
+            excerpt = by_number[parsed[0]]
+            message = excerpt.message_at(parsed[1], words)
+            place = excerpt.place_of(message)
+            if place in seen or not supports(message.text, answer):
+                continue
+            seen.add(place)
+            cited.append((excerpt, message))
+        return cited
+
+    async def _no_answer(self, question: str, language: str, near: list[Excerpt] = (), member: str = "") -> str:
         """Not "I don't know" alone: what Jeli knows of the situation, and the closest discussions."""
         texts = TEXTS[language]
         if self.explainer is None:
             return self._quotes(texts["dont_know_near"], list(near), question) if near else texts["dont_know"]
         words = _words(question)
         quotes = "\n\n".join(e.quote(words) for e in distinct(sorted(near, key=lambda e: e.relevance_rank), words)[:QUOTES_SHOWN])
-        return Reply(await self.explainer(question, language, quotes), unanswered=True)
+        return Reply(await self.explainer(question, language, quotes, member=member), unanswered=True)
 
     async def already_answered(
         self, question: str, min_similarity: float, chat_id: str | None = None, asker_id: str | None = None
@@ -266,39 +398,49 @@ class Answerer:
         excerpts = await self._excerpts(hits)
         if not excerpts:
             return None
-        prompt = build_prompt(question, "a member", [e.for_prompt() for e in excerpts], language)
+        prompt = build_prompt(question, "a member", [e.for_prompt() for e in excerpts], language, context=background(self.brief))
         try:
             generated = await self.llm.generate(prompt, AlreadyAnswered, system=DUPLICATE_SYSTEM)
         except LLMUnavailable:
             return None
-        cited = [e for e in excerpts if e.number in set(generated.sources)]
-        if not generated.already_answered or not cited or not generated.answer.strip():
+        answer = generated.answer.strip()
+        cited = self._verified(generated.sources, excerpts, answer)
+        if not generated.already_answered or not cited or not answer:
             return None
-        return self._reply(generated.answer.strip(), cited, chat_id, asker_id, lead=TEXTS[language]["already_covered"] + " ")
+        return self._reply(answer, cited, chat_id, asker_id, lead=TEXTS[language]["already_covered"] + " ", factual=True)
 
     def is_ignored(self, message: StoredMessage | IncomingMessage) -> bool:
         return is_ignored(message, self.ignored)
 
-    def _reply(self, answer: str, cited: list[Excerpt], chat_id: str | None, asker_id: str | None, lead: str = "") -> Reply:
+    def _reply(
+        self,
+        answer: str,
+        cited: list[tuple[Excerpt, StoredMessage]],
+        chat_id: str | None,
+        asker_id: str | None,
+        lead: str = "",
+        factual: bool = True,
+    ) -> Reply:
         """The answer with its sources, as WhatsApp does it — an organiser's announcement first."""
         words = _words(answer)
-        ordered = distinct(sorted(cited, key=lambda e: (not e.has_announcement, e.relevance_rank)), words)
-        first = ordered[0]
-        source = first.best_message(words)
-        if chat_id and source.chat_id == chat_id and source.source == "whatsapp_live":
-            # Said in this very chat: reply to that message, which WhatsApp quotes above the answer
-            # (a tap jumps to it), and mention the member who asked so they get it.
-            mention = f"{mention_tag(asker_id)} " if asker_id and "@" in asker_id else ""
-            others = [e.quote(words) for e in ordered[1:QUOTES_SHOWN]]
-            text = mention + lead + answer + "".join(f"\n\n{q}" for q in others)
-            return Reply(
-                text,
-                reply_to=source.id,
-                quoted=(first.name(source), source.text),
-                mentions=[mention_jid(asker_id)] if mention else [],
-            )
-        quotes = [e.quote(words) for e in ordered[:QUOTES_SHOWN]]
-        return Reply(lead + answer + "".join(f"\n\n{q}" for q in quotes))
+        ordered = sorted(cited, key=lambda pair: (not pair[0].by_organiser(pair[1]), pair[0].relevance_rank))
+        quotes = [excerpt.quote_message(message, words) for excerpt, message in ordered]
+        show = self.sources_mode == "one" and factual
+        if ordered and show:
+            first, source = ordered[0]
+            if chat_id and source.chat_id == chat_id and source.source == "whatsapp_live":
+                # Said in this very chat: reply to that message, which WhatsApp quotes above the
+                # answer (a tap jumps to it), and mention the member who asked so they get it.
+                mention = f"{mention_tag(asker_id)} " if asker_id and "@" in asker_id else ""
+                return Reply(
+                    mention + lead + answer,
+                    reply_to=source.id,
+                    quoted=(first.name(source), source.text),
+                    mentions=[mention_jid(asker_id)] if mention else [],
+                    cited=quotes,
+                )
+            return Reply(lead + answer + "".join(f"\n\n{q}" for q in quotes[:QUOTES_SHOWN]), cited=quotes)
+        return Reply(lead + answer, cited=quotes if self.sources_mode != "off" else [])
 
     def _quotes(self, header: str, excerpts: list[Excerpt], question: str, shown: int = QUOTES_SHOWN) -> str:
         words = _words(question)
@@ -369,4 +511,3 @@ class Answerer:
             return texts["search_nothing"]
         excerpts = await self._excerpts(hits)
         return self._quotes(texts["search_header"], excerpts, topic, shown=3) if excerpts else texts["search_nothing"]
-

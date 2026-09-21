@@ -72,6 +72,17 @@ DOCUMENT_TYPES = (".pdf", ".docx", ".txt", ".md")
 MAX_DOCUMENT_BYTES = 15 * 1024 * 1024
 # Shown as "recording audio…" for as long as a person would take to record the voice note, at most.
 VOICE_RECORDING_SECONDS = 12
+# Reactions to messages not addressed to Jeli: only real emotion (sad news, a laugh, a success),
+# never a "thanks" or a "hello" (measured: reacting to every one of those in a 240-member group is
+# noise, and looks like a machine), and at most this many per group and hour.
+REACTION_WORTH = {"😢", "😄", "🎉"}
+REACTIONS_PER_HOUR = 10
+# Images posted in a group (flyers, screenshots of a schedule) are described and remembered, so
+# that questions find them; at most this many a day, to spare the quota.
+GROUP_IMAGES_PER_DAY = 60
+# What a member says of an answer with a reaction on Jeli's message.
+FEEDBACK_REACTIONS = {"👍": "good", "❤️": "good", "🙏": "good", "💯": "good", "👎": "bad", "❌": "bad", "😕": "bad"}
+SENT_KEPT = 300
 
 router = APIRouter()
 
@@ -319,6 +330,14 @@ class Waha:
         self._pending_image_offers: dict[str, tuple] = {}
         # Whether this member was talking with Jeli a moment ago (set by the responder).
         self.in_conversation = None
+        # Reads a member's recent conversation back after a restart (set by the responder).
+        self.warm = None
+        # Records a member's verdict on an answer: (chat_id, message_id, verdict, question, answer).
+        self.on_feedback = None
+        # Jeli's own messages, to know which answer a reaction or a correction is about.
+        self._sent: OrderedDict[str, tuple[str, str, str]] = OrderedDict()  # id → (chat, question, answer)
+        self.reaction_limiter = SlidingWindowLimiter(REACTIONS_PER_HOUR, 3600)
+        self.image_limiter = SlidingWindowLimiter(GROUP_IMAGES_PER_DAY, 86400)
         self._later: set[asyncio.Task] = set()
         self._admins: dict[str, tuple[float, set[str]]] = {}
 
@@ -598,17 +617,44 @@ class Waha:
             reply_to=getattr(reply, "reply_to", None) or message.message_id,
             mentions=getattr(reply, "mentions", ()),
         )
-        # Track Jeli's own message so a subsequent correction can delete it.
+        # Track Jeli's own message so a subsequent correction can delete it, and so that a
+        # reaction on it (👍/👎) is recorded as feedback on this answer.
         if sent_id:
             self._last_sent[message.chat_id] = sent_id
+            self._sent[sent_id] = (message.chat_id, message.text[:300], str(reply)[:1000])
+            while len(self._sent) > SENT_KEPT:
+                self._sent.popitem(last=False)
+
+    async def _feedback(self, chat_id: str, message_id: str, verdict: str, question: str = "", answer: str = "") -> None:
+        if self.on_feedback is None:
+            return
+        try:
+            await self.on_feedback(chat_id, message_id, verdict, question, answer)
+        except Exception:
+            log.exception("Could not record a member's feedback")
+
+    async def reaction(self, payload: dict) -> None:
+        """A member reacted to one of Jeli's messages: their verdict on that answer."""
+        reaction = payload.get("reaction") or {}
+        target, emoji = str(reaction.get("messageId") or ""), str(reaction.get("text") or "")
+        if payload.get("fromMe") or not target or target not in self._sent:
+            return
+        verdict = FEEDBACK_REACTIONS.get(emoji)
+        if verdict:
+            chat_id, question, answer = self._sent[target]
+            await self._feedback(chat_id, target, verdict, question, answer)
 
     async def handle(self, message: IncomingMessage) -> None:
         if self.suspended:
             return  # the message is still remembered (ingested separately)
         try:
-            # Stickers: react warmly without going to the LLM.
-            if message.is_sticker and not message.is_private and not self.paused and message.chat_id not in self.silent_groups:
-                await self.send_reaction(message.chat_id, message.message_id, random.choice(["😄", "❤️", "🙌", "😊", "🌟"]))
+            if self.warm is not None:
+                await self.warm(message)  # the conversation so far, after a restart
+            # Stickers: react warmly without going to the LLM, in a conversation with Jeli only.
+            if message.is_sticker:
+                if not message.is_private and not self.paused and message.chat_id not in self.silent_groups \
+                        and self.in_conversation and self.in_conversation(message):
+                    await self.send_reaction(message.chat_id, message.message_id, random.choice(["😄", "❤️", "🙌", "😊", "🌟"]))
                 return
             if message.voice_url:
                 message = await self._listen(message)
@@ -616,20 +662,44 @@ class Waha:
                     return
             if message.image_url and message.addressed_to_bot:
                 message = await self._see(message)
+            elif message.image_url and not message.is_private:
+                self._remember_image(message)  # a flyer, a screenshot: described and kept, in the background
             if not message.addressed_to_bot and self.follow_up and self.follow_up(message):
                 message = dataclasses.replace(message, addressed_to_bot=True)
             if message.addressed_to_bot:
                 await self._converse(message)
             else:
                 await self._step_in_if_needed(message)
-                # Emotional reaction for group messages not addressed to Jeli (and not silent groups).
+                # A reaction to real emotion in the group (not to every hello or thanks), dosed.
                 if (not message.is_private and not self.paused
                         and message.chat_id not in self.silent_groups):
                     emoji = emotion_emoji(message.text)
-                    if emoji:
+                    if emoji in REACTION_WORTH and self.reaction_limiter.allow(message.chat_id):
                         await self.send_reaction(message.chat_id, message.message_id, emoji)
         except Exception:
             log.exception("Failed to handle WhatsApp message %s", message.message_id)
+
+    def _remember_image(self, message: IncomingMessage) -> None:
+        """Describe an image posted in a group and remember the description with its caption, so
+        that "when is the Open Hour?" finds the flyer that said it."""
+        if self.voice is None or self.ingest is None or not self.image_limiter.allow("all"):
+            return
+        task = asyncio.get_running_loop().create_task(self._describe_and_remember(message))
+        self._later.add(task)
+        task.add_done_callback(self._later.discard)
+
+    async def _describe_and_remember(self, message: IncomingMessage) -> None:
+        try:
+            response = await self._http.get(httpx.URL(message.image_url).raw_path.decode())
+            response.raise_for_status()
+        except httpx.HTTPError as error:
+            log.warning("Cannot download the image from message %s: %r", message.message_id, error)
+            return
+        description = await self.voice.describe(response.content, message.image_mimetype)
+        if not description:
+            return
+        text = f"[Image: {description}]" + (f"\n{message.text}" if message.text else "")
+        await self.ingest(dataclasses.replace(message, text=text, image_url=None))
 
     async def _explain_refusal(self, message: IncomingMessage, reason: str) -> None:
         """Send a one-time explanation when Jeli can't answer because of the member's own behaviour.
@@ -747,6 +817,8 @@ class Waha:
             await self.send_reaction(message.chat_id, message.message_id, "🙏")
             await self.delete_message(message.chat_id, wrong_id)
             log.info("Deleted Jeli's wrong message %s after correction in %s", wrong_id, message.chat_id)
+            _, question, answer = self._sent.get(wrong_id, (message.chat_id, "", ""))
+            await self._feedback(message.chat_id, wrong_id, "correction", question, answer)
         chat = {"chatId": message.chat_id}
         language = detect_language(message.text or "")
         by_voice = self.voice is not None and message.reply_by_voice
@@ -1038,6 +1110,10 @@ async def receive_webhook(
         vote, poll = payload.get("vote") or {}, payload.get("poll") or {}
         if adapter.on_vote and poll.get("id") and vote.get("from"):
             background_tasks.add_task(adapter.on_vote, poll["id"], vote["from"], [str(o) for o in vote.get("selectedOptions") or []])
+        return {"ok": True}
+    if event.get("event") == "message.reaction":
+        # Needs "message.reaction" in WAHA's WHATSAPP_HOOK_EVENTS; a 👍/👎 on Jeli's answer is feedback.
+        background_tasks.add_task(adapter.reaction, event.get("payload") or {})
         return {"ok": True}
 
     shared = parse_shared_document(event)

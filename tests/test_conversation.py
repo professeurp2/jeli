@@ -71,6 +71,9 @@ class Answerer:
         self.asked.append((question, context.get("queries")))
         return "answer"
 
+    async def prefetch(self, text):
+        return []
+
 
 class Understands:
     """Rewrites follow-ups with the conversation, as the model does."""
@@ -78,7 +81,7 @@ class Understands:
     def __init__(self):
         self.turns = []
 
-    async def understand(self, text, language, turns=()):
+    async def understand(self, text, language, turns=(), **kwargs):
         self.turns.append(list(turns))
         if text.startswith("And what"):
             return Understood(kind="question", reply="", standalone="What do we submit for the hackathon?", queries=["hackathon submission"])

@@ -77,18 +77,52 @@ def ask(answerer, question="When is the bootcamp?"):
     return asyncio.run(answerer.answer(question, asker="+223 70 00 00 00"))
 
 
-def test_grounded_answer_returns_clean_text_without_citations(monkeypatch):
-    llm = FakeLLM(GeneratedAnswer(answered=True, answer="It moved to 25 September.", sources=[1]))
+def test_grounded_answer_shows_one_verified_source(monkeypatch):
+    llm = FakeLLM(GeneratedAnswer(answered=True, answer="It moved to 25 September.", sources=["1.1"]))
     reply = ask(make_answerer(llm, monkeypatch=monkeypatch))
-    assert reply == "It moved to 25 September."
+    # The cited line shares "25 September" with the answer: shown, WhatsApp's way, once.
+    source = "> *Awa Traoré* · METI cohort, Sat 12 Sep" + chr(10) + "> The bootcamp moves to 25 September."
+    assert reply == "It moved to 25 September." + chr(10) * 2 + source
+    assert reply.cited == [source]
     assert reply.reply_to is None and not reply.mentions
+
+
+def test_a_cited_line_that_says_nothing_of_the_answer_is_dropped(monkeypatch):
+    # Measured (21 Sep): "Can you speak Afrikaans?" was answered with a greeting as its source.
+    llm = FakeLLM(GeneratedAnswer(answered=True, answer="Yes, I can answer in several languages.", sources=["1.2"]))
+    reply = ask(make_answerer(llm, monkeypatch=monkeypatch), "Can you speak Afrikaans?")
+    assert reply == TEXTS["en"]["dont_know_near"] or reply.startswith(TEXTS["en"]["dont_know_near"])
+
+
+def test_sources_can_be_kept_for_on_request_only(monkeypatch):
+    llm = FakeLLM(GeneratedAnswer(answered=True, answer="It moved to 25 September.", sources=["1"]))
+    answerer = make_answerer(llm, monkeypatch=monkeypatch)
+    answerer.sources_mode = "ask"
+    reply = ask(answerer)
+    assert reply == "It moved to 25 September." and len(reply.cited) == 1
+
+
+def test_the_same_question_again_is_answered_from_the_cache(monkeypatch):
+    llm = FakeLLM(GeneratedAnswer(answered=True, answer="It moved to 25 September.", sources=["1"]))
+    answerer = make_answerer(llm, monkeypatch=monkeypatch)
+    first, second = ask(answerer), ask(answerer, "when is the bootcamp")
+    assert first == second and len(llm.prompts) == 1
+
+
+def test_a_general_question_may_be_answered_from_the_brief_without_a_source(monkeypatch):
+    llm = FakeLLM(GeneratedAnswer(answered=True, answer="Wadhwani Ignite is the entrepreneurship programme.", sources=[], from_background=True))
+    answerer = make_answerer(llm, monkeypatch=monkeypatch)
+    answerer.brief = "Wadhwani Ignite: the 14-week entrepreneurship programme."
+    reply = ask(answerer, "What is Wadhwani Ignite?")
+    assert reply == "Wadhwani Ignite is the entrepreneurship programme." and reply.cited == []
+    assert "What Jeli knows about the community" in llm.prompts[0]
 
 
 def test_a_source_said_in_this_chat_is_replied_to(monkeypatch):
     live = StoredMessage("wa-1", "g@g.us", "whatsapp_live", "Diane", T0, "Build phase: Friday 18 to Thursday 24 September.")
     MESSAGES.append(live)
     try:
-        llm = FakeLLM(GeneratedAnswer(answered=True, answer="The build phase ends on Thursday 24 September.", sources=[1]))
+        llm = FakeLLM(GeneratedAnswer(answered=True, answer="The build phase ends on Thursday 24 September.", sources=["1"]))
         answerer = make_answerer(llm, hits=[SearchHit(5, "g@g.us", T0, T0, [], ["wa-1"], "", 0.0, 0.8)], monkeypatch=monkeypatch)
         reply = asyncio.run(answerer.answer("When does the build phase end?", asker="Awa", chat_id="g@g.us", asker_id="22370000000@c.us"))
     finally:
@@ -101,7 +135,7 @@ def test_a_source_said_in_this_chat_is_replied_to(monkeypatch):
 
 
 def test_the_model_sees_chronological_excerpts_without_bots_or_full_phone_numbers(monkeypatch):
-    llm = FakeLLM(GeneratedAnswer(answered=True, answer="ok", sources=[1]))
+    llm = FakeLLM(GeneratedAnswer(answered=True, answer="ok", sources=["1"]))
     ask(make_answerer(llm, monkeypatch=monkeypatch))
     [prompt] = llm.prompts
     assert prompt.index("[1] METI cohort") < prompt.index("[2] METI cohort")
@@ -112,7 +146,7 @@ def test_the_model_sees_chronological_excerpts_without_bots_or_full_phone_number
 
 
 def test_the_answer_language_follows_the_question_not_the_excerpts(monkeypatch):
-    llm = FakeLLM(GeneratedAnswer(answered=True, answer="ok", sources=[1]))
+    llm = FakeLLM(GeneratedAnswer(answered=True, answer="ok", sources=["1"]))
     ask(make_answerer(llm, monkeypatch=monkeypatch), "Quand a lieu le bootcamp ?")
     assert llm.prompts[0].endswith("Write the answer in French.")
 
@@ -130,7 +164,7 @@ def test_unrelated_questions_get_i_dont_know_without_calling_the_model(monkeypat
     [
         GeneratedAnswer(answered=False, answer="Not in the excerpts.", sources=[]),
         GeneratedAnswer(answered=True, answer="Tokyo.", sources=[]),  # no source: not grounded
-        GeneratedAnswer(answered=True, answer="Tokyo.", sources=[9]),  # cites an excerpt that doesn't exist
+        GeneratedAnswer(answered=True, answer="Tokyo.", sources=["9"]),  # cites an excerpt that doesn't exist
     ],
 )
 def test_answers_without_real_sources_become_i_dont_know(monkeypatch, generated):
@@ -149,12 +183,13 @@ def test_when_no_model_is_available_jeli_uses_fallback_text(monkeypatch):
 
 def test_answers_from_a_call_link_to_the_moment_it_was_said(monkeypatch):
     recording_hit = SearchHit(9, RECORDING.id, MESSAGES[-1].sent_at, MESSAGES[-1].sent_at, [], ["r1"], "", 0.0, 0.8)
-    llm = FakeLLM(GeneratedAnswer(answered=True, answer="Everyone in the team must complete it.", sources=[1]))
+    llm = FakeLLM(GeneratedAnswer(answered=True, answer="Everyone in the team must complete it.", sources=["1"]))
     reply = ask(make_answerer(llm, hits=[recording_hit], monkeypatch=monkeypatch), "Must every member do the course?")
     [prompt] = llm.prompts
     assert "Call recording «Module 1 class session» (15 September 2026)" in prompt
-    assert "[12:34] Charles Botom: Every team member" in prompt
-    assert reply == "Everyone in the team must complete it."
+    assert "[1.1] [12:34] Charles Botom: Every team member" in prompt
+    assert reply.startswith("Everyone in the team must complete it." + chr(10) * 2 + "> 🎥 *Module 1 class session* · Tue 15 Sep, at 12:34")
+    assert "https://youtu.be/6q4uPBO_sDc?t=754" in reply
 
 
 class FakeDuplicateLLM:
@@ -167,7 +202,7 @@ class FakeDuplicateLLM:
 
 
 def test_a_question_already_answered_in_the_group_gets_the_earlier_answer(monkeypatch):
-    llm = FakeDuplicateLLM(AlreadyAnswered(already_answered=True, answer="It moved to 25 September.", sources=[1]))
+    llm = FakeDuplicateLLM(AlreadyAnswered(already_answered=True, answer="It moved to 25 September.", sources=["1"]))
     reply = asyncio.run(make_answerer(llm, monkeypatch=monkeypatch).already_answered("When is the bootcamp?", 0.7))
     assert reply.startswith(TEXTS["en"]["already_covered"] + " It moved to 25 September.")
 
@@ -175,7 +210,7 @@ def test_a_question_already_answered_in_the_group_gets_the_earlier_answer(monkey
 @pytest.mark.parametrize(
     "result, similarity",
     [
-        (AlreadyAnswered(already_answered=True, answer="Yes.", sources=[1]), 0.65),  # below the stricter gate
+        (AlreadyAnswered(already_answered=True, answer="Yes.", sources=["1"]), 0.65),  # below the stricter gate
         (AlreadyAnswered(already_answered=False, answer="", sources=[]), 0.9),  # same topic, not answered
         (AlreadyAnswered(already_answered=True, answer="Yes.", sources=[]), 0.9),  # no source
     ],
@@ -231,7 +266,7 @@ def make_llm(outcomes):
 
 
 def test_llm_falls_back_to_the_next_model_on_quota_or_overload():
-    good = GeneratedAnswer(answered=True, answer="ok", sources=[1])
+    good = GeneratedAnswer(answered=True, answer="ok", sources=["1"])
     llm, models = make_llm([errors.ClientError(429, {"error": {"message": "quota"}}), good])
     assert asyncio.run(llm.answer("system", "prompt")) == good
     assert models.models == ["primary", "backup"]
@@ -244,7 +279,7 @@ def test_llm_falls_back_to_the_next_model_on_quota_or_overload():
 
 
 def test_a_model_out_of_quota_is_skipped_for_a_while():
-    good = GeneratedAnswer(answered=True, answer="ok", sources=[1])
+    good = GeneratedAnswer(answered=True, answer="ok", sources=["1"])
     clock = SimpleNamespace(now=0.0)
     models = FakeModels([errors.ClientError(429, {"error": {}}), good, good, good])
     llm = LLM("unused", ["primary", "backup"], client=SimpleNamespace(aio=SimpleNamespace(models=models)),

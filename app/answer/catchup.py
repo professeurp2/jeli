@@ -9,7 +9,8 @@ from pydantic import BaseModel
 from app.answer.citations import POLL_MARK, display_author, ignored_keys, is_ignored, with_tally
 from app.answer.language import TEXTS
 from app.answer.llm import LLM, LLMUnavailable
-from app.answer.prompts import LANGUAGES, PROGRAMMES
+from app.answer.persona import PERSONA
+from app.answer.prompts import LANGUAGES
 from app.ingest.transcribe import drive_id, is_youtube
 from app.kb.store import Store
 
@@ -20,9 +21,8 @@ MAX_ITEMS = 5
 TIMEOUT_SECONDS = 30  # a week of messages is a long read, even for a fast model
 CACHE_SECONDS = 600  # when the whole jury asks at once, one summary serves them all
 
-SYSTEM = f"""\
-You write catch-up digests for members of a WhatsApp community who missed messages.
-{PROGRAMMES}
+SYSTEM = PERSONA + f"""
+Your task now: write the catch-up digest for a member who missed messages.
 Each message is timestamped. From the messages below (and the list of call recordings), pick the
 most important things a member who missed this SPECIFIC PERIOD needs to know.
 

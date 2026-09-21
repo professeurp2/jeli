@@ -23,6 +23,12 @@ TIMEOUT_SECONDS = 6
 THINKING_LEVEL = "minimal"
 # A model out of quota is skipped for a while instead of costing a failed round trip per question.
 COOLDOWN_SECONDS = {"quota": 300, "unavailable": 60, "invalid": 86_400}
+# Measured in production (21 Sep): with 7 keys × 3 models, a bad moment made one answer try 21
+# (key, model) pairs at 6 s each — p90 latency 22 s, worst 95 s. A call now tries at most this
+# many pairs: the best model on two keys, then the next models. With 15+ keys the round-robin
+# cursor spreads the load; a key that failed rests, so the next call starts elsewhere.
+MAX_ATTEMPTS = 4
+KEYS_PER_MODEL_FIRST = 2
 
 Schema = TypeVar("Schema", bound=BaseModel)
 
@@ -30,7 +36,10 @@ Schema = TypeVar("Schema", bound=BaseModel)
 class GeneratedAnswer(BaseModel):
     answered: bool
     answer: str
-    sources: list[int]
+    # Ids of the excerpt lines that state the answer: "3.2" (excerpt 3, message 2), or "3".
+    sources: list[str] = []
+    # The answer comes from the background brief alone (a general question about the community).
+    from_background: bool = False
 
 
 class LLMUnavailable(Exception):
@@ -85,24 +94,28 @@ class LLM:
         ]
 
     def _build_pairs(self) -> list[tuple[int, str]]:
-        """Model-first, key-round-robin ordering.
-
-        Tries the best model across all keys before falling back to the next model.
-        Within each model, keys rotate from self._next_key for even quota distribution.
-        Pairs still in cooldown are appended last as a last-resort fallback.
-        """
+        """The (key, model) pairs to try, in order: the best model on a couple of keys, then each
+        next model on a couple of keys, then the remaining keys of each model — keys rotating from
+        self._next_key so that the load spreads over all of them. Pairs in cooldown are left out;
+        only when every pair rests are they tried, the soonest to recover first (a per-minute 429
+        may already be over)."""
         n = len(self._clients)
         now = self._clock()
-        preferred: list[tuple[int, str]] = []
-        fallback: list[tuple[int, str]] = []
+        fresh: dict[str, list[tuple[int, str]]] = {model: [] for model in self.models}
+        resting: list[tuple[float, int, str]] = []
         for model in self.models:
             for offset in range(n):
                 ki = (self._next_key + offset) % n
-                if self._resting_until.get((ki, model), 0) <= now:
-                    preferred.append((ki, model))
+                until = self._resting_until.get((ki, model), 0)
+                if until <= now:
+                    fresh[model].append((ki, model))
                 else:
-                    fallback.append((ki, model))
-        return preferred + fallback
+                    resting.append((until, ki, model))
+        first = [pair for model in self.models for pair in fresh[model][:KEYS_PER_MODEL_FIRST]]
+        rest = [pair for model in self.models for pair in fresh[model][KEYS_PER_MODEL_FIRST:]]
+        if first or rest:
+            return first + rest
+        return [(ki, model) for _, ki, model in sorted(resting)]
 
     async def generate(
         self,
@@ -114,8 +127,10 @@ class LLM:
         media_resolution: types.MediaResolution | None = None,
         attempts: int | None = None,
     ) -> Schema:
-        """`attempts`: how many (key, model) pairs to try at most (all by default) — one for optional
-        steps so that a busy model never doubles the wait."""
+        """`attempts`: how many (key, model) pairs to try at most (MAX_ATTEMPTS by default) — one
+        for optional steps so that a busy model never doubles the wait."""
+        if attempts is None:
+            attempts = MAX_ATTEMPTS
         config = types.GenerateContentConfig(
             system_instruction=system,
             response_mime_type="application/json",

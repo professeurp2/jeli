@@ -28,10 +28,15 @@ def test_a_full_chunk_is_closed():
     assert sum(len(c.message_ids) for c in chunks) == 20
 
 
-def test_content_carries_date_author_and_text():
-    [chunk] = chunk_messages([message(5, text="The bootcamp moves to 25 September")])
-    assert chunk.content == "[2026-09-12 14:05 UTC] Awa: The bootcamp moves to 25 September"
-    assert format_message(message(0)).startswith("[2026-09-12 14:00 UTC]")
+def test_content_carries_where_when_who_and_the_text():
+    [chunk] = chunk_messages([message(5, text="The bootcamp moves to 25 September")], label="METI cohort")
+    assert chunk.content.splitlines() == [
+        "Conversation in METI cohort, Saturday 12 September 2026, 14:05 UTC, with Awa.",
+        "[14:05] Awa: The bootcamp moves to 25 September",
+    ]
+    assert format_message(message(0)).startswith("[14:00] Awa:")
+    [chunk] = chunk_messages([message(0), message(7, "Moussa")])
+    assert chunk.content.startswith("Conversation in the group, Saturday 12 September 2026, 14:00–14:07 UTC, with Awa, Moussa.")
 
 
 def test_messages_are_ordered_and_sources_reported():

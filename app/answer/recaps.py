@@ -16,7 +16,8 @@ from app.answer.citations import recording_quote, timestamped_link
 from app.answer.intents import SESSION_WORD
 from app.answer.language import TEXTS
 from app.answer.llm import LLM, LLMUnavailable
-from app.answer.prompts import LANGUAGES, PROGRAMMES
+from app.answer.persona import PERSONA, PROGRAMMES
+from app.answer.prompts import LANGUAGES
 from app.ingest.transcribe import format_offset, is_youtube, parse_timestamp
 from app.kb.store import Store
 from app.models import Recording, Reply
@@ -27,9 +28,8 @@ TIMEOUT_SECONDS = 120
 SESSION_QUESTION_TIMEOUT = 25  # a whole call's transcript is read (about 20k tokens for an hour)
 MAX_KEY_MOMENTS = 6
 
-SYSTEM = f"""\
-You write the recap of a recorded call for members of a WhatsApp community who missed it.
-{PROGRAMMES}
+SYSTEM = PERSONA + f"""
+Your task now: write the recap of a recorded call for members who missed it.
 From the timestamped transcript, write:
 - summary: the 3 to 6 main points, one sentence each;
 - decisions: what was decided or confirmed during the call;
@@ -104,8 +104,8 @@ ABOUT_WHAT_WAS_SAID = re.compile(
 )
 MOMENTS_QUOTED = 3
 
-SESSION_QUESTION_SYSTEM = f"""\
-A member of a WhatsApp community asks about a recorded call. Answer from its transcript alone, as a
+SESSION_QUESTION_SYSTEM = PERSONA + f"""
+Your task now: a member asks about a recorded call. Answer from its transcript alone, as a
 colleague who attended would: directly, in a few sentences or a short list, in {{language}}.
 {PROGRAMMES}
 - answered: false when the transcript does not answer the question; never guess.

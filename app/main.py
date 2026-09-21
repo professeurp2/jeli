@@ -1,3 +1,4 @@
+import asyncio
 import contextlib
 import dataclasses
 import logging
@@ -6,7 +7,12 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 
 from app.adapters import telegram, whatsapp_waha
+from app.answer.brief import Brief
 from app.answer.catchup import Catchup
+from app.answer.illustrator import IMAGE_MODELS
+from app.answer.models_check import report_models
+from app.answer.voice import GEMINI_TTS_MODELS
+from app.kb.embeddings import MODEL as EMBEDDING_MODEL
 from app.answer.deadlines import DeadlineExtractor, Deadlines
 from app.answer.awareness import Awareness
 from app.answer.documents import Documents
@@ -56,7 +62,8 @@ async def lifespan(app: FastAPI):
 
     # Grounded answers need the knowledge base and a Gemini key; without them Jeli says it isn't ready.
     state.llm = state.answerer = state.catchup = state.recaps = state.deadlines = state.extractor = None
-    state.documents = state.sessions = state.awareness = None
+    state.documents = state.sessions = state.awareness = state.brief = None
+    state.missing_models = []
     if store and state.embedder:
         state.llm = LLM(settings.api_key_list, settings.answer_models)
         state.answerer = Answerer(store, state.embedder, state.llm, min_similarity=runtime["answer_min_similarity"])
@@ -76,14 +83,30 @@ async def lifespan(app: FastAPI):
         )
         state.awareness = Awareness(store, state.llm, state.sessions)
         state.answerer.explainer = state.awareness.explain
+        state.answerer.state = state.awareness.state
+        # The community brief: Jeli's general knowledge, background for every prompt.
+        state.brief = Brief(store, state.llm)
+        await state.brief.load()
+
+        async def check_models() -> None:
+            wanted = list(dict.fromkeys(
+                [*settings.answer_models, *settings.transcription_model_list, *IMAGE_MODELS, *GEMINI_TTS_MODELS, EMBEDDING_MODEL]
+            ))
+            state.missing_models = await report_models(state.llm.client, wanted)
+
+        asyncio.create_task(check_models())
+    state.understander = Understander(state.llm)
+    if state.awareness is not None:
+        state.understander.state = state.awareness.state
     state.responder = Responder(
         state.answerer,
         state.catchup,
         recaps=state.recaps,
         deadlines=state.deadlines,
         record=store.record_event if store else None,
-        understander=Understander(state.llm),
+        understander=state.understander,
         documents=state.documents,
+        store=store,
     )
     state.guard = Guard(record=store.record_incident if store else None)
     state.voice = Voice(state.llm) if state.llm else None  # voice notes, heard and spoken
@@ -131,11 +154,13 @@ async def lifespan(app: FastAPI):
         state.whatsapp.guard = state.guard
         state.whatsapp.follow_up = state.responder.is_follow_up
         state.whatsapp.in_conversation = state.responder.in_conversation
+        state.whatsapp.warm = state.responder.warm
         state.whatsapp.voice = state.voice
         if state.documents:
             state.whatsapp.on_document = state.documents.add
         if store:
             state.whatsapp.on_vote = store.save_poll_vote
+            state.whatsapp.on_feedback = store.record_feedback
         await state.whatsapp.sync_status()
     state.telegram = await telegram.start(settings, respond)
 

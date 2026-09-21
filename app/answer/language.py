@@ -129,6 +129,9 @@ TEXTS = {
         "image_what": "What would you like an image of? 🎨 Describe the subject and I'll illustrate it!",
         "image_coming": "🎨 On it — I'm drawing that now, one moment!",
         "image_offer": "📊 I can illustrate that — reply *yes* if you'd like an image!",
+        "no_sources": "That one wasn't from a specific message — it's what I know of the programme in general. Ask me something precise and I'll point you to who said it.",
+        "documents_none": "I don't have any document yet — share one in the group and I'll keep it.",
+        "documents_header": "📄 I keep {n} documents:",
     },
     "fr": {
         "dont_know": "Hmm, je n'ai rien trouvé là-dessus dans les échanges du groupe. Tu peux poser la question directement aux organisateurs, ou essayer /search avec un mot-clé.",
@@ -206,6 +209,9 @@ TEXTS = {
         "image_what": "De quoi voudrais-tu une image ? 🎨 Décris le sujet et j'illustre !",
         "image_coming": "🎨 C'est parti — je dessine ça, un instant !",
         "image_offer": "📊 Je peux illustrer ça — réponds *oui* si tu veux une image !",
+        "no_sources": "Celle-là ne venait pas d'un message précis — c'est ce que je sais du programme en général. Pose-moi une question précise et je te dis qui l'a dit.",
+        "documents_none": "Je n'ai encore aucun document — partage-en un dans le groupe et je le garde.",
+        "documents_header": "📄 Je garde {n} documents :",
     },
 }
 # African languages fall back to English for system messages (guard texts, UI strings).

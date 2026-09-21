@@ -23,8 +23,17 @@ def apply(state, runtime) -> None:
             component.chat_labels = labels
     if getattr(state, "answerer", None) is not None:
         state.answerer.min_similarity = runtime["answer_min_similarity"]
+        state.answerer.sources_mode = runtime["sources"]
         # Organisers listed with their number are shown by name in quotes ("Diane", not "+250 ···55").
         state.answerer.known_names = people_names(runtime["organisers"])
+    brief = getattr(state, "brief", None)
+    if brief is not None:
+        brief.organisers = organisers
+        brief.other_bots = list(runtime["ignored_authors"])
+        for name in ("answerer", "awareness", "understander"):
+            component = getattr(state, name, None)
+            if component is not None:
+                component.brief = brief.text
     if getattr(state, "documents", None) is not None:
         state.documents.known_names = people_names(runtime["organisers"])
 

@@ -30,6 +30,9 @@ class FakeAnswerer:
         self.questions.append((question, asker))
         return "answer"
 
+    async def prefetch(self, text):
+        return []
+
     async def where_discussed(self, topic):
         return f"sources for {topic}"
 

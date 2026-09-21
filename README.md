@@ -77,7 +77,13 @@ Submissions close on Thursday 24 September: a working chatbot, the code link and
 > Build Phase: Friday 18 Sept to Thursday 24 Sept…
 ```
 
-**Everyday messages** get a human reply without searching: greetings, thanks, *"who are you?"*, *"what can you do?"*; *"what happened today?"* is a catch-up. Measured before this change (19 Sep, production path): 19 of 22 real questions the group had answered got a correct, sourced answer, yet testers found Jeli "not intelligent" because these everyday messages got "I don't know". When the model finds no answer but the group discussed something close, Jeli shows the closest discussions instead of a flat "I don't know". A question is searched with several wordings when helpful (English and the member's language), and a French question is answered from English messages.
+**One door for every message.** Greetings, thanks and slash commands are answered at once; every other message goes through one understanding step ([`app/answer/understand.py`](app/answer/understand.py)): a model reads it with the conversation so far, the community brief and what Jeli can do, and says what the member wants — a question, a catch-up (and since when), a session recap or a question about one session, the deadlines, a document, a listing of what Jeli has, the previous answer's sources ("source?"), the previous answer by voice ("en vocal"), an image, small talk, a question about Jeli itself, or an ambiguous request that deserves one short question back with two or three options. It also gives the language the member writes in and the search queries (English and the member's language). The search on the raw message starts in parallel, so the two model calls cost the time of one. Measured before this change (21 Sep, production): routing was a cascade of regular expressions, and "recap d'aujourd'hui", "session 4", "en vocal", "Thank you Jeli", "how can you help a visually impaired person?" all went wrong; the expressions remain as the fallback when no model answers. When the model finds no answer but the group discussed something close, Jeli shows the closest discussion instead of a flat "I don't know".
+
+**One voice.** Every prompt starts from the same persona ([`app/answer/persona.py`](app/answer/persona.py)): the member's language and register, short answers, WhatsApp formatting, no closing lines, never "I am the group's memory".
+
+**What Jeli keeps in mind.** Three memories, all in the database so that a deployment loses nothing: the **conversation** with each member (the last turns, 30 minutes, with the sources of each answer — private ones a day at most, never indexed); what it knows of the **member** (name, the language they write in, their own introduction, their last topic — `/oublie-moi` is not needed: the team can clear it from the dashboard); and the **community brief** ([`app/answer/brief.py`](app/answer/brief.py)): every few hours a model rewrites, from the documents, the organisers' announcements and the session recaps, a short brief of the programmes, organisers, rules, dates and sessions. The brief is background for every prompt — Jeli knows what Wadhwani Ignite is or who Diane is without searching — never a source to quote.
+
+**Sources, verified.** The model cites the exact message lines that state its answer; a cited line that shares no word, number or date with the answer is dropped (measured on 21 Sep: attribution by word overlap on whole chunks produced "random" references). One verified source is then shown under factual answers — never under small talk or a catch-up — and the rest is kept for "source?". Settings → *Show where an answer comes from*: one source, on request, or never.
 
 **Documents and files:** Jeli keeps the documents members share in the groups (PDF, Word, text) and those the team adds on the dashboard. It learns them page by page — answers quote *"📄 Hackathon guidelines, page 1"* — and **sends the file** when a member asks for it (*"send me the guidelines"*), as a WhatsApp document replying to their message. Asked for it in another language (*"envoie-moi le guide en français"*), it answers at once that it is translating, then sends a translated PDF a minute later (machine translation, marked as such; English, French, Portuguese, Spanish, Swahili, German, Italian, Dutch), and keeps it for the next request. **Past documents:** chat histories exported *without media* only say "<document omitted>". Export them *with media* and import them on the dashboard: Jeli keeps each PDF, Word or text file with who shared it and when. The Knowledge page also lists the documents mentioned in the groups whose file is missing, each with a button to give it to Jeli; meanwhile Jeli tells members the document exists but it doesn't have it.
 
@@ -225,7 +231,9 @@ From then on, Jeli stores the group's new messages as they arrive and indexes th
 ```bash
 python -m scripts.search "When is the bootcamp?"
 ```
-Hybrid retrieval: semantic neighbours (pgvector, cosine) and keyword matches (Postgres full-text), merged by reciprocal rank fusion — while always keeping the two semantically closest chunks, so that keyword noise cannot crowd them out (measured: a French question over English transcripts matched only "module" as a keyword and pushed the one right excerpt, the closest by meaning, down to 10th place). Consecutive messages are chunked together (a new chunk after 30 minutes of silence or 1,500 characters), so a question finds the conversation, not a lone "yes, Friday".
+Hybrid retrieval: semantic neighbours (pgvector, cosine) and keyword matches (Postgres full-text with French and English stemming: "échéances" finds "échéance"), merged by reciprocal rank fusion with a small bonus for recent conversations — while always keeping the two semantically closest chunks, so that keyword noise cannot crowd them out (measured: a French question over English transcripts matched only "module" as a keyword and pushed the one right excerpt, the closest by meaning, down to 10th place). Consecutive messages are chunked together (a new chunk after 30 minutes of silence or 1,500 characters), so a question finds the conversation, not a lone "yes, Friday"; each chunk starts with a readable header — the group, the day, who was talking — and near-duplicate chunks (a history imported twice) count once.
+
+**Keeping the memory clean:** `python -m scripts.hygiene` (dry run) then `--apply` merges chat aliases into one id, deletes repeated messages, adds other bots to the ignored authors, switches the deadline finding back on if it was off, and drops the chunks so that the running Jeli indexes everything again in the current format. Measured on 21 Sep: the main group's history had been imported three times under three ids, and half of the excerpts given to the model were repeats.
 
 ### 8. Import call recordings
 ```bash
@@ -266,15 +274,21 @@ How an answer is built ([`app/answer/rag.py`](app/answer/rag.py)):
 5. An answer that cites no real excerpt is discarded: Jeli says it doesn't know. The cited excerpts become the sources shown.
 6. **Resilience:** models are tried in order (`GEMINI_MODELS`); one that is out of quota or overloaded is skipped for a few minutes. If every model is down, Jeli still points to where the group discussed the question.
 
-Models: `gemini-3.6-flash` with minimal thinking (≈2 s), then `gemini-3.5-flash-lite` and `gemini-flash-lite-latest` (<1 s). Measured: default thinking took 14 s or was overloaded; minimal is fast *and* correct.
+Models: `gemini-3.6-flash` with minimal thinking (≈2 s), then `gemini-3.5-flash-lite` and `gemini-flash-lite-latest` (<1 s). Measured: default thinking took 14 s or was overloaded; minimal is fast *and* correct. `GEMINI_API_KEY` takes a comma-separated list of keys (15 or more): each call tries the best model on two keys, then the next models, at most four attempts, keys rotating; a key and model out of quota rests for a few minutes. Measured on 21 Sep with 7 keys: an unbounded fallback tried up to 21 pairs and one answer in ten took over 20 s. The same question asked again within 10 minutes (a jury in a row) is answered from a cache.
 
 ### 10. Evaluate answer quality
 ```bash
 python -m scripts.evaluate --show-answers
 ```
-Runs the fixed question set in [`evals/questions.json`](evals/questions.json) against the real knowledge base: questions answered in the chats, questions answered **only in call recordings** (the source must be a recording), traps where two programmes share vocabulary (hackathon team size vs Wadhwani platform team size), and unrelated questions (must get "I don't know"), in English and French. Reports latency against the 10-second target. Latest results: all pass, median ≈3 s, max ≈4 s.
+Runs the fixed question set in [`evals/questions.json`](evals/questions.json) against the real knowledge base: questions answered in the chats, questions answered **only in call recordings** (the source must be a recording), general questions the community brief covers, traps where two programmes share vocabulary (hackathon team size vs Wadhwani platform team size), and unrelated questions (must get "I don't know"), in English and French — plus **understanding cases** (`"mode": "understand"`): what the understanding step makes of "recap d'aujourd'hui", "4" after a listing, "en vocal", "Thank you Jeli", "how can you help a visually impaired person?", with the conversation given. Reports latency against the 10-second target. `--only understand` runs one kind of case.
 
 It also checks duplicate detection on real questions re-asked in the group: Jeli must step in for those the group answered, and stay silent for new questions and for questions left unanswered.
+
+**Feedback from members:** a 👍/👎/❤️ reaction on one of Jeli's messages, or a correction ("that's wrong"), is recorded (`jeli.feedback`) as a verdict on that answer — with `message.reaction` among WAHA's `WHATSAPP_HOOK_EVENTS`. Reactions from Jeli itself are dosed: only to real emotion in the group (sad news, a laugh, a success), never to every "thanks", at most 10 an hour per group.
+
+**Images posted in the groups** (a flyer, a screenshot of a schedule) are described by the model and remembered with their caption, so that "when is the Open Hour?" finds the flyer that said it (at most 60 a day).
+
+At startup, Jeli lists the models the key can see and logs the configured ones it cannot (measured: the image models named in the code had been retired, and every image request failed for a day).
 
 What the evaluation caught and fixed: half of the chunks retrieved for a hackathon question were another bot's messages, leaving no usable excerpt once filtered (chunks are now over-fetched, then the best usable ones kept); the model refusing when a rule was relayed by a member rather than an organiser; French questions answered in English when excerpts were English (the answer language is now stated explicitly); and rules of one programme attributed to another (the instructions now name the community's parallel programmes and forbid mixing them).
 
@@ -314,7 +328,7 @@ railway add --service waha --image devlikeapro/waha:gows \
   --variables "WAHA_SESSION_CONFIG_IGNORE_CHANNELS=true" \
   --variables "WAHA_SESSION_CONFIG_IGNORE_BROADCAST=true" \
   --variables "WAHA_BASE_URL=http://\${{RAILWAY_PRIVATE_DOMAIN}}:3000" \
-  --variables "WHATSAPP_HOOK_EVENTS=message,session.status,poll.vote" \
+  --variables "WHATSAPP_HOOK_EVENTS=message,session.status,poll.vote,message.reaction" \
   --variables "WAHA_DASHBOARD_USERNAME=admin" \
   --variables "WHATSAPP_SWAGGER_USERNAME=admin"
 # Secrets: generate each with python -c "import secrets; print(secrets.token_urlsafe(32))"

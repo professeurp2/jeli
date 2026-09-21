@@ -1532,6 +1532,10 @@ async def settings_page(request: Request, member: Member) -> HTMLResponse:
                + number("follow_up_minutes", 1, 15) + '<span class="muted small">minutes</span>')
         + _row("Add recorded sessions shared in the groups", "When someone shares a session's YouTube recording in a group, Jeli transcribes it and learns it.",
                f'<label class="check"><input type="checkbox" name="auto_sessions"{" checked" if runtime["auto_sessions"] else ""}> On</label>')
+        + _row("Show where an answer comes from", "One verified source under factual answers (a reply to the message, or a short quote). “On request”: only when a member asks “source?”.",
+               _segmented("sources", runtime["sources"], [("one", "One source"), ("ask", "On request"), ("off", "Never")]))
+        + _row("Keep a brief of the community", "Every few hours, Jeli rewrites its general knowledge of the programmes, organisers, rules and dates, so that it answers general questions without searching.",
+               f'<label class="check"><input type="checkbox" name="enabled_brief"{" checked" if runtime["enabled.brief"] else ""}> On</label>')
     )
     pointers = (
         _row("Point to earlier answers", "When someone asks the group a question it already answered, Jeli replies with a link to that answer, without being called.",
@@ -1595,6 +1599,8 @@ SETTING_WORDS = {
     "follow_up": "following the conversation",
     "follow_up_minutes": "how long Jeli follows a conversation",
     "auto_sessions": "adding shared recordings",
+    "sources": "showing sources",
+    "enabled.brief": "the community brief",
     "duplicate_detection": "pointing to earlier answers",
     "duplicate_min_similarity": "how similar a repeated question must be",
     "duplicate_replies_per_hour": "earlier answers per hour",
@@ -1619,6 +1625,8 @@ async def settings_change(request: Request, member: Change) -> RedirectResponse:
         "follow_up": bool(form.get("follow_up")),
         "follow_up_minutes": form.get("follow_up_minutes", "5"),
         "auto_sessions": bool(form.get("auto_sessions")),
+        "sources": form.get("sources", "one"),
+        "enabled.brief": bool(form.get("enabled_brief")),
         "duplicate_detection": bool(form.get("duplicate_detection")),
         "enabled.images": bool(form.get("enabled_images")),
         "enabled.proactive_images": bool(form.get("enabled_proactive_images")),

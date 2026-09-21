@@ -32,14 +32,17 @@ async def index_pending(
     embedder: Embedder,
     settle: timedelta | None = None,
     ignored: set[str] = frozenset(),
+    labels: dict[str, str] | None = None,
 ) -> int:
     """Chunk and embed every message not indexed yet. Returns the number of chunks created.
 
     With `settle`, a chat's last chunk is left pending while its conversation may still be
     going on (last message more recent than `settle`), so it is not cut in the middle.
     `ignored`: author keys whose messages are excluded from indexing (e.g. other bots).
+    `labels`: readable chat names, written in each conversation chunk's header.
     """
     created = 0
+    labels = labels or {}
     for chat_id in await store.pending_chats():
         header = None
         if chat_id.startswith(RECORDING_PREFIX):
@@ -51,7 +54,7 @@ async def index_pending(
         messages = await store.pending_messages(chat_id)
         if ignored:
             messages = [m for m in messages if not is_ignored(m, ignored)]
-        chunks = chunk_messages(messages, header=header)
+        chunks = chunk_messages(messages, header=header, label=labels.get(chat_id, ""))
         if settle and chunks and chunks[-1].ended_at > datetime.now(timezone.utc) - settle:
             chunks = chunks[:-1]
         for start in range(0, len(chunks), BATCH_SIZE):

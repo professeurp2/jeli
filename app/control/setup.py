@@ -37,7 +37,9 @@ def build_activities(state, settings: Settings, runtime: Runtime) -> dict[str, A
     if store and embedder:
 
         async def learn() -> str:
-            created = await index_pending(store, embedder, settle=SETTLE, ignored=ignored_keys(runtime["ignored_authors"]))
+            created = await index_pending(
+                store, embedder, settle=SETTLE, ignored=ignored_keys(runtime["ignored_authors"]), labels=runtime["chat_labels"]
+            )
             return f"learned {_plural(created, 'new conversation')}" if created else "nothing new to learn"
 
         activities["memory"] = Activity(
@@ -47,6 +49,27 @@ def build_activities(state, settings: Settings, runtime: Runtime) -> dict[str, A
             learn,
             every(timedelta(seconds=settings.index_interval_seconds), first=timedelta(seconds=20)),
             lambda: runtime["enabled.memory"],
+        )
+
+    brief = getattr(state, "brief", None)
+    if brief is not None and brief.llm is not None:
+
+        async def write_brief() -> str:
+            result = await brief.refresh()
+            for name in ("answerer", "awareness", "understander"):
+                component = getattr(state, name, None)
+                if component is not None:
+                    component.brief = brief.text
+            return result
+
+        activities["brief"] = Activity(
+            "brief",
+            "Refreshing what Jeli knows of the community",
+            "Every few hours, Jeli rewrites its short brief of the programmes, organisers, rules and dates from "
+            "the documents, the organisers' announcements and the session recaps — its general knowledge.",
+            write_brief,
+            every(timedelta(hours=6), first=timedelta(minutes=2 if not brief.text else 180)),
+            lambda: runtime["enabled.brief"],
         )
 
     if extractor:
