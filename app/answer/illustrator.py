@@ -27,7 +27,7 @@ _ART = r"(?:une?\s+|an?\s+|des\s+|the\s+)?"
 _HCLIT = r"(?:-(?:moi|lui|leur|nous|me|us|them))?"
 _SCLIT = r"(?:\s+(?:moi|lui|leur|nous|me|us|them))*"
 # Any standard or curly apostrophe (not a raw string so \u escapes are interpreted)
-_APO = "[''‘’‛]"
+_APO = "['''‘’‛]"
 
 IMAGE_REQUEST = re.compile(
     # Core: trigger verb + optional clitics (hyphen or space) + space + optional article + image noun
