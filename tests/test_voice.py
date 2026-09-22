@@ -273,6 +273,7 @@ def test_the_native_gemini_voice_says_the_text_with_its_mood():
     assert speaks.sent == [TEXT]  # the text itself: the instructions are the system's
     model, config = configs[-1]
     assert model == "gemini-3.1-flash-live-preview" and "big smile" in config.system_instruction
+    assert "The text is in English: say it aloud in English" in config.system_instruction and "never translate" in config.system_instruction
     assert "word for word" in config.system_instruction and "never answer it" in config.system_instruction
     asyncio.run(speaker._speak_live(TEXT, "calm"))
     assert len(configs) == 3  # the key over quota is not asked again
@@ -296,14 +297,19 @@ def test_gemini_voices_come_first_and_the_fallback_voice_last(monkeypatch):
         calls.append(name)
         return audio
 
-    monkeypatch.setattr(speaker, "_rewrite", lambda text, language: _done((text, "joyful")))
-    monkeypatch.setattr(speaker, "_speak_live", lambda text, mood: engine(("live", mood), None))
-    monkeypatch.setattr(speaker, "_speak_gemini", lambda text, language, mood: engine(("tts", mood), b"RIFF-tts"))
-    monkeypatch.setattr(speaker, "_speak_edge", lambda text, language, mood: engine(("edge", mood), b"mp3"))
-    assert asyncio.run(speaker.speak(TEXT, "fr")) == b"RIFF-tts"
-    assert calls == [("live", "joyful"), ("tts", "joyful")]  # edge-tts never asked while Gemini speaks
-    monkeypatch.setattr(speaker, "_speak_gemini", lambda text, language, mood: engine(("tts", mood), None))
-    assert asyncio.run(speaker.speak(TEXT, "fr")) == b"mp3" and calls[-1] == ("edge", "joyful")
+    rewritten_in = []
+    monkeypatch.setattr(speaker, "_rewrite", lambda text, language: rewritten_in.append(language) or _done((text, "joyful")))
+    monkeypatch.setattr(speaker, "_speak_gemini", lambda text, language, mood: engine(("tts", language, mood), b"RIFF-tts"))
+    monkeypatch.setattr(speaker, "_speak_live", lambda text, mood, language: engine(("live", language, mood), b"RIFF-live"))
+    monkeypatch.setattr(speaker, "_speak_edge", lambda text, language, mood: engine(("edge", language, mood), b"mp3"))
+    # Asked from the dashboard (no language given): the language is the one of what is said.
+    assert asyncio.run(speaker.speak(TEXT)) == b"RIFF-tts"
+    assert calls == [("tts", "fr", "joyful")]  # Gemini TTS speaks: nothing else is asked
+    assert rewritten_in == ["fr"]  # said again in French, the answer's language, never translated
+    monkeypatch.setattr(speaker, "_speak_gemini", lambda text, language, mood: engine(("tts", language, mood), None))
+    assert asyncio.run(speaker.speak(TEXT, "fr")) == b"RIFF-live" and calls[-1] == ("live", "fr", "joyful")
+    monkeypatch.setattr(speaker, "_speak_live", lambda text, mood, language: engine(("live", language, mood), None))
+    assert asyncio.run(speaker.speak(TEXT, "fr")) == b"mp3" and calls[-1] == ("edge", "fr", "joyful")
 
 
 async def _done(value):
@@ -335,3 +341,41 @@ def test_the_spoken_rewrite_gives_the_mood_and_edge_follows_it(monkeypatch):
     monkeypatch.setattr(voice_module.edge_tts, "Communicate", Communicate)
     assert asyncio.run(Voice(llm)._speak_edge("Bonne nouvelle !", "fr", "joyful")) == b"mp3"
     assert made == {"voice": "fr-FR-VivienneMultilingualNeural", "rate": "+6%", "pitch": "+6Hz"}
+
+
+def test_a_list_is_said_without_where_each_item_comes_from_and_with_dates_in_full():
+    from app.answer.voice import for_speech
+
+    listing = (
+        "⏰ Échéances des 14 prochains jours\n"
+        "• mar. 22 sept. — Wadhwani Ignite: complete Module 1 (appel, Charles Bolton, jeu. 17 sept.)\n"
+        "• jeu. 24 sept. — Hackathon: build phase (METI cohort (avant Jeli), +251 ···34, mer. 16 sept.)\n"
+        "• Tue 22 Sep — Upload the pitch (PDF)\n"
+        "Le marché est ouvert (mar 3 fois)."
+    )
+    said = for_speech(spoken(listing))
+    assert said == (
+        "Échéances des 14 prochains jours. mardi 22 septembre — Wadhwani Ignite: complete Module 1. "
+        "jeudi 24 septembre — Hackathon: build phase. Tuesday 22 September — Upload the pitch (PDF). "
+        "Le marché est ouvert (mar 3 fois)"
+    )
+
+
+def test_a_rewrite_that_gives_the_list_back_is_asked_again():
+    from app.answer.voice import Voice
+
+    class EchoOnce(_ScriptLLM):
+        def __init__(self):
+            self.calls = 0
+
+        async def generate(self, prompt, schema, **kwargs):
+            self.calls += 1
+            assert prompt.startswith("Say this answer as a voice note, entirely in French, without a list:")
+            if self.calls == 1:
+                return schema(text=prompt.split("\n\n", 1)[1], mood="calm")  # the written answer, list and all
+            return schema(text="Alors, mardi 22 septembre, tu finis le module 1, et jeudi 24 c'est la date limite.", mood="calm")
+
+    listing = "Échéances\n• mardi 22 septembre — finir le module 1\n• jeudi 24 septembre — date limite"
+    llm = EchoOnce()
+    said = asyncio.run(Voice(llm).script(listing, "fr"))
+    assert said.startswith("Alors, mardi 22 septembre") and llm.calls == 2

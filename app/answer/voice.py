@@ -3,9 +3,9 @@ by voice — when it was asked by voice, or when the member asks for a voice rep
 
 Listening: the voice note goes to the answer model as audio, which writes down what was said.
 Speaking: the answer is first said again in spoken language, with the mood of its content (joyful,
-reassuring, calm). Then Gemini's native-audio voice (the Live API: the most human voice, streamed,
-outside the 10-a-day quota of the speech models) says it; Gemini TTS, then edge-tts (free, no
-quota) take over when it cannot, each told the same mood.
+reassuring, calm). Then Gemini TTS says it, on every key in turn; Gemini's native-audio voice (the
+Live API, outside the TTS models' 10-a-day quota) when no key can; edge-tts (free, no quota) only
+when no Gemini voice answers. Each is told the same mood.
 The audio bytes returned by speak() are self-describing: RIFF header = WAV (from Gemini PCM),
 no RIFF header = MP3 (from edge-tts). WAHA has convert:True so it transcodes to OGG/Opus anyway.
 When any step fails, the member gets the written answer instead: a voice reply is a courtesy.
@@ -22,23 +22,26 @@ import edge_tts
 from google.genai import errors, types
 from pydantic import BaseModel
 
+from app.answer.language import detect_language
 from app.answer.llm import LLM, LLMUnavailable
 
 log = logging.getLogger(__name__)
 
-# Gemini native audio (Live API) — the primary voice. Measured on the key on 22 Sep 2026: word for
-# word on French texts (a question is read, not answered), first sound after 1.5 s, then streamed in
-# real time (32 s of speech in 34 s). Its quota is not the 10-a-day one of the TTS models below.
+# Gemini native audio (Live API) — the second voice. Measured on the key on 22 Sep 2026: first sound
+# after 1.5 s, then streamed in real time (32 s of speech in 34 s); its quota is not the 10-a-day one
+# of the TTS models below. Word for word on French texts, a question read and not answered — but a
+# French text full of English names was once said in English: hence second, told the language.
 LIVE_VOICE_MODELS = ["gemini-3.1-flash-live-preview", "gemini-2.5-flash-native-audio-latest"]
 LIVE_MAX_CHARS = 900  # about a minute of speech; longer answers go to the faster TTS below
 LIVE_FIRST_AUDIO_SECONDS = 8.0
 CHARS_PER_SECOND = 15  # measured: 14–17 characters of French speech per second
 LIVE_SYSTEM = """\
 You are the voice of Jeli, a warm assistant of an African innovators' WhatsApp community, recording
-a WhatsApp voice note. Say the user's text aloud, word for word, in its own language, as a native
-speaker of it would: add nothing, drop nothing, never answer it or comment on it, even when it asks
-a question. Sound like a real person talking to a friend, not an announcer: relaxed, natural pauses,
-breathing, and the feeling of the words. Say it {mood}.
+a WhatsApp voice note. The text is in {language}: say it aloud in {language}, word for word, as a
+native speaker would — never translate it, not even its English names or terms. Add nothing, drop
+nothing, never answer it or comment on it, even when it asks a question. Sound like a real person
+talking to a friend, not an announcer: relaxed, natural pauses, breathing, and the feeling of the
+words. Say it {mood}.
 """
 # The feeling of a voice note, given by the spoken rewrite: how each voice is asked to say it,
 # and edge-tts's prosody (it cannot act, but a livelier or softer pace and pitch come through).
@@ -49,7 +52,8 @@ MOODS = {
 }
 DEFAULT_MOOD = "calm"
 
-# Gemini TTS — second voice: expressive, instruction-following, but 10 requests a day per project.
+# Gemini TTS — the first voice: expressive, reads the text as it is, faster than real time (34 s of
+# speech made in 20 s, 22 Sep) — but 10 requests a day per project, hence every key in turn.
 # Uses the same API key pool as the LLM (existing rotation in LLM._clients).
 # Tried in order on every key (checked on the key on 21 Sep 2026: both exist; the free tier
 # allows about 10 requests a day per key and model, hence the rotation and the edge-tts fallback).
@@ -57,7 +61,8 @@ GEMINI_TTS_MODELS = ["gemini-3.1-flash-tts-preview", "gemini-2.5-flash-preview-t
 GEMINI_TTS_MODEL = GEMINI_TTS_MODELS[0]
 GEMINI_TTS_VOICES = {"fr": "Aoede", "en": "Aoede"}  # warm, expressive multilingual voice
 GEMINI_TTS_TIMEOUT = 12.0  # per attempt, plus the time to say the text (a longer text takes longer)
-GEMINI_TTS_SECONDS_PER_SPOKEN_SECOND = 0.8  # measured: 8.3 s of speech made in 6.2 s
+GEMINI_TTS_SECONDS_PER_SPOKEN_SECOND = 0.8  # measured: 8.3 s of speech in 6.2 s, 34 s in 20 s
+GEMINI_TTS_MAX_ATTEMPT_SECONDS = 60.0
 # Measured 21 Sep: the 3.1 preview timed out on every key in turn (20 s each, before the fallback
 # voice). Bounded: 30 s in all; two slow failures rest the model; a key over quota (429) rests alone.
 GEMINI_TTS_TOTAL_SECONDS = 30.0
@@ -95,7 +100,7 @@ MENTION = re.compile(r"(?<!\w)@\d{5,}\b")
 # Technical identifiers that must never be read aloud: WhatsApp ids ("1203…@g.us") and phone numbers.
 JID = re.compile(r"\b\d{5,}(?::\d+)?@[\w.]+")
 PHONE = re.compile(r"\+\d[\d\s().-]{7,}\d")
-EMOJI = re.compile("[\U0001f000-\U0001faff☀-➿⬀-⯿️‍]")
+EMOJI = re.compile("[\U0001f000-\U0001faff⌀-⏿☀-➿⬀-⯿️‍]")
 
 LISTEN_SYSTEM = """\
 Write down, word for word, what is said in this WhatsApp voice note, in the language it is spoken
@@ -109,7 +114,7 @@ _PUNCT_ARTIFACTS = re.compile(r"[,;]\s*[.,;]|[.]\s*,|\s{2,}")
 def for_speech(text: str) -> str:
     """Turn structured text (newlines, bullets) into natural spoken flow.
     Called on the output of spoken() before passing to the TTS engine."""
-    text = _BULLET.sub(", ", text)          # "- item" → ", item"
+    text = _BULLET.sub(". ", text)          # "- item" → a pause, then the item
     text = _NEWLINES.sub(". ", text)        # paragraph/line breaks → pause
     text = _PUNCT_ARTIFACTS.sub(lambda m: m.group(0)[0], text)
     text = text.strip(" ,.")
@@ -157,7 +162,9 @@ LANG_LABELS = {
 SPEAK_SYSTEM = """\
 You are Jeli, the warm assistant griot of an African innovators' WhatsApp community. Rewrite the
 written answer below as what you would say in a voice note to a friend.
-- Same language as the answer, same facts. Keep every number, date, time and name exactly as
+- Entirely in the language you are given: say in it the parts written in another language (an
+  English item in a French answer is said in French), keeping only proper names (people,
+  programmes, platforms) as they are. Same facts. Keep every number, date and time exactly as
   written, digits as digits. Add nothing that is not in the answer.
 - Speak, do not read: natural spoken rhythm, contractions, short sentences, no lists, no symbols,
   no emoji, no markdown, no links, no ids, no phone numbers.
@@ -170,7 +177,9 @@ thanks, a welcome), "reassuring" (a problem, a delay, something missing or not f
 (plain information).
 """
 SPEAK_REWRITE_MAX_CHARS = 1200
+REWRITE_ATTEMPTS = 2
 _NUMBER = re.compile(r"\d+")
+_LIST_LINE = re.compile(r"^\s*[•\-]\s", re.MULTILINE)
 
 
 class Seen(BaseModel):
@@ -194,16 +203,46 @@ def without_voice_request(text: str) -> str:
     return VOICE_ASK.sub("", text).strip(" ,;:") or text
 
 
+# Where a listed item comes from, written for the eye: "(METI cohort, +251 ···34, mer. 16 sept.)".
+PROVENANCE = re.compile(r"\s*\((?:[^()]|\([^()]*\))*\)\s*$")
+DATED = re.compile(
+    r"···|\b(?:lun|mar|mer|jeu|ven|sam|dim|mon|tue|wed|thu|fri|sat|sun)\.?\s+\d|\b\d{1,2}\s+(?:sept|sep|oct|nov)\b",
+    re.IGNORECASE,
+)
+MASKED_NUMBER = re.compile(r"\+?\d{1,4}\s*·{2,}\s*\d{1,4}")
+# Days and months as written short, said in full ("mar. 22 sept." → "mardi 22 septembre").
+SPOKEN_DAYS = {
+    "lun": "lundi", "mar": "mardi", "mer": "mercredi", "jeu": "jeudi", "ven": "vendredi", "sam": "samedi", "dim": "dimanche",
+    "mon": "Monday", "tue": "Tuesday", "wed": "Wednesday", "thu": "Thursday", "fri": "Friday", "sat": "Saturday", "sun": "Sunday",
+}
+SPOKEN_MONTHS = {"sept": "septembre", "oct": "octobre", "nov": "novembre", "sep": "September"}
+SHORT_DAY = re.compile(
+    r"\b(lun|mar|mer|jeu|ven|sam|dim|mon|tue|wed|thu|fri|sat|sun)\.?"
+    r"(?=\s+\d{1,2}\s+(?:sept|sep|oct|nov|septembre|octobre|novembre|september|october|november)\b)",
+    re.IGNORECASE,
+)
+SHORT_MONTH = re.compile(r"(?<=\d )(sept|oct|nov|sep)\b\.?", re.IGNORECASE)
+
+
 def spoken(reply: str) -> str:
     """What a voice note says of a written reply: its words, without the quote blocks, links, mentions
-    and WhatsApp formatting — those stay in the text sent with it."""
+    and WhatsApp formatting — those stay in the text sent with it — nor where each listed item
+    comes from; days and months said in full."""
     text = MENTION.sub("", QUOTE_LINE.sub("", reply))
     text = PHONE.sub("", JID.sub("", LINK.sub("", text)))
     text = re.sub(r"[*_~`]", "", text)
     text = re.sub(r"\s*\(/\w+\)", "", text)  # "(/catchup)": a command to type, not to say
     text = re.sub(r"(?<!\S)/(\w+)", r"\1", text)
     text = EMOJI.sub("", text)
-    lines = (" ".join(line.split()) for line in text.splitlines())
+    lines = []
+    for line in text.splitlines():
+        line = " ".join(line.split())
+        provenance = PROVENANCE.search(line)
+        if provenance and line.startswith(("•", "-")) and DATED.search(provenance.group()):
+            line = line[: provenance.start()]
+        line = SHORT_DAY.sub(lambda m: SPOKEN_DAYS[m.group(1).lower()], MASKED_NUMBER.sub("", line))
+        line = SHORT_MONTH.sub(lambda m: SPOKEN_MONTHS[m.group(1).lower()], line)
+        lines.append(" ".join(line.split()))
     return "\n".join(line for line in lines if line).strip(" :").replace(" ,", ",")
 
 
@@ -278,7 +317,7 @@ class Voice:
             return ""
         return seen.description.strip()
 
-    async def _speak_live(self, text: str, mood: str = DEFAULT_MOOD) -> bytes | None:
+    async def _speak_live(self, text: str, mood: str = DEFAULT_MOOD, language: str = "en") -> bytes | None:
         """Gemini's native-audio voice (Live API) on every key in turn; WAV bytes, or None.
         A voice note whose length does not fit the text (the model answered it, or stopped) is
         not sent."""
@@ -288,7 +327,9 @@ class Voice:
         voice_name = (self.voice_name or "Aoede").title()
         config = types.LiveConnectConfig(
             response_modalities=["AUDIO"],
-            system_instruction=LIVE_SYSTEM.format(mood=MOODS.get(mood, MOODS[DEFAULT_MOOD])[0]),
+            system_instruction=LIVE_SYSTEM.format(
+                mood=MOODS.get(mood, MOODS[DEFAULT_MOOD])[0], language=LANG_LABELS.get(language, "English")
+            ),
             speech_config=types.SpeechConfig(
                 voice_config=types.VoiceConfig(prebuilt_voice_config=types.PrebuiltVoiceConfig(voice_name=voice_name))
             ),
@@ -357,8 +398,11 @@ class Voice:
             f"announcer-like. Say it {MOODS.get(mood, MOODS[DEFAULT_MOOD])[0]}:\n\n" + text
         )
         # A longer text takes longer to say: a request given up too early still costs its quota.
-        attempt_timeout = GEMINI_TTS_TIMEOUT + len(text) / CHARS_PER_SECOND * GEMINI_TTS_SECONDS_PER_SPOKEN_SECOND
-        total_seconds = max(GEMINI_TTS_TOTAL_SECONDS, 2 * attempt_timeout + 10)
+        attempt_timeout = min(
+            GEMINI_TTS_MAX_ATTEMPT_SECONDS,
+            GEMINI_TTS_TIMEOUT + len(text) / CHARS_PER_SECOND * GEMINI_TTS_SECONDS_PER_SPOKEN_SECOND,
+        )
+        total_seconds = max(GEMINI_TTS_TOTAL_SECONDS, 1.5 * attempt_timeout + 10)
         config = types.GenerateContentConfig(
             response_modalities=["AUDIO"],
             speech_config=types.SpeechConfig(
@@ -432,21 +476,29 @@ class Voice:
         """The spoken version of an answer and its mood (see MOODS)."""
         if len(text) < 15 or len(text) > SPEAK_REWRITE_MAX_CHARS:
             return text, DEFAULT_MOOD
-        prompt = f"Language: {LANG_LABELS.get(language, 'English')}\nWritten answer:\n{text}"
-        try:
-            said = await self.llm.generate(prompt, Script, system=SPEAK_SYSTEM, timeout=8, temperature=0.7, attempts=2)
-        except LLMUnavailable:
-            return text, DEFAULT_MOOD
-        mood = said.mood.strip().lower() if said.mood.strip().lower() in MOODS else DEFAULT_MOOD
-        result = " ".join(said.text.split())
-        if not result or len(result) > len(text) * 1.6 + 80 or not set(_NUMBER.findall(text)) <= set(_NUMBER.findall(result)):
-            log.info("Spoken rewrite rejected (empty, too long or a number lost): reading the answer as it is")
-            return text, mood
-        return result, mood
+        label = LANG_LABELS.get(language, "English")
+        # Said in the request, not only in the system: the light models follow the request.
+        prompt = f"Say this answer as a voice note, entirely in {label}, without a list:\n\n{text}"
+        mood = DEFAULT_MOOD
+        for _ in range(REWRITE_ATTEMPTS):
+            try:
+                said = await self.llm.generate(prompt, Script, system=SPEAK_SYSTEM, timeout=8, temperature=0.7, attempts=2)
+            except LLMUnavailable:
+                return text, mood
+            mood = said.mood.strip().lower() if said.mood.strip().lower() in MOODS else DEFAULT_MOOD
+            result = " ".join(said.text.split())
+            if not result or len(result) > len(text) * 1.6 + 80 or not set(_NUMBER.findall(text)) <= set(_NUMBER.findall(result)):
+                log.info("Spoken rewrite rejected (empty, too long or a number lost): reading the answer as it is")
+                return text, mood
+            # The light models sometimes give the written answer back, list and all: ask again.
+            if result != " ".join(text.split()) and not _LIST_LINE.search(said.text):
+                return result, mood
+            log.info("Spoken rewrite came back as the written answer: asking again")
+        return text, mood
 
     async def speak(self, text: str, language: str = "en") -> bytes | None:
         """The text read aloud; None when all voices fail.
-        Gemini first, on every key: its native-audio voice, then Gemini TTS; edge-tts only when no
+        Gemini first, on every key: Gemini TTS, then its native-audio voice; edge-tts only when no
         Gemini voice answers. Long replies are truncated at a sentence boundary: the full text is
         sent alongside."""
         text = text.strip()
@@ -455,11 +507,17 @@ class Voice:
         if len(text) > MAX_SPOKEN_CHARS:
             cutoff = text[:MAX_SPOKEN_CHARS].rfind(". ")
             text = text[:cutoff + 1] if cutoff > 300 else text[:MAX_SPOKEN_CHARS]
-        said, mood = await self._rewrite(text, language)
+        # The answer's own language, not the question's (the dashboard gives none): a rewrite or a
+        # voice told another language translates the answer.
+        spoken_language = detect_language(text)
+        said, mood = await self._rewrite(text, spoken_language)
         speech = for_speech(said)
-        for engine in (lambda: self._speak_live(speech, mood), lambda: self._speak_gemini(speech, language, mood)):
+        for engine in (
+            lambda: self._speak_gemini(speech, spoken_language, mood),
+            lambda: self._speak_live(speech, mood, spoken_language),
+        ):
             audio = await engine()
             if audio:
                 return audio
         log.warning("No Gemini voice answered: the fallback voice speaks")
-        return await self._speak_edge(speech, language, mood)
+        return await self._speak_edge(speech, spoken_language, mood)
