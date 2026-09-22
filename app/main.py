@@ -226,6 +226,9 @@ def _backup_health(llm) -> dict:
         "used": backup.used,
         "heard": backup.heard,
         "models": backup.health(),
+        # Everything the key can see: what Groq offers changes, and a claim about it should be read,
+        # not remembered (e.g. whether it has an embedding model of its own).
+        "on_key": backup.on_key,
     }
 
 

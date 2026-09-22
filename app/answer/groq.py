@@ -70,6 +70,7 @@ class Groq:
         # What a first call proved, for the dashboard: "" not tried, "ok", or why it failed.
         self.checked = ""
         self.hear_model = HEAR_MODEL  # confirmed against the key by check()
+        self.on_key: list[str] = []  # every model id the key can see, as check() last read it
         if self.available:
             log.info("Groq: spare engine ready, models %s", ", ".join(self.models))
 
@@ -117,6 +118,7 @@ class Groq:
             self.checked = ""
             return ""
         available = await self.models_on_key()
+        self.on_key = available
         if available:
             chosen = self._pick(available)
             whisper = [m for m in available if "whisper" in m]
