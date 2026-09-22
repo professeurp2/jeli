@@ -68,12 +68,15 @@ async def lifespan(app: FastAPI):
     state.missing_models = []
     if store and state.embedder:
         state.llm = LLM(settings.api_key_list, settings.answer_models)
+        # The answers members read (questions, catch-ups, session recaps and questions, the brief)
+        # start with the best model; everything else uses the light models, 25 times more quota.
+        state.light_llm = state.llm.with_models(settings.light_model_list)
         state.answerer = Answerer(store, state.embedder, state.llm, min_similarity=runtime["answer_min_similarity"])
-        state.deadlines = Deadlines(store, llm=state.llm)
+        state.deadlines = Deadlines(store, llm=state.light_llm)
         state.catchup = Catchup(store, state.llm, deadlines=state.deadlines)
         state.recaps = Recaps(store, state.llm)
-        state.extractor = DeadlineExtractor(store, state.llm)
-        state.documents = Documents(store, state.llm)
+        state.extractor = DeadlineExtractor(store, state.light_llm)
+        state.documents = Documents(store, state.light_llm)
 
         async def learn_now() -> None:
             memory = state.activities.get("memory")
@@ -81,9 +84,9 @@ async def lifespan(app: FastAPI):
                 memory.run_now("Jeli")
 
         state.sessions = Sessions(
-            store, LLM(settings.api_key_list, settings.transcription_model_list), state.recaps, learn_now, reader=state.llm
+            store, state.llm.with_models(settings.transcription_model_list), state.recaps, learn_now, reader=state.light_llm
         )
-        state.awareness = Awareness(store, state.llm, state.sessions)
+        state.awareness = Awareness(store, state.light_llm, state.sessions)
         state.answerer.explainer = state.awareness.explain
         state.answerer.state = state.awareness.state
         # The community brief: Jeli's general knowledge, background for every prompt.
@@ -92,12 +95,14 @@ async def lifespan(app: FastAPI):
 
         async def check_models() -> None:
             wanted = list(dict.fromkeys(
-                [*settings.answer_models, *settings.transcription_model_list, *IMAGE_MODELS, *GEMINI_TTS_MODELS, EMBEDDING_MODEL]
+                [*settings.answer_models, *settings.light_model_list, *settings.transcription_model_list, *IMAGE_MODELS,
+                 *GEMINI_TTS_MODELS, EMBEDDING_MODEL]
             ))
             state.missing_models = await report_models(state.llm.client, wanted)
 
         asyncio.create_task(check_models())
-    state.understander = Understander(state.llm)
+    state.light_llm = getattr(state, "light_llm", None) if state.llm else None
+    state.understander = Understander(state.light_llm)
     if state.awareness is not None:
         state.understander.state = state.awareness.state
     state.responder = Responder(
@@ -111,9 +116,9 @@ async def lifespan(app: FastAPI):
         store=store,
     )
     state.guard = Guard(record=store.record_incident if store else None)
-    state.reminders = Reminders(store, state.llm, deadlines=state.deadlines) if store and state.llm else None
+    state.reminders = Reminders(store, state.light_llm, deadlines=state.deadlines) if store and state.llm else None
     state.responder.reminders = state.reminders
-    state.voice = Voice(state.llm) if state.llm else None  # voice notes, heard and spoken
+    state.voice = Voice(state.light_llm) if state.llm else None  # voice notes, heard and spoken
     if state.voice is not None:
         state.voice.store = store  # today's count of natural voice notes survives a restart
 
@@ -162,7 +167,7 @@ async def lifespan(app: FastAPI):
         state.whatsapp.in_conversation = state.responder.in_conversation
         state.whatsapp.warm = state.responder.warm
         state.whatsapp.voice = state.voice
-        state.whatsapp.emotions = Emotions(state.llm) if state.llm else None  # reactions that fit the feeling
+        state.whatsapp.emotions = Emotions(state.light_llm) if state.llm else None  # reactions that fit the feeling
         if state.documents:
             state.whatsapp.on_document = state.documents.add
         if store:

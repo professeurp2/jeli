@@ -33,14 +33,20 @@ class Settings(BaseSettings):
 
     gemini_api_key: str = ""
     # Extra Gemini keys (comma-separated) for quota rotation: when one key is exhausted the next
-    # takes over. Create additional projects on aistudio.google.com to multiply the free quota.
+    # takes over. Do not create projects to multiply the free quota: on 22 Sep Google suspended 8
+    # of Jeli's projects for it (Terms of Service). More quota: billing on one project.
     gemini_api_keys: str = ""
     # Answer models, tried in order: the next one takes over on quota, overload or timeout. Each has
     # its own free daily quota per key: gemini-3.1-flash-lite (checked 22 Sep, slower) adds a reserve
     # when the others are spent or overloaded, without another project.
-    gemini_models: str ="gemini-3.6-flash,gemini-3.5-flash-lite,gemini-flash-lite-latest,gemini-3.1-flash-lite"
+    gemini_models: str = "gemini-3.6-flash,gemini-3.5-flash-lite,gemini-flash-lite-latest,gemini-3.1-flash-lite"
+    # Light models, for everything but the answers members read (understanding, emotions, voice,
+    # reminders, deadline finding, documents…). Measured on AI Studio (22 Sep, free tier, per key and
+    # day): gemini-3.6-flash allows 20 requests, the Flash-Lite models 500 — used first for every call,
+    # the 20 were gone by the morning.
+    light_models: str = "gemini-3.5-flash-lite,gemini-3.1-flash-lite,gemini-flash-lite-latest"
     # Transcription models, tried in order (they listen to the recording, window by window).
-    transcription_models: str = "gemini-3.6-flash,gemini-3.5-flash-lite"
+    transcription_models: str = "gemini-3.5-flash-lite,gemini-3.1-flash-lite,gemini-3.6-flash"
     # Below this similarity between the question and the best excerpt, Jeli says it doesn't know
     # without asking the model (measured: group questions ≥ 0.65, unrelated ones ≤ 0.56).
     answer_min_similarity: float = 0.60
@@ -92,6 +98,10 @@ class Settings(BaseSettings):
     @property
     def whatsapp_groups(self) -> set[str]:
         return {group.strip() for group in self.whatsapp_group_ids.split(",") if group.strip()}
+
+    @property
+    def light_model_list(self) -> list[str]:
+        return [model.strip() for model in self.light_models.split(",") if model.strip()]
 
     @property
     def answer_models(self) -> list[str]:

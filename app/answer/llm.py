@@ -118,6 +118,17 @@ class LLM:
         self._invalid_until[key] = until
         log.error("Key %d disabled for 24 h — verify it is valid and Gemini API is enabled on its project", key)
 
+    def with_models(self, models: list[str]) -> "LLM":
+        """The same keys on other models: rotation cursor apart, but sharing which (key, model) pairs
+        rest and which keys Google refused — a key found spent here is spent everywhere."""
+        if not models:
+            raise ValueError("At least one model is required")
+        view = object.__new__(LLM)
+        view.__dict__.update(self.__dict__)
+        view.models = list(models)
+        view._next_key = 0
+        return view
+
     def valid_keys(self) -> list[int]:
         """The keys Google accepts: all of them but those refused in the last 24 h."""
         now = self._clock()

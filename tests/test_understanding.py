@@ -277,3 +277,23 @@ def test_a_key_out_of_quota_hands_over_to_the_same_model_on_the_next_key():
     llm._clients = clients
     assert asyncio.run(llm.generate("p", GeneratedAnswer, attempts=2)) == good
     assert calls == [("spent", "best"), ("spent", "best"), ("spent", "best"), ("fresh", "best")]  # never the overloaded lite
+
+
+def test_the_light_models_share_the_keys_and_what_is_known_of_them():
+    llm = LLM(["k1", "k2", "k3"], ["gemini-3.6-flash", "gemini-3.5-flash-lite"])
+    light = llm.with_models(["gemini-3.5-flash-lite", "gemini-3.1-flash-lite"])
+    assert light.models == ["gemini-3.5-flash-lite", "gemini-3.1-flash-lite"] and llm.models[0] == "gemini-3.6-flash"
+    assert light._clients is llm._clients and light._api_keys is llm._api_keys
+    llm._rest(0, "gemini-3.5-flash-lite", "quota", seconds=3600)  # found spent while answering…
+    assert (0, "gemini-3.5-flash-lite") not in light._build_pairs()  # …not asked again for the light tasks
+    light._disable_key(2)
+    assert llm.valid_keys() == [0, 1]  # a key Google refuses is refused everywhere
+
+
+def test_settings_give_the_light_models_most_of_the_work():
+    from app.config import Settings
+
+    settings = Settings(_env_file=None)
+    assert settings.answer_models[0] == "gemini-3.6-flash"  # the answers members read
+    assert "gemini-3.6-flash" not in settings.light_model_list  # 20 a day per key: kept for the answers
+    assert settings.transcription_model_list[0] == "gemini-3.5-flash-lite"
