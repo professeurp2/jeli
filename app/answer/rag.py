@@ -50,7 +50,7 @@ from app.answer.prompts import DUPLICATE_SYSTEM, SYSTEM, build_prompt
 from app.ingest.transcribe import format_offset
 from app.kb.embeddings import Embedder
 from app.kb.indexer import DOCUMENT_PREFIX, RECORDING_PREFIX, document_page
-from app.kb.search import GUARANTEED_SEMANTIC, search
+from app.kb.search import GUARANTEED_SEMANTIC, floor_for, search
 from app.kb.store import SearchHit, Store
 from app.models import Document, IncomingMessage, Recording, Reply, StoredMessage
 
@@ -346,7 +346,7 @@ class Answerer:
         hits = await self._search([question, *queries], prefetched)
         state = await self._state()
         context = background(self.brief, state, member)
-        if not hits or max(hit.similarity for hit in hits) < self.min_similarity:
+        if not hits or max(hit.similarity for hit in hits) < floor_for(hits, self.min_similarity):
             excerpts = []
         else:
             excerpts = await self._excerpts(hits)
@@ -421,7 +421,7 @@ class Answerer:
         """
         language = detect_language(question)
         hits = await search(self.store, self.embedder, question, limit=CANDIDATE_CHUNKS)
-        if not hits or max(hit.similarity for hit in hits) < min_similarity:
+        if not hits or max(hit.similarity for hit in hits) < floor_for(hits, min_similarity):
             return None
         excerpts = await self._excerpts(hits)
         if not excerpts:
@@ -535,7 +535,7 @@ class Answerer:
         working when every model is out of quota."""
         texts = TEXTS[detect_language(topic)]
         hits = await search(self.store, self.embedder, topic, limit=CANDIDATE_CHUNKS)
-        if not hits or max(hit.similarity for hit in hits) < self.min_similarity:
+        if not hits or max(hit.similarity for hit in hits) < floor_for(hits, self.min_similarity):
             return texts["search_nothing"]
         excerpts = await self._excerpts(hits)
         return self._quotes(texts["search_header"], excerpts, topic, shown=3) if excerpts else texts["search_nothing"]

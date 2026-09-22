@@ -29,11 +29,14 @@ on conflict (id) do nothing
 # chunks' search column is built the same way (db/schema.sql). Recent conversations get a small
 # bonus (a quarter more at most, fading over a month): members mostly ask about the latest
 # announcement, and an older repeat of the same words must not win by rank alone.
+# {column} is "embedding" (Gemini) or "embedding_backup" (the local model): a question is searched
+# in the space of whichever embedded it — the two are not comparable. Never user input.
 SEARCH = """
 with semantic as (
-    select id, row_number() over (order by embedding <=> %(embedding)s::vector) as rank
+    select id, row_number() over (order by {column} <=> %(embedding)s::vector) as rank
     from jeli.chunks
-    order by embedding <=> %(embedding)s::vector
+    where {column} is not null
+    order by {column} <=> %(embedding)s::vector
     limit %(candidates)s
 ),
 keyword as (
@@ -50,12 +53,14 @@ fused as (
 )
 select c.id, c.chat_id, c.started_at, c.ended_at, c.authors, c.message_ids, c.content,
        f.score * (1 + %(recency)s * exp(-greatest(extract(epoch from (now() - c.ended_at)), 0) / (86400.0 * 30))) as score,
-       1 - (c.embedding <=> %(embedding)s::vector) as similarity
+       1 - (c.{column} <=> %(embedding)s::vector) as similarity
 from fused as f join jeli.chunks as c using (id)
 order by 8 desc
 limit %(limit)s
 """
 RECENCY_BONUS = 0.25
+# The two vector spaces the memory keeps, and the column each one lives in.
+VECTOR_COLUMNS = {"gemini": "embedding", "backup": "embedding_backup"}
 
 
 @dataclass(frozen=True)
@@ -69,6 +74,9 @@ class SearchHit:
     content: str
     score: float  # fused rank score, only meaningful for ordering
     similarity: float  # cosine similarity to the question, 0..1
+    # Which memory answered: "gemini" or "backup" (the local model). The two do not score on the
+    # same scale, so what counts as "close enough" depends on it (app/kb/search.py).
+    space: str = "gemini"
 
 
 class Store:
@@ -734,13 +742,17 @@ class Store:
             ).fetchall()
         return [StoredMessage(**row) for row in rows]
 
-    async def save_chunk(self, chunk: Chunk, embedding: Sequence[float], model: str) -> int:
+    async def save_chunk(
+        self, chunk: Chunk, embedding: Sequence[float], model: str, backup: Sequence[float] | None = None
+    ) -> int:
+        """`backup`: the same passage in the local model's space, so the memory stays searchable
+        when Google is unreachable (app/kb/local_embeddings.py)."""
         async with self._pool.connection() as conn, conn.transaction():
             row = await (
                 await conn.execute(
                     "insert into jeli.chunks (chat_id, source, started_at, ended_at, authors, message_ids, "
-                    "content, embedding, embedding_model) values (%s, %s, %s, %s, %s, %s, %s, %s::vector, %s) "
-                    "returning id",
+                    "content, embedding, embedding_model, embedding_backup) "
+                    "values (%s, %s, %s, %s, %s, %s, %s, %s::vector, %s, %s::vector) returning id",
                     (
                         chunk.chat_id,
                         chunk.source,
@@ -751,6 +763,7 @@ class Store:
                         chunk.content,
                         list(embedding),
                         model,
+                        list(backup) if backup else None,
                     ),
                 )
             ).fetchone()
@@ -760,14 +773,16 @@ class Store:
         return row["id"]
 
     async def search(
-        self, embedding: Sequence[float], keywords: str | None, limit: int = 5, candidates: int = 20
+        self, embedding: Sequence[float], keywords: str | None, limit: int = 5, candidates: int = 20,
+        space: str = "gemini",
     ) -> list[SearchHit]:
+        column = VECTOR_COLUMNS[space]  # a name from our own table, never from the member
         params = {
             "embedding": list(embedding), "keywords": keywords or "", "limit": limit, "candidates": candidates,
             "recency": RECENCY_BONUS,
         }
         async with self._pool.connection() as conn:
-            rows = await (await conn.execute(SEARCH, params)).fetchall()
+            rows = await (await conn.execute(SEARCH.format(column=column), params)).fetchall()
         return [
             SearchHit(
                 chunk_id=row["id"],
@@ -779,6 +794,7 @@ class Store:
                 content=row["content"],
                 score=float(row["score"]),
                 similarity=float(row["similarity"]),
+                space=space,
             )
             for row in rows
         ]

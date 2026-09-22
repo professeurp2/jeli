@@ -54,6 +54,9 @@ class Settings(BaseSettings):
     groq_models: str = "llama-3.3-70b-versatile"
     # Transcription models, tried in order (they listen to the recording, window by window).
     transcription_models: str = "gemini-3.5-flash-lite,gemini-3.1-flash-lite,gemini-3.6-flash"
+    # The memory's spare sense: embeddings computed on our own server, so the group's memory stays
+    # searchable when Google is unreachable (Groq has no embedding model). Off: Gemini only.
+    local_embeddings: bool = True
     # Below this similarity between the question and the best excerpt, Jeli says it doesn't know
     # without asking the model (measured: group questions ≥ 0.65, unrelated ones ≤ 0.56).
     answer_min_similarity: float = 0.60

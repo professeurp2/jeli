@@ -20,6 +20,7 @@ def test_health_without_any_channel_configured():
         "gemini_keys": 0,
         "models": [],
         "backup": {"enabled": False},
+        "memory_backup": {"enabled": False},
     }
 
 

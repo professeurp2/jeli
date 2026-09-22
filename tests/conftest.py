@@ -28,6 +28,8 @@ def isolated_settings(monkeypatch):
     monkeypatch.setitem(Settings.model_config, "env_file", None)
     for var in CHANNEL_VARS:
         monkeypatch.delenv(var, raising=False)
+    # The local embedding model is a 220 MB download: tests that need it ask for it by name.
+    monkeypatch.setenv("LOCAL_EMBEDDINGS", "false")
     get_settings.cache_clear()
     yield
     get_settings.cache_clear()

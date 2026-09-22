@@ -34,6 +34,7 @@ from app.control.setup import build_activities
 from app.ingest.live import LiveIngestor
 from app.ingest.sessions import Sessions
 from app.kb.embeddings import Embedder
+from app.kb.local_embeddings import LocalEmbedder
 from app.kb.store import Store
 from app.models import IncomingMessage
 from app.system_certificates import use_system_certificates
@@ -55,7 +56,12 @@ async def lifespan(app: FastAPI):
     if store:
         await store.open()
     state.store = store
-    state.embedder = Embedder(settings.api_key_list) if settings.api_key_list else None
+    # The memory's spare sense: the local model, loaded in the background (the first start
+    # downloads it). No key, no quota, no network — Groq has no embedding model of its own.
+    state.local_embedder = LocalEmbedder() if settings.local_embeddings else None
+    state.embedder = Embedder(settings.api_key_list, backup=state.local_embedder) if settings.api_key_list else None
+    if state.local_embedder is not None:
+        asyncio.create_task(state.local_embedder.load())
 
     # The team's settings from the dashboard, over the environment's.
     runtime = Runtime(settings, store)
@@ -232,6 +238,12 @@ def _backup_health(llm) -> dict:
     }
 
 
+def _memory_backup_health(local) -> dict:
+    if local is None:
+        return {"enabled": False}
+    return {"enabled": True, "ready": local.ready, "failed": local.failed, "dimensions": local.dimensions}
+
+
 @app.get("/health")
 async def health() -> dict:
     def enabled(name: str) -> bool:
@@ -250,6 +262,8 @@ async def health() -> dict:
         "models": getattr(app.state, "llm", None).model_health() if getattr(app.state, "llm", None) else [],
         # The spare engine: on or off, and how many answers it has rescued since the start.
         "backup": _backup_health(getattr(app.state, "llm", None)),
+        # The memory's spare sense: the local embedding model (Groq has none of its own).
+        "memory_backup": _memory_backup_health(getattr(app.state, "local_embedder", None)),
         "daily_digest": "daily_summary" in activities and activities["daily_summary"].enabled,
         "team_report": "team_report" in activities and activities["team_report"].enabled,
     }

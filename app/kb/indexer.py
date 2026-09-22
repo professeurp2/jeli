@@ -59,9 +59,16 @@ async def index_pending(
             chunks = chunks[:-1]
         for start in range(0, len(chunks), BATCH_SIZE):
             batch = chunks[start : start + BATCH_SIZE]
-            vectors = await embedder.embed_documents([chunk.content for chunk in batch])
-            for chunk, vector in zip(batch, vectors):
-                await store.save_chunk(chunk, vector, MODEL)
+            texts = [chunk.content for chunk in batch]
+            vectors, spares = (
+                await embedder.embed_both(texts) if hasattr(embedder, "embed_both")
+                else (await embedder.embed_documents(texts), None)
+            )
+            if vectors is None:
+                log.error("Chat %s: no Gemini embedding for this batch, kept for the next run", chat_id)
+                break
+            for position, (chunk, vector) in enumerate(zip(batch, vectors)):
+                await store.save_chunk(chunk, vector, MODEL, backup=spares[position] if spares else None)
             created += len(batch)
             log.info("Indexed %d chunks of chat %s", created, chat_id)
     return created

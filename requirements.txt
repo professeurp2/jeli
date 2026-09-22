@@ -17,3 +17,7 @@ truststore
 pypdf>=5
 python-docx>=1.1
 reportlab>=4.2
+
+# The memory's spare sense: embeddings computed locally, so a Google outage does not blind the
+# search. Small multilingual model (~220 MB), no key and no quota — see app/kb/local_embeddings.py
+fastembed>=0.4

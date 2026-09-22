@@ -36,7 +36,22 @@ def select(hits: list[SearchHit], limit: int) -> list[SearchHit]:
     return [hit for hit in hits if hit in chosen]
 
 
+# The local model scores lower than Gemini for the same closeness. Measured on the real memory
+# (909 passages, 22 Sep): questions about the group scored 0.53 to 0.65 in the spare space, and
+# questions with nothing to do with it 0.15 to 0.28 — a wide gap, but around 0.45, not 0.60. Every
+# configured threshold is scaled by this when the spare memory answered.
+BACKUP_SCALE = 0.75
+
+
+def floor_for(hits: list[SearchHit], configured: float) -> float:
+    """The similarity a hit must reach, on the scale of the memory that found it."""
+    return configured * BACKUP_SCALE if hits and hits[0].space == "backup" else configured
+
+
 async def search(store: Store, embedder: Embedder, question: str, limit: int = 5) -> list[SearchHit]:
-    embedding = await embedder.embed_query(question)
-    candidates = await store.search(embedding, keyword_query(question), limit=limit * 3)
+    embedding, space = (
+        await embedder.query(question) if hasattr(embedder, "query")
+        else (await embedder.embed_query(question), "gemini")
+    )
+    candidates = await store.search(embedding, keyword_query(question), limit=limit * 3, space=space)
     return select(candidates, limit)

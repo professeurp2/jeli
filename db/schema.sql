@@ -40,12 +40,17 @@ create table if not exists jeli.chunks (
     content         text not null,
     embedding       extensions.vector(768) not null,
     embedding_model text not null,
+    -- The same passage in the local model's own space (app/kb/local_embeddings.py), so the memory
+    -- can still be searched when Google is unreachable. Vectors from two models are not
+    -- comparable: a search uses the column belonging to whichever embedded the question.
+    embedding_backup extensions.vector(384),
     -- Keyword search next to the semantic one: names, acronyms, dates.
     search          tsvector generated always as (to_tsvector('simple', content)) stored,
     created_at      timestamptz not null default now()
 );
 
 create index if not exists chunks_embedding on jeli.chunks using hnsw (embedding extensions.vector_cosine_ops);
+create index if not exists chunks_embedding_backup on jeli.chunks using hnsw (embedding_backup extensions.vector_cosine_ops);
 create index if not exists chunks_search on jeli.chunks using gin (search);
 create index if not exists chunks_chat_started_at on jeli.chunks (chat_id, started_at);
 

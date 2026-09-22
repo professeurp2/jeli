@@ -21,6 +21,7 @@ class FakeStore:
     def __init__(self, messages=()):
         self.messages = list(messages)
         self.saved = []
+        self.spares = []
 
     async def add_messages(self, messages):
         self.messages.extend(messages)
@@ -32,8 +33,9 @@ class FakeStore:
     async def pending_messages(self, chat_id):
         return [m for m in self.messages if m.chat_id == chat_id and m.id not in self.indexed()]
 
-    async def save_chunk(self, chunk, embedding, model):
+    async def save_chunk(self, chunk, embedding, model, backup=None):
         self.saved.append((chunk, embedding, model))
+        self.spares.append(backup)
         return len(self.saved)
 
     def indexed(self):

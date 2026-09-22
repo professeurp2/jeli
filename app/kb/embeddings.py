@@ -73,7 +73,22 @@ class TokenBudget:
 
 
 class Embedder:
-    def __init__(self, api_keys: list[str] | str, client: genai.Client | None = None, tokens_per_minute: int = TOKENS_PER_MINUTE):
+    """Gemini's embeddings, with the local model as a spare sense (app/kb/local_embeddings.py).
+
+    The two live in different spaces: what is written to one column cannot be searched in the
+    other. Every passage is therefore embedded in both, and a question is searched in the space of
+    whichever embedder answered it."""
+
+    space = "gemini"
+
+    def __init__(
+        self,
+        api_keys: list[str] | str,
+        client: genai.Client | None = None,
+        tokens_per_minute: int = TOKENS_PER_MINUTE,
+        backup=None,
+    ):
+        self.backup = backup
         if client:
             self._clients = [client]
         else:
@@ -89,6 +104,33 @@ class Embedder:
     async def embed_query(self, text: str) -> list[float]:
         [vector] = await self._embed([text], "RETRIEVAL_QUERY")
         return vector
+
+    async def embed_both(self, texts: Sequence[str]) -> tuple[list[list[float]] | None, list[list[float]] | None]:
+        """A passage in both spaces, so it can be found whichever embedder is working when the
+        question comes. Either side may be None when that embedder could not be reached."""
+        try:
+            main = await self.embed_documents(texts)
+        except Exception as error:
+            log.error("Gemini embeddings failed (%s): this passage is only in the spare space", error)
+            main = None
+        spare = None
+        if self.backup is not None and self.backup.available:
+            try:
+                spare = await self.backup.embed_documents(texts)
+            except Exception as error:
+                log.warning("Local embeddings failed (%s)", error)
+        return main, spare
+
+    async def query(self, text: str) -> tuple[list[float], str]:
+        """The question as a vector, and which space it belongs to. Gemini first; when it cannot,
+        the local model — which needs no key and cannot be rate limited."""
+        try:
+            return await self.embed_query(text), self.space
+        except Exception as error:
+            if self.backup is None or not self.backup.available:
+                raise
+            log.warning("Gemini could not embed the question (%s): searching the spare memory", error)
+            return await self.backup.embed_query(text), self.backup.space
 
     async def _embed(self, texts: Sequence[str], task_type: str) -> list[list[float]]:
         config = types.EmbedContentConfig(task_type=task_type, output_dimensionality=DIMENSIONS)
