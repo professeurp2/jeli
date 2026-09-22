@@ -200,8 +200,8 @@ def test_a_bad_moment_costs_at_most_a_few_attempts_not_every_key():
         asyncio.run(llm.answer("system", "prompt"))
     except Exception as error:
         assert type(error).__name__ == "LLMUnavailable"
-    assert len(models.calls) == MAX_ATTEMPTS
-    assert models.calls == ["best", "best", "next", "next"]  # two keys of the best model, then the next model
+    assert len(models.calls) <= MAX_ATTEMPTS
+    assert models.calls == ["best", "next", "lite"]  # an overloaded model is so on every key: the next model at once
 
 
 def test_pairs_in_cooldown_are_skipped_while_others_are_fresh():
@@ -297,3 +297,23 @@ def test_settings_give_the_light_models_most_of_the_work():
     assert settings.answer_models[0] == "gemini-3.6-flash"  # the answers members read
     assert "gemini-3.6-flash" not in settings.light_model_list  # 20 a day per key: kept for the answers
     assert settings.transcription_model_list[0] == "gemini-3.5-flash-lite"
+
+
+def test_an_overloaded_model_hands_over_to_the_next_model_not_the_next_key():
+    good = GeneratedAnswer(answered=True, answer="ok", sources=["1"])
+
+    class Models:
+        calls = []
+
+        async def generate_content(self, model, contents, config):
+            self.calls.append(model)
+            if model == "lite-a":
+                raise errors.ServerError(503, {"error": {"code": 503, "message": "high demand"}})
+            return SimpleNamespace(parsed=good, text=good.model_dump_json())
+
+    models = Models()
+    clients = [SimpleNamespace(aio=SimpleNamespace(models=models)) for _ in range(5)]
+    llm = LLM("unused", ["lite-a", "lite-b"], client=clients[0])
+    llm._clients = clients
+    assert asyncio.run(llm.generate("p", GeneratedAnswer, attempts=2)) == good
+    assert models.calls == ["lite-a", "lite-b"]  # not "lite-a" again on another key

@@ -234,6 +234,9 @@ class LLM:
             except (errors.ServerError, TimeoutError, httpx.TransportError):
                 self._rest(key_idx, model, "unavailable")
                 slow += 1
+                # An overloaded or slow model is so on every key ("high demand" is Google's, not the
+                # key's): the next model is tried at once rather than the same one elsewhere.
+                pairs[position:] = [pair for pair in pairs[position:] if pair[1] != model]
             except (ValidationError, ValueError) as error:
                 log.warning("Key %d model %s returned unusable output (%s), trying next", key_idx, model, type(error).__name__)
                 slow += 1
