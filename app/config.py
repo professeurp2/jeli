@@ -39,12 +39,12 @@ class Settings(BaseSettings):
     # Answer models, tried in order: the next one takes over on quota, overload or timeout. Each has
     # its own free daily quota per key: gemini-3.1-flash-lite (checked 22 Sep, slower) adds a reserve
     # when the others are spent or overloaded, without another project.
-    gemini_models: str = "gemini-3.6-flash,gemini-3.5-flash-lite,gemini-flash-lite-latest,gemini-3.1-flash-lite"
+    gemini_models: str = "gemini-3.6-flash,gemini-3-flash-preview,gemini-3.1-flash-lite,gemini-3.5-flash-lite,gemini-flash-lite-latest"
     # Light models, for everything but the answers members read (understanding, emotions, voice,
     # reminders, deadline finding, documents…). Measured on AI Studio (22 Sep, free tier, per key and
     # day): gemini-3.6-flash allows 20 requests, the Flash-Lite models 500 — used first for every call,
     # the 20 were gone by the morning.
-    light_models: str = "gemini-3.5-flash-lite,gemini-3.1-flash-lite,gemini-flash-lite-latest"
+    light_models: str = "gemini-3.1-flash-lite,gemini-3.5-flash-lite,gemini-flash-lite-latest,gemini-3-flash-preview"
     # Transcription models, tried in order (they listen to the recording, window by window).
     transcription_models: str = "gemini-3.5-flash-lite,gemini-3.1-flash-lite,gemini-3.6-flash"
     # Below this similarity between the question and the best excerpt, Jeli says it doesn't know

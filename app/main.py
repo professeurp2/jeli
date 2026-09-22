@@ -216,6 +216,9 @@ async def health() -> dict:
         "database": enabled("store"),
         "indexing": "memory" in activities,
         "answers": enabled("answerer"),
+        # The Gemini keys in rotation and each model's health: failures in a row, rest left, latency.
+        "gemini_keys": getattr(getattr(app.state, "llm", None), "key_count", 0),
+        "models": getattr(app.state, "llm", None).model_health() if getattr(app.state, "llm", None) else [],
         "daily_digest": "daily_summary" in activities and activities["daily_summary"].enabled,
         "team_report": "team_report" in activities and activities["team_report"].enabled,
     }

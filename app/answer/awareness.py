@@ -34,7 +34,7 @@ recorded sessions or the shared documents. Write your reply, in one to three sho
 never a bare "I don't know". Say plainly that the groups haven't covered it (or not yet). Then add
 only what is useful from your state below: a matching session being transcribed (ready soon),
 scheduled (when), or shared as a link you cannot watch (give the link); the day your memory of the
-groups stops at, if the question is about something recent; a relevant document or deadline. End
+groups stops at, only if your state says you are not connected to them; a relevant document or deadline. End
 with one next step: ask the organisers, share the recording in the group, or try /search with a
 keyword. For a general question unrelated to the community, say kindly that you only know what was
 shared in it. If the background brief answers a general question about the community (what a
@@ -106,7 +106,12 @@ class Awareness:
             live = any(c["live"] and c["chat_id"].endswith("@g.us") and now - c["last_message"] < LIVE_WINDOW for c in chats)
             lines.append(
                 f"Jeli's memory of the groups goes up to {latest:%A %d %B %Y, %H:%M} UTC; "
-                + ("it receives new messages live." if live else "it is not connected to the groups yet, so it knows nothing said after that.")
+                + (
+                    "it receives new messages live. A quiet period since then is only a quiet period: never say Jeli is "
+                    "not in the group or that its memory stops."
+                    if live
+                    else "it is not connected to the groups yet, so it knows nothing said after that."
+                )
             )
         recordings = await self.store.all_recordings()
         transcribed = [r for r in recordings if r.method != "link"]

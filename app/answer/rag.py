@@ -333,6 +333,7 @@ class Answerer:
         language: str | None = None,
         member: str = "",
         prefetched: list[SearchHit] | None = None,
+        language_name: str = "",
     ) -> str:
         language = language or detect_language(question)
         texts = TEXTS[language]
@@ -352,7 +353,9 @@ class Answerer:
         if not excerpts and not self.brief:
             return await self._no_answer(question, language, member=member)
 
-        prompt = build_prompt(question, display_author(asker), [e.for_prompt() for e in excerpts], language, context=context)
+        prompt = build_prompt(
+            question, display_author(asker), [e.for_prompt() for e in excerpts], language, context=context, language_name=language_name
+        )
         try:
             generated = await self.llm.answer(SYSTEM, prompt)
         except LLMUnavailable:

@@ -17,6 +17,8 @@ def test_health_without_any_channel_configured():
         "answers": False,
         "daily_digest": False,
         "team_report": False,
+        "gemini_keys": 0,
+        "models": [],
     }
 
 

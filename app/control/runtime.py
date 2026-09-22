@@ -78,6 +78,9 @@ FIELDS = {
         Field("enabled.memory", "bool", lambda s: True),
         Field("enabled.deadlines", "bool", lambda s: True),
         Field("enabled.reminders", "bool", lambda s: True),
+        # A word in the groups about an hour before a scheduled session or Open Hour (off by default:
+        # a message Jeli sends on its own).
+        Field("enabled.event_reminders", "bool", lambda s: False),
         Field("enabled.daily_summary", "bool", lambda s: bool(s.daily_digest_time)),
         Field("enabled.team_report", "bool", lambda s: bool(s.team_report_time)),
         # Image generation (Imagen 3 primary, Pollinations.ai fallback).

@@ -272,6 +272,7 @@ class Responder:
             language=language,
             member=member,
             prefetched=prefetched,
+            language_name=getattr(understood, "language_name", ""),
         )
         return answer, "question", language
 

@@ -102,8 +102,9 @@ you, from the messages. Return:
   queries for the group's messages — one in English, one in the member's language if different —
   with the key terms and likely synonyms. Otherwise an empty list.
 - "language": the two-letter code of the language the member writes in (fr, en, sw, rw, ln, wo,
-  am, pt, es, ar, ha, yo, ig…). A mixed or one-word message takes the language of the
-  conversation so far.
+  am, pt, es, ar, ha, yo, ig, st…), whatever it is — Jeli answers in every language; and
+  "language_name": its name in English ("French", "Sesotho"). A mixed or one-word message takes the
+  language of the conversation so far.
 - "since": for "catchup" only, the start of the period as an ISO date-time in UTC, computed from
   today's date; "" when not stated.
 - "session": for "recap" and "session_question", the words naming the session; "" otherwise.
@@ -116,6 +117,7 @@ class Understood(BaseModel):
     standalone: str = ""
     queries: list[str] = []
     language: str = ""
+    language_name: str = ""
     since: str = ""
     session: str = ""
 
@@ -206,7 +208,13 @@ class Understander:
         if understood.kind == "vague":
             understood.kind = "clarify"
         code = understood.language.strip().lower()[:2]
-        understood.language = code if code in LANGUAGES else (language if language in LANGUAGES else detect_language(text))
+        # Any language the member writes in (Sesotho, Hausa, Portuguese…): the code the model gave
+        # is kept, with its name, so that the answer is written in it; only nonsense falls back.
+        if len(code) == 2 and code.isalpha():
+            understood.language = code
+        else:
+            understood.language = language if language in LANGUAGES else detect_language(text)
+        understood.language_name = " ".join(understood.language_name.split()).title()[:40] or LANGUAGES.get(understood.language, "")
         if understood.kind in REPLYING_KINDS and not understood.reply.strip():
             understood.reply = texts["about_jeli"] if understood.kind == "about_jeli" else texts["greeting_reply"]
         understood.reply = understood.reply.strip()

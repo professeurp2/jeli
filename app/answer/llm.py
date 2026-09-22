@@ -30,6 +30,15 @@ COOLDOWN_SECONDS = {"quota": 300, "unavailable": 60, "invalid": 86_400}
 # cursor spreads the load; a key that failed rests, so the next call starts elsewhere.
 MAX_ATTEMPTS = 4
 KEYS_PER_MODEL_FIRST = 2
+# A model that fails slowly (503 "high demand", a timeout, unusable output) does so on every key:
+# it rests for everyone, longer at each failure in a row (1, 2, 4… minutes, at most 15), and the
+# healthy models move ahead of it. Measured 22 Sep: with a fixed order, every answer paid a 6 s
+# timeout on an overloaded Lite model before reaching the one that worked (median 16 s).
+MODEL_REST_SECONDS = 60
+MODEL_REST_MAX_SECONDS = 900
+# Models that reject or slow down with a thinking level (measured 22 Sep: gemini-3-flash-preview
+# answered in 4.6 s without one, 7.7 s with "minimal").
+NO_THINKING_LEVEL = ("gemini-3-flash-preview", "gemini-3.7-flash", "gemini-3.8-flash", "gemini-2.")
 
 Schema = TypeVar("Schema", bound=BaseModel)
 
@@ -100,6 +109,48 @@ class LLM:
         self._resting_until: dict[tuple[int, str], float] = {}
         # Keys Google refused (401): left out of every count until the 24 h are over.
         self._invalid_until: dict[int, float] = {}
+        # Health per model, whatever the key: when it may be tried again, and its failures in a row.
+        self._model_until: dict[str, float] = {}
+        self._model_streak: dict[str, int] = {}
+        # Latest measured latency per model (seconds), for the dashboard and the logs.
+        self.latency: dict[str, float] = {}
+        if self._api_keys:
+            log.info("Gemini: %d API keys in rotation, models %s", len(self._api_keys), ", ".join(models))
+
+    @property
+    def key_count(self) -> int:
+        return len(self._clients)
+
+    def _model_failed(self, model: str) -> None:
+        streak = self._model_streak.get(model, 0) + 1
+        self._model_streak[model] = streak
+        seconds = min(MODEL_REST_SECONDS * 2 ** (streak - 1), MODEL_REST_MAX_SECONDS)
+        self._model_until[model] = self._clock() + seconds
+        log.warning("Model %s failing (%d in a row): behind the others for %d s", model, streak, seconds)
+
+    def _model_succeeded(self, model: str, seconds: float) -> None:
+        self._model_streak[model] = 0
+        self._model_until[model] = 0.0
+        self.latency[model] = seconds
+
+    def model_health(self) -> list[dict]:
+        """Per model: failures in a row, seconds of rest left, latest latency — for the dashboard."""
+        now = self._clock()
+        return [
+            {
+                "model": m,
+                "streak": self._model_streak.get(m, 0),
+                "resting": max(0, int(self._model_until.get(m, 0) - now)),
+                "latency": self.latency.get(m),
+            }
+            for m in self.models
+        ]
+
+    def _healthy_order(self) -> list[str]:
+        """The configured order, with the models still resting behind those that work. A model whose
+        rest is over is tried again in its place: if it still fails, it rests twice as long."""
+        now = self._clock()
+        return sorted(self.models, key=lambda m: (self._model_until.get(m, 0) > now, self.models.index(m)))
 
     @property
     def client(self) -> genai.Client:
@@ -151,21 +202,26 @@ class LLM:
         may already be over)."""
         n = len(self._clients)
         now = self._clock()
-        fresh: dict[str, list[tuple[int, str]]] = {model: [] for model in self.models}
+        order = self._healthy_order()
+        fresh: dict[str, list[tuple[int, str]]] = {model: [] for model in order}
         resting: list[tuple[float, int, str]] = []
-        for model in self.models:
+        for model in order:
             for offset in range(n):
                 ki = (self._next_key + offset) % n
-                until = self._resting_until.get((ki, model), 0)
+                until = max(self._resting_until.get((ki, model), 0), self._model_until.get(model, 0))
                 if until <= now:
                     fresh[model].append((ki, model))
                 else:
                     resting.append((until, ki, model))
-        first = [pair for model in self.models for pair in fresh[model][:KEYS_PER_MODEL_FIRST]]
-        rest = [pair for model in self.models for pair in fresh[model][KEYS_PER_MODEL_FIRST:]]
+        first = [pair for model in order for pair in fresh[model][:KEYS_PER_MODEL_FIRST]]
+        rest = [pair for model in order for pair in fresh[model][KEYS_PER_MODEL_FIRST:]]
         if first or rest:
             return first + rest
         return [(ki, model) for _, ki, model in sorted(resting)]
+
+    @staticmethod
+    def _thinking(model: str) -> types.ThinkingConfig | None:
+        return None if model.startswith(NO_THINKING_LEVEL) else types.ThinkingConfig(thinking_level=THINKING_LEVEL)
 
     async def generate(
         self,
@@ -181,15 +237,17 @@ class LLM:
         for optional steps so that a busy model never doubles the wait."""
         if attempts is None:
             attempts = MAX_ATTEMPTS
-        config = types.GenerateContentConfig(
-            system_instruction=system,
-            response_mime_type="application/json",
-            response_schema=schema,
-            temperature=temperature,
-            media_resolution=media_resolution,
-            thinking_config=types.ThinkingConfig(thinking_level=THINKING_LEVEL),
-            automatic_function_calling=types.AutomaticFunctionCallingConfig(disable=True),
-        )
+        def config_for(model: str) -> types.GenerateContentConfig:
+            return types.GenerateContentConfig(
+                system_instruction=system,
+                response_mime_type="application/json",
+                response_schema=schema,
+                temperature=temperature,
+                media_resolution=media_resolution,
+                thinking_config=self._thinking(model),
+                automatic_function_calling=types.AutomaticFunctionCallingConfig(disable=True),
+            )
+
         tried: set[tuple[int, str]] = set()
         # Slow failures (overload, timeout, unusable output) count against `attempts`: they cost the
         # member's wait. A key refused or out of quota answers at once (a fraction of a second): the
@@ -206,14 +264,17 @@ class LLM:
                 continue
             tried.add((key_idx, model))
             client = self._clients[key_idx]
+            started = self._clock()
             try:
                 response = await asyncio.wait_for(
-                    client.aio.models.generate_content(model=model, contents=contents, config=config),
+                    client.aio.models.generate_content(model=model, contents=contents, config=config_for(model)),
                     timeout=timeout,
                 )
                 self._next_key = (key_idx + 1) % len(self._clients)  # advance round-robin
                 parsed = response.parsed
-                return parsed if isinstance(parsed, schema) else schema.model_validate_json(response.text)
+                result = parsed if isinstance(parsed, schema) else schema.model_validate_json(response.text)
+                self._model_succeeded(model, self._clock() - started)
+                return result
             except errors.ClientError as error:
                 if error.code == 401:
                     self._disable_key(key_idx)  # bad key: skip all models on it for 24 h
@@ -231,15 +292,20 @@ class LLM:
                     later = next((i for i in range(position, len(pairs)) if pairs[i][1] == model), None)
                     if later is not None:
                         pairs.insert(position, pairs.pop(later))
-            except (errors.ServerError, TimeoutError, httpx.TransportError):
-                self._rest(key_idx, model, "unavailable")
+            except (errors.ServerError, TimeoutError, httpx.TransportError) as error:
+                log.warning(
+                    "Key %d model %s unavailable after %.1f s (%s)", key_idx, model, self._clock() - started, type(error).__name__
+                )
+                self._model_failed(model)
                 slow += 1
                 # An overloaded or slow model is so on every key ("high demand" is Google's, not the
                 # key's): the next model is tried at once rather than the same one elsewhere.
                 pairs[position:] = [pair for pair in pairs[position:] if pair[1] != model]
             except (ValidationError, ValueError) as error:
                 log.warning("Key %d model %s returned unusable output (%s), trying next", key_idx, model, type(error).__name__)
+                self._model_failed(model)
                 slow += 1
+                pairs[position:] = [pair for pair in pairs[position:] if pair[1] != model]
         raise LLMUnavailable
 
     async def answer(self, system: str, prompt: str) -> GeneratedAnswer:

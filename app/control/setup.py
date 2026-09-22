@@ -7,6 +7,7 @@ from app.control.activities import Activity, every
 from app.control.runtime import Runtime
 from app.control.schedule import next_daily, next_weekly, parse_clock, parse_schedule
 from app.jobs.daily_digest import post_daily_digests
+from app.jobs.event_reminders import post_event_reminders
 from app.jobs.team_report import send_team_reports
 from app.answer.citations import ignored_keys
 from app.kb.indexer import index_pending
@@ -104,6 +105,25 @@ def build_activities(state, settings: Settings, runtime: Runtime) -> dict[str, A
             send_reminders,
             every(timedelta(minutes=1), first=timedelta(seconds=30)),
             lambda: runtime["enabled.reminders"],
+            blocked=not_connected,
+        )
+
+    if store and whatsapp is not None:
+
+        async def event_reminders() -> str:
+            now = datetime.now(timezone.utc)
+            groups = [g for g in runtime["groups"] if g not in set(runtime["silent_groups"])] or await store.live_groups(now - timedelta(days=7))
+            posted = await post_event_reminders(store, whatsapp.post, groups, runtime["daily_digest_language"], now)
+            return f"posted {_plural(posted, 'reminder')}" if posted else "no event starting in about an hour"
+
+        activities["event_reminders"] = Activity(
+            "event_reminders",
+            "A word before each session",
+            "About an hour before a scheduled session, Open Hour or deadline with a time (found in the "
+            "announcements), Jeli says so in the groups — once per event. Off unless the team switches it on.",
+            event_reminders,
+            every(timedelta(minutes=15), first=timedelta(minutes=1)),
+            lambda: runtime["enabled.event_reminders"],
             blocked=not_connected,
         )
 

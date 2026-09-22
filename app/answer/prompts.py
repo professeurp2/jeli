@@ -75,6 +75,7 @@ def build_prompt(
     language: str,
     now: datetime | None = None,
     context: str = "",
+    language_name: str = "",
 ) -> str:
     """`language` is detected from the question and stated explicitly: with English excerpts, the
     model otherwise tends to answer a French question in English. `context` is the background
@@ -86,5 +87,5 @@ def build_prompt(
         + f"Question from {asker}:\n{question}\n\n"
         "Excerpts from the group conversations, call recordings and documents, oldest first:\n\n"
         + "\n\n".join(excerpts)
-        + f"\n\nWrite the answer in {LANGUAGES.get(language, 'English')}."
+        + f"\n\nWrite the answer in {LANGUAGES.get(language) or language_name or 'English'}."
     )

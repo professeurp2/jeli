@@ -49,10 +49,21 @@ words. Say it {mood}.
 # and edge-tts's prosody (it cannot act, but a livelier or softer pace and pitch come through).
 MOODS = {
     "joyful": ("with a big smile and real enthusiasm, like good news you are happy to share", "+6%", "+6Hz"),
+    "excited": ("excited and quick, almost laughing, like something you can't wait to tell", "+10%", "+8Hz"),
+    "playful": ("playful and teasing, with a smile in the voice and a light laugh where it fits", "+4%", "+5Hz"),
     "reassuring": ("softly and kindly, reassuring, like helping a friend who is worried", "-6%", "-3Hz"),
+    "empathetic": ("gently, with real sympathy, slower, like comforting a friend", "-10%", "-5Hz"),
+    "serious": ("seriously and clearly, unhurried, like something important not to miss", "-4%", "-2Hz"),
     "calm": ("warmly and relaxed, like a friend explaining something simply", "+0%", "+0Hz"),
 }
 DEFAULT_MOOD = "calm"
+# How every voice is told to sound, whatever the mood: a person, not a reader.
+HUMAN_DELIVERY = (
+    "Sound like a real person recording a WhatsApp voice note for a friend: natural conversational pace, "
+    "small pauses to breathe and to think, a word stressed here and there, the pitch moving with the "
+    "meaning, a warmer tone on names, a tiny smile or laugh where the words invite it, never flat, never "
+    "announcer-like, never rushed through a list."
+)
 
 # Gemini TTS — the first voice: expressive, reads the text as it is, faster than real time (34 s of
 # speech made in 20 s, 22 Sep) — but 10 requests a day per project, hence every key in turn.
@@ -159,6 +170,8 @@ class Heard(BaseModel):
 class Script(BaseModel):
     text: str
     mood: str = DEFAULT_MOOD
+    # Stage direction for the voice, in English, a few words ("smiling, upbeat; slow down on the date").
+    direction: str = ""
 
 
 LANG_LABELS = {
@@ -181,12 +194,18 @@ written answer below as what you would say in a voice note to a friend.
   and when it was announced — but keep the day, date and time of each thing that is coming. Say
   days and months in full ("mardi 22 septembre", not "mar. 22 sept.").
 - Let the feeling of the content come through: real enthusiasm for good news, a gentle reassuring
-  tone for a problem or a "not found", calm warmth otherwise. A small human reaction at the start
-  when it fits (a laugh, "ah,", "good news!"), never the same one twice in a row.
+  tone for a problem or a "not found", calm warmth otherwise. Talk to the person: "tu" or "you",
+  their first name if you know it, a small human reaction at the start when it fits (a laugh,
+  "ah,", "bon,", "écoute,", "good news!", "okay so"), a short aside now and then ("je te rassure",
+  "honestly") — never the same one twice in a row, never forced.
 - No greeting and no goodbye unless the answer has one. No longer than the answer.
-Return "text", and "mood": the feeling your voice should carry — "joyful" (good news, a success,
-thanks, a welcome), "reassuring" (a problem, a delay, something missing or not found) or "calm"
-(plain information).
+Return "text"; "mood": the feeling your voice should carry — "joyful" (good news, thanks, a
+welcome), "excited" (something big or urgent and happy), "playful" (a joke, banter), "reassuring"
+(a problem, a delay, something missing or not found), "empathetic" (bad news, someone struggling),
+"serious" (a rule, a deadline not to miss) or "calm" (plain information); and "direction": in
+English, a few words for the voice actor on how to say this one — pace, where to pause, what to
+stress, where a smile or a sigh goes ("smiling, upbeat; slow down and stress the date"; "soft,
+a pause after the first sentence").
 """
 SPEAK_REWRITE_MAX_CHARS = 2000  # a digest or a list of deadlines is told, not read
 REWRITE_ATTEMPTS = 2
@@ -373,11 +392,12 @@ class Voice:
         if not clients or len(text) > LIVE_MAX_CHARS:
             return None
         voice_name = (self.voice_name or "Aoede").title()
+        direction = getattr(self, "direction", "")
         config = types.LiveConnectConfig(
             response_modalities=["AUDIO"],
             system_instruction=LIVE_SYSTEM.format(
                 mood=MOODS.get(mood, MOODS[DEFAULT_MOOD])[0], language=LANG_LABELS.get(language, "English")
-            ),
+            ) + f" {HUMAN_DELIVERY}" + (f" Direction for this one: {direction}." if direction else ""),
             speech_config=types.SpeechConfig(
                 voice_config=types.VoiceConfig(prebuilt_voice_config=types.PrebuiltVoiceConfig(voice_name=voice_name))
             ),
@@ -440,10 +460,11 @@ class Voice:
             return None
         voice_name = (self.voice_name or GEMINI_TTS_VOICES.get(language, "Aoede")).title()
         lang_label = LANG_LABELS.get(language, "English")
+        direction = getattr(self, "direction", "")
         prompt = (
-            f"Say the following in {lang_label} like a close friend sending a WhatsApp voice note: "
-            "relaxed, a natural conversational pace with small pauses and breathing, never flat or "
-            f"announcer-like. Say it {MOODS.get(mood, MOODS[DEFAULT_MOOD])[0]}:\n\n" + text
+            f"Say the following in {lang_label}. {HUMAN_DELIVERY} Say it {MOODS.get(mood, MOODS[DEFAULT_MOOD])[0]}."
+            + (f" Direction for this one: {direction}." if direction else "")
+            + "\n\n" + text
         )
         # A longer text takes longer to say: a request given up too early still costs its quota.
         attempt_timeout = min(
@@ -535,6 +556,7 @@ class Voice:
         # Said in the request, not only in the system: the light models follow the request.
         prompt = f"Say this answer as a voice note, entirely in {label}, without a list:\n\n{text}"
         mood = DEFAULT_MOOD
+        self.direction = ""
         written = set(_NUMBER.findall(text))
         for _ in range(REWRITE_ATTEMPTS):
             try:
@@ -542,6 +564,7 @@ class Voice:
             except LLMUnavailable:
                 return text, mood
             mood = said.mood.strip().lower() if said.mood.strip().lower() in MOODS else DEFAULT_MOOD
+            self.direction = " ".join(str(getattr(said, "direction", "") or "").split())[:160]
             result = " ".join(said.text.split())
             spoken_numbers = set(_NUMBER.findall(result))
             # A human summary may leave out who announced what and when (dates, numbers of their
