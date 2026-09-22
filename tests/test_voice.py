@@ -177,3 +177,37 @@ def test_ids_and_phone_numbers_are_never_read_aloud():
     said = spoken("Session le 24 dans 120363429618850959@g.us avec Diane, contact +251 34 567 8901, @23484567890 aussi.")
     assert "@g.us" not in said and "1203" not in said and "251" not in said and "23484" not in said
     assert "Diane" in said and "24" in said
+
+
+class _ScriptLLM:
+    _clients: list = []
+
+    def __init__(self, said):
+        self.said = said
+
+    async def generate(self, prompt, schema, **kwargs):
+        if isinstance(self.said, Exception):
+            raise self.said
+        return schema(text=self.said)
+
+
+def _script(said, written="La date limite est le *jeudi 24 septembre* à 15h. Courage !"):
+    from app.answer.voice import Voice
+
+    return asyncio.run(Voice(_ScriptLLM(said)).script(written, "fr"))
+
+
+def test_a_short_answer_is_said_again_in_spoken_language():
+    said = "Ah, bonne nouvelle : c'est le jeudi 24 septembre, à 15h. Allez, courage !"
+    assert _script(said) == said
+
+
+def test_a_rewrite_that_loses_a_date_or_the_model_failing_reads_the_answer_as_it_is():
+    from app.answer.llm import LLMUnavailable
+
+    written = "La date limite est le *jeudi 24 septembre* à 15h. Courage !"
+    assert _script("C'est bientôt, courage !") == written  # 24 and 15 lost
+    assert _script(LLMUnavailable()) == written
+    assert _script("") == written
+    long = "Un long récapitulatif. " * 80
+    assert _script("court", long) == long  # digests are read as they are

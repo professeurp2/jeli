@@ -116,6 +116,33 @@ class Heard(BaseModel):
     text: str
 
 
+class Script(BaseModel):
+    text: str
+
+
+LANG_LABELS = {
+    "fr": "French", "en": "English", "sw": "Swahili",
+    "rw": "Kinyarwanda", "ln": "Lingala", "wo": "Wolof", "am": "Amharic",
+}
+# A written answer read as it is sounds read, not spoken. Short answers are said again in spoken
+# language, with the feeling of the content; long ones (digests, lists) are read as they are.
+SPEAK_SYSTEM = """\
+You are Jeli, the warm assistant griot of an African innovators' WhatsApp community. Rewrite the
+written answer below as what you would say in a voice note to a friend.
+- Same language as the answer, same facts. Keep every number, date, time and name exactly as
+  written, digits as digits. Add nothing that is not in the answer.
+- Speak, do not read: natural spoken rhythm, contractions, short sentences, no lists, no symbols,
+  no emoji, no markdown, no links, no ids, no phone numbers.
+- Let the feeling of the content come through: real enthusiasm for good news, a gentle reassuring
+  tone for a problem or a "not found", calm warmth otherwise. A small human reaction at the start
+  when it fits (a laugh, "ah,", "good news!"), never the same one twice in a row.
+- No greeting and no goodbye unless the answer has one. About as long as the answer.
+Return only "text".
+"""
+SPEAK_REWRITE_MAX_CHARS = 1200
+_NUMBER = re.compile(r"\d+")
+
+
 class Seen(BaseModel):
     description: str
 
@@ -217,14 +244,12 @@ class Voice:
         if not self.llm._clients:
             return None
         voice_name = (self.voice_name or GEMINI_TTS_VOICES.get(language, "Aoede")).title()
-        _LANG_LABELS = {
-            "fr": "French", "en": "English", "sw": "Swahili",
-            "rw": "Kinyarwanda", "ln": "Lingala", "wo": "Wolof", "am": "Amharic",
-        }
-        lang_label = _LANG_LABELS.get(language, "English")
+        lang_label = LANG_LABELS.get(language, "English")
         prompt = (
-            f"Read the following message in {lang_label} as a warm, friendly assistant "
-            "who genuinely cares — conversational, natural and emotionally present:\n\n" + text
+            f"Say the following in {lang_label} like a close friend sending a WhatsApp voice note: "
+            "relaxed, smiling, a natural conversational pace with small pauses, and real emotion that "
+            "follows the words — excited for good news, soft and reassuring for a problem, never "
+            "flat or announcer-like:\n\n" + text
         )
         config = types.GenerateContentConfig(
             response_modalities=["AUDIO"],
@@ -288,6 +313,22 @@ class Voice:
             log.error("edge-tts failed: %s: %s", type(error).__name__, error)
         return None
 
+    async def script(self, text: str, language: str) -> str:
+        """What Jeli says of a short written answer: the same, in spoken language and with feeling.
+        The text as it is when the model cannot help, or when it lost a number or a date."""
+        if len(text) < 15 or len(text) > SPEAK_REWRITE_MAX_CHARS:
+            return text
+        prompt = f"Language: {LANG_LABELS.get(language, 'English')}\nWritten answer:\n{text}"
+        try:
+            said = await self.llm.generate(prompt, Script, system=SPEAK_SYSTEM, timeout=8, temperature=0.7, attempts=1)
+        except LLMUnavailable:
+            return text
+        result = " ".join(said.text.split())
+        if not result or len(result) > len(text) * 1.6 + 80 or not set(_NUMBER.findall(text)) <= set(_NUMBER.findall(result)):
+            log.info("Spoken rewrite rejected (empty, too long or a number lost): reading the answer as it is")
+            return text
+        return result
+
     async def speak(self, text: str, language: str = "en") -> bytes | None:
         """The text read aloud; None when all TTS engines fail.
         Tries Gemini TTS first (more natural, emotional), falls back to edge-tts on quota/error.
@@ -298,7 +339,7 @@ class Voice:
         if len(text) > MAX_SPOKEN_CHARS:
             cutoff = text[:MAX_SPOKEN_CHARS].rfind(". ")
             text = text[:cutoff + 1] if cutoff > 300 else text[:MAX_SPOKEN_CHARS]
-        speech = for_speech(text)
+        speech = for_speech(await self.script(text, language))
         audio = await self._speak_gemini(speech, language)
         if audio:
             return audio
