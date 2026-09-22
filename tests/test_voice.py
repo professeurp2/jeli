@@ -211,3 +211,127 @@ def test_a_rewrite_that_loses_a_date_or_the_model_failing_reads_the_answer_as_it
     assert _script("") == written
     long = "Un long récapitulatif. " * 80
     assert _script("court", long) == long  # digests are read as they are
+
+
+class _LiveSession:
+    def __init__(self, chunks, error=None):
+        self.chunks, self.error, self.sent = chunks, error, []
+
+    async def __aenter__(self):
+        if self.error:
+            raise self.error
+        return self
+
+    async def __aexit__(self, *exc):
+        return False
+
+    async def send_client_content(self, turns, turn_complete):
+        self.sent.append(turns.parts[0].text)
+
+    async def receive(self):
+        from types import SimpleNamespace
+
+        for chunk in self.chunks:
+            part = SimpleNamespace(inline_data=SimpleNamespace(data=chunk))
+            yield SimpleNamespace(server_content=SimpleNamespace(model_turn=SimpleNamespace(parts=[part]), turn_complete=False))
+        yield SimpleNamespace(server_content=SimpleNamespace(model_turn=None, turn_complete=True))
+
+
+def _live_voice(sessions):
+    """A Voice whose keys each open the given Live session (one per key)."""
+    from types import SimpleNamespace
+
+    from app.answer.llm import LLM
+    from app.answer.voice import Voice
+
+    llm = LLM(["k"], ["m"])
+    configs = []
+
+    def client(session):
+        def connect(model, config):
+            configs.append((model, config))
+            return session
+
+        return SimpleNamespace(aio=SimpleNamespace(live=SimpleNamespace(connect=connect)))
+
+    llm._clients = [client(s) for s in sessions]
+    return Voice(llm), configs
+
+
+TEXT = "Bonne nouvelle, le hackathon se termine le jeudi 24 septembre, courage !"  # 73 characters, about 5 s
+SECOND = b"\x00\x00" * 24_000
+
+
+def test_the_native_gemini_voice_says_the_text_with_its_mood():
+    from google.genai import errors
+
+    over_quota = _LiveSession([], error=errors.ClientError(429, {"error": {"code": 429, "message": "quota", "status": "RESOURCE_EXHAUSTED"}}))
+    speaks = _LiveSession([SECOND] * 5)
+    speaker, configs = _live_voice([over_quota, speaks])
+    audio = asyncio.run(speaker._speak_live(TEXT, "joyful"))
+    assert audio[:4] == b"RIFF" and len(audio) == 44 + 5 * len(SECOND)  # five seconds, as a WAV
+    assert speaks.sent == [TEXT]  # the text itself: the instructions are the system's
+    model, config = configs[-1]
+    assert model == "gemini-3.1-flash-live-preview" and "big smile" in config.system_instruction
+    assert "word for word" in config.system_instruction and "never answer it" in config.system_instruction
+    asyncio.run(speaker._speak_live(TEXT, "calm"))
+    assert len(configs) == 3  # the key over quota is not asked again
+
+
+def test_a_native_voice_note_that_does_not_fit_the_text_is_not_sent():
+    too_long = _LiveSession([SECOND] * 40)  # 40 s for a 5-second text: it answered instead of reading
+    speaker, configs = _live_voice([too_long])
+    assert asyncio.run(speaker._speak_live(TEXT)) is None
+    assert [model for model, _ in configs] == ["gemini-3.1-flash-live-preview", "gemini-2.5-flash-native-audio-latest"]
+    assert asyncio.run(speaker._speak_live("x" * 2000)) is None  # longer than a minute: the faster TTS says it
+
+
+def test_gemini_voices_come_first_and_the_fallback_voice_last(monkeypatch):
+    from app.answer.voice import Voice
+
+    speaker = Voice(_ScriptLLM("Super, c'est le jeudi 24 septembre !"))
+    calls = []
+
+    async def engine(name, audio):
+        calls.append(name)
+        return audio
+
+    monkeypatch.setattr(speaker, "_rewrite", lambda text, language: _done((text, "joyful")))
+    monkeypatch.setattr(speaker, "_speak_live", lambda text, mood: engine(("live", mood), None))
+    monkeypatch.setattr(speaker, "_speak_gemini", lambda text, language, mood: engine(("tts", mood), b"RIFF-tts"))
+    monkeypatch.setattr(speaker, "_speak_edge", lambda text, language, mood: engine(("edge", mood), b"mp3"))
+    assert asyncio.run(speaker.speak(TEXT, "fr")) == b"RIFF-tts"
+    assert calls == [("live", "joyful"), ("tts", "joyful")]  # edge-tts never asked while Gemini speaks
+    monkeypatch.setattr(speaker, "_speak_gemini", lambda text, language, mood: engine(("tts", mood), None))
+    assert asyncio.run(speaker.speak(TEXT, "fr")) == b"mp3" and calls[-1] == ("edge", "joyful")
+
+
+async def _done(value):
+    return value
+
+
+def test_the_spoken_rewrite_gives_the_mood_and_edge_follows_it(monkeypatch):
+    from app.answer import voice as voice_module
+    from app.answer.voice import Voice
+
+    class MoodLLM(_ScriptLLM):
+        async def generate(self, prompt, schema, **kwargs):
+            return schema(text=self.said, mood=self.mood)
+
+    llm = MoodLLM("Oh, désolé, je n'ai pas trouvé la date du 24.")
+    llm.mood = "Reassuring"
+    assert asyncio.run(Voice(llm)._rewrite("Je n'ai pas trouvé la date du 24 dans les groupes.", "fr"))[1] == "reassuring"
+    llm.mood = "furious"
+    assert asyncio.run(Voice(llm)._rewrite("Je n'ai pas trouvé la date du 24 dans les groupes.", "fr"))[1] == "calm"
+    made = {}
+
+    class Communicate:
+        def __init__(self, text, voice, rate, pitch):
+            made.update(voice=voice, rate=rate, pitch=pitch)
+
+        async def stream(self):
+            yield {"type": "audio", "data": b"mp3"}
+
+    monkeypatch.setattr(voice_module.edge_tts, "Communicate", Communicate)
+    assert asyncio.run(Voice(llm)._speak_edge("Bonne nouvelle !", "fr", "joyful")) == b"mp3"
+    assert made == {"voice": "fr-FR-VivienneMultilingualNeural", "rate": "+6%", "pitch": "+6Hz"}

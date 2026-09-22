@@ -122,3 +122,26 @@ def test_a_catch_up_says_when_jeli_does_not_follow_the_groups_yet():
 
     digest = asyncio.run(Catchup(Store(), None).summarize(datetime(2026, 9, 19, 12, 0, tzinfo=timezone.utc), "fr"))
     assert digest.startswith("Je ne suis pas encore dans le groupe, donc ma mémoire s'arrête le ven. 18 sept. à 20:03 GMT")
+
+
+def test_a_quiet_night_in_the_groups_is_not_being_out_of_the_groups():
+    from app.answer.catchup import Catchup
+
+    class Store:
+        async def messages_since(self, since, chat_ids=None, limit=1500):
+            return []
+
+        async def recordings_since(self, since):
+            return []
+
+        async def latest_message_at(self):
+            return datetime(2026, 9, 21, 23, 9, tzinfo=timezone.utc)
+
+        async def follows_groups_live(self):
+            return True  # live group messages lately: Jeli is in the groups
+
+    # "What happened today?" asked at 00:12, nobody having written since midnight.
+    digest = asyncio.run(Catchup(Store(), None).summarize(datetime(2026, 9, 22, 0, 0, tzinfo=timezone.utc), "fr"))
+    assert digest.startswith("Tout calme depuis mar. 22 sept. — rien de nouveau dans les groupes pour l'instant.")
+    assert "Je les suis en direct : le dernier message date du lun. 21 sept. à 23:09 GMT" in digest
+    assert "pas encore dans le groupe" not in digest

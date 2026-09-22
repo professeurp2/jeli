@@ -216,3 +216,15 @@ def test_organisers_are_known_by_name_and_number():
     assert ignored_keys(entries) == {"diane", "250783188655", "gift ntuli", "263774094822", "munira"}
     assert people_names(entries) == {"250783188655": "Diane", "263774094822": "Gift NTULI"}
     assert display_person("Diane +250 783 188 655") == "Diane (+250 ···55)"
+
+
+def test_jeli_knows_it_follows_the_groups_live_even_after_a_quiet_day():
+    class LiveStore(Store):
+        async def knowledge_overview(self):
+            return {"chats": [
+                {"chat_id": "meti-cohort-2026", "messages": 1569, "last_message": NOW - timedelta(days=2), "live": 0},
+                {"chat_id": "120363429618850959@g.us", "messages": 495, "last_message": NOW - timedelta(hours=30), "live": 495},
+            ], "recordings": [], "chunks": 0, "pending": 0, "deadlines": 0}
+
+    state = asyncio.run(Awareness(LiveStore(), None, FakeSessions([])).state())
+    assert "it receives new messages live." in state and "not connected" not in state

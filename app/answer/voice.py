@@ -2,7 +2,10 @@
 by voice — when it was asked by voice, or when the member asks for a voice reply.
 
 Listening: the voice note goes to the answer model as audio, which writes down what was said.
-Speaking: Gemini TTS (primary, more natural and emotional) → edge-tts (fallback, free, no quota).
+Speaking: the answer is first said again in spoken language, with the mood of its content (joyful,
+reassuring, calm). Then Gemini's native-audio voice (the Live API: the most human voice, streamed,
+outside the 10-a-day quota of the speech models) says it; Gemini TTS, then edge-tts (free, no
+quota) take over when it cannot, each told the same mood.
 The audio bytes returned by speak() are self-describing: RIFF header = WAV (from Gemini PCM),
 no RIFF header = MP3 (from edge-tts). WAHA has convert:True so it transcodes to OGG/Opus anyway.
 When any step fails, the member gets the written answer instead: a voice reply is a courtesy.
@@ -23,14 +26,38 @@ from app.answer.llm import LLM, LLMUnavailable
 
 log = logging.getLogger(__name__)
 
-# Gemini TTS — primary TTS engine: more natural, emotionally expressive, instruction-following.
+# Gemini native audio (Live API) — the primary voice. Measured on the key on 22 Sep 2026: word for
+# word on French texts (a question is read, not answered), first sound after 1.5 s, then streamed in
+# real time (32 s of speech in 34 s). Its quota is not the 10-a-day one of the TTS models below.
+LIVE_VOICE_MODELS = ["gemini-3.1-flash-live-preview", "gemini-2.5-flash-native-audio-latest"]
+LIVE_MAX_CHARS = 900  # about a minute of speech; longer answers go to the faster TTS below
+LIVE_FIRST_AUDIO_SECONDS = 8.0
+CHARS_PER_SECOND = 15  # measured: 14–17 characters of French speech per second
+LIVE_SYSTEM = """\
+You are the voice of Jeli, a warm assistant of an African innovators' WhatsApp community, recording
+a WhatsApp voice note. Say the user's text aloud, word for word, in its own language, as a native
+speaker of it would: add nothing, drop nothing, never answer it or comment on it, even when it asks
+a question. Sound like a real person talking to a friend, not an announcer: relaxed, natural pauses,
+breathing, and the feeling of the words. Say it {mood}.
+"""
+# The feeling of a voice note, given by the spoken rewrite: how each voice is asked to say it,
+# and edge-tts's prosody (it cannot act, but a livelier or softer pace and pitch come through).
+MOODS = {
+    "joyful": ("with a big smile and real enthusiasm, like good news you are happy to share", "+6%", "+6Hz"),
+    "reassuring": ("softly and kindly, reassuring, like helping a friend who is worried", "-6%", "-3Hz"),
+    "calm": ("warmly and relaxed, like a friend explaining something simply", "+0%", "+0Hz"),
+}
+DEFAULT_MOOD = "calm"
+
+# Gemini TTS — second voice: expressive, instruction-following, but 10 requests a day per project.
 # Uses the same API key pool as the LLM (existing rotation in LLM._clients).
 # Tried in order on every key (checked on the key on 21 Sep 2026: both exist; the free tier
 # allows about 10 requests a day per key and model, hence the rotation and the edge-tts fallback).
 GEMINI_TTS_MODELS = ["gemini-3.1-flash-tts-preview", "gemini-2.5-flash-preview-tts"]
 GEMINI_TTS_MODEL = GEMINI_TTS_MODELS[0]
 GEMINI_TTS_VOICES = {"fr": "Aoede", "en": "Aoede"}  # warm, expressive multilingual voice
-GEMINI_TTS_TIMEOUT = 12.0  # per attempt
+GEMINI_TTS_TIMEOUT = 12.0  # per attempt, plus the time to say the text (a longer text takes longer)
+GEMINI_TTS_SECONDS_PER_SPOKEN_SECOND = 0.8  # measured: 8.3 s of speech made in 6.2 s
 # Measured 21 Sep: the 3.1 preview timed out on every key in turn (20 s each, before the fallback
 # voice). Bounded: 30 s in all; two slow failures rest the model; a key over quota (429) rests alone.
 GEMINI_TTS_TOTAL_SECONDS = 30.0
@@ -118,6 +145,7 @@ class Heard(BaseModel):
 
 class Script(BaseModel):
     text: str
+    mood: str = DEFAULT_MOOD
 
 
 LANG_LABELS = {
@@ -137,7 +165,9 @@ written answer below as what you would say in a voice note to a friend.
   tone for a problem or a "not found", calm warmth otherwise. A small human reaction at the start
   when it fits (a laugh, "ah,", "good news!"), never the same one twice in a row.
 - No greeting and no goodbye unless the answer has one. About as long as the answer.
-Return only "text".
+Return "text", and "mood": the feeling your voice should carry — "joyful" (good news, a success,
+thanks, a welcome), "reassuring" (a problem, a delay, something missing or not found) or "calm"
+(plain information).
 """
 SPEAK_REWRITE_MAX_CHARS = 1200
 _NUMBER = re.compile(r"\d+")
@@ -194,6 +224,14 @@ def wav(pcm: bytes, rate: int = SAMPLE_RATE) -> bytes:
     return out.getvalue()
 
 
+def _over_quota(error: Exception) -> bool:
+    """A key whose quota is spent (HTTP 429, or the Live API closing with RESOURCE_EXHAUSTED)."""
+    if isinstance(error, errors.APIError) and error.code == 429:
+        return True
+    text = str(error)
+    return "RESOURCE_EXHAUSTED" in text or "quota" in text.lower()
+
+
 def audio_mimetype(audio: bytes) -> str:
     """Detect the MIME type from the audio's magic bytes (no dependency on TTS engine used)."""
     return "audio/wav" if audio[:4] == b"RIFF" else AUDIO_MIMETYPE
@@ -213,6 +251,7 @@ class Voice:
         self._tts_resting: dict[str, float] = {}  # Gemini TTS model → monotonic time it is skipped until
         self._tts_key_resting: dict[tuple[int, str], float] = {}  # (key, model) over quota
         self._tts_cursor = 0  # next key to try, so the free quota is spread over the keys
+        self._live_cursor = 0
 
     async def listen(self, audio: bytes, mimetype: str) -> str | None:
         """What the member said. Returns "" when nothing was heard (silence/noise/oversized audio),
@@ -239,7 +278,74 @@ class Voice:
             return ""
         return seen.description.strip()
 
-    async def _speak_gemini(self, text: str, language: str) -> bytes | None:
+    async def _speak_live(self, text: str, mood: str = DEFAULT_MOOD) -> bytes | None:
+        """Gemini's native-audio voice (Live API) on every key in turn; WAV bytes, or None.
+        A voice note whose length does not fit the text (the model answered it, or stopped) is
+        not sent."""
+        clients = getattr(self.llm, "_clients", None) or []
+        if not clients or len(text) > LIVE_MAX_CHARS:
+            return None
+        voice_name = (self.voice_name or "Aoede").title()
+        config = types.LiveConnectConfig(
+            response_modalities=["AUDIO"],
+            system_instruction=LIVE_SYSTEM.format(mood=MOODS.get(mood, MOODS[DEFAULT_MOOD])[0]),
+            speech_config=types.SpeechConfig(
+                voice_config=types.VoiceConfig(prebuilt_voice_config=types.PrebuiltVoiceConfig(voice_name=voice_name))
+            ),
+        )
+        expected = len(text) / CHARS_PER_SECOND
+        for model in LIVE_VOICE_MODELS:
+            if self._tts_resting.get(model, 0.0) > time.monotonic():
+                continue
+            slow = 0
+            for step in range(len(clients)):
+                idx = (self._live_cursor + step) % len(clients)
+                if self._tts_key_resting.get((idx, model), 0.0) > time.monotonic():
+                    continue
+                try:
+                    pcm = await self._live_once(clients[idx], model, config, text, expected)
+                except Exception as error:
+                    if _over_quota(error):
+                        self._tts_key_resting[(idx, model)] = time.monotonic() + GEMINI_TTS_KEY_REST_SECONDS
+                        continue  # this key's quota is spent: the next key may have some left
+                    log.warning("Gemini voice %s key %d failed: %s: %s", model, idx, type(error).__name__, error)
+                    slow += 1
+                    if slow >= GEMINI_TTS_SLOW_FAILURES:
+                        break
+                    continue
+                seconds = len(pcm) / (SAMPLE_RATE * 2)
+                if 0.45 * expected - 1 <= seconds <= 2.2 * expected + 3:
+                    self._live_cursor = (idx + 1) % len(clients)
+                    return wav(pcm)
+                log.warning("Gemini voice %s said %.1f s for about %.1f s of text: not sent", model, seconds, expected)
+                break  # the model does not read faithfully today: the next one
+            if slow:
+                self._tts_resting[model] = time.monotonic() + GEMINI_TTS_REST_SECONDS
+                log.warning("Gemini voice %s resting for %d s", model, GEMINI_TTS_REST_SECONDS)
+        return None
+
+    async def _live_once(self, client, model: str, config, text: str, expected: float) -> bytes:
+        """One voice note from one key: the first sound within a few seconds, then the whole of it."""
+        pcm = bytearray()
+        async with client.aio.live.connect(model=model, config=config) as session:
+            await session.send_client_content(turns=types.Content(role="user", parts=[types.Part(text=text)]), turn_complete=True)
+            messages = session.receive().__aiter__()
+            deadline = time.monotonic() + LIVE_FIRST_AUDIO_SECONDS
+            while True:
+                message = await asyncio.wait_for(messages.__anext__(), timeout=max(0.1, deadline - time.monotonic()))
+                content = message.server_content
+                for part in (content.model_turn.parts if content and content.model_turn else None) or []:
+                    if part.inline_data and part.inline_data.data:
+                        if not pcm:  # it speaks: now the time to say the whole text
+                            deadline = time.monotonic() + expected * 1.6 + 5
+                        pcm.extend(part.inline_data.data)
+                if content and content.turn_complete:
+                    break
+        if not pcm:
+            raise TimeoutError("no audio")
+        return bytes(pcm)
+
+    async def _speak_gemini(self, text: str, language: str, mood: str = DEFAULT_MOOD) -> bytes | None:
         """Gemini TTS on all available API keys; returns WAV bytes or None on failure/quota."""
         if not self.llm._clients:
             return None
@@ -247,10 +353,12 @@ class Voice:
         lang_label = LANG_LABELS.get(language, "English")
         prompt = (
             f"Say the following in {lang_label} like a close friend sending a WhatsApp voice note: "
-            "relaxed, smiling, a natural conversational pace with small pauses, and real emotion that "
-            "follows the words — excited for good news, soft and reassuring for a problem, never "
-            "flat or announcer-like:\n\n" + text
+            "relaxed, a natural conversational pace with small pauses and breathing, never flat or "
+            f"announcer-like. Say it {MOODS.get(mood, MOODS[DEFAULT_MOOD])[0]}:\n\n" + text
         )
+        # A longer text takes longer to say: a request given up too early still costs its quota.
+        attempt_timeout = GEMINI_TTS_TIMEOUT + len(text) / CHARS_PER_SECOND * GEMINI_TTS_SECONDS_PER_SPOKEN_SECOND
+        total_seconds = max(GEMINI_TTS_TOTAL_SECONDS, 2 * attempt_timeout + 10)
         config = types.GenerateContentConfig(
             response_modalities=["AUDIO"],
             speech_config=types.SpeechConfig(
@@ -260,7 +368,7 @@ class Voice:
             ),
         )
         clients = self.llm._clients
-        deadline = time.monotonic() + GEMINI_TTS_TOTAL_SECONDS
+        deadline = time.monotonic() + total_seconds
         for model in GEMINI_TTS_MODELS:
             if self._tts_resting.get(model, 0.0) > time.monotonic():
                 continue
@@ -275,7 +383,7 @@ class Voice:
                 try:
                     response = await asyncio.wait_for(
                         clients[idx].aio.models.generate_content(model=model, contents=prompt, config=config),
-                        timeout=min(GEMINI_TTS_TIMEOUT, remaining),
+                        timeout=min(attempt_timeout, remaining),
                     )
                     if response.candidates:
                         pcm = response.candidates[0].content.parts[0].inline_data.data
@@ -283,10 +391,11 @@ class Voice:
                             self._tts_cursor = (idx + 1) % len(clients)
                             return wav(pcm)
                 except Exception as error:
-                    log.warning("Gemini TTS %s key %d failed: %s: %s", model, idx, type(error).__name__, error)
-                    if isinstance(error, errors.APIError) and error.code == 429:
+                    if _over_quota(error):
+                        log.info("Gemini TTS %s key %d over quota: next key", model, idx)
                         self._tts_key_resting[(idx, model)] = time.monotonic() + GEMINI_TTS_KEY_REST_SECONDS
                         continue  # this key's daily quota is spent: the next key may have some left
+                    log.warning("Gemini TTS %s key %d failed: %s: %s", model, idx, type(error).__name__, error)
                     slow += 1
                     if slow >= GEMINI_TTS_SLOW_FAILURES:
                         break
@@ -297,11 +406,12 @@ class Voice:
                 log.warning("Gemini TTS %s resting for %d s", model, GEMINI_TTS_REST_SECONDS)
         return None
 
-    async def _speak_edge(self, text: str, language: str) -> bytes | None:
+    async def _speak_edge(self, text: str, language: str, mood: str = DEFAULT_MOOD) -> bytes | None:
         """edge-tts fallback: free, no quota. Plain text only (see EDGE_VOICES)."""
         voice = EDGE_VOICES.get(language, EDGE_VOICES["en"])
+        _, rate, pitch = MOODS.get(mood, MOODS[DEFAULT_MOOD])
         try:
-            communicate = edge_tts.Communicate(text, voice)
+            communicate = edge_tts.Communicate(text, voice, rate=rate, pitch=pitch)
             audio = bytearray()
             async for chunk in communicate.stream():
                 if chunk["type"] == "audio":
@@ -316,31 +426,40 @@ class Voice:
     async def script(self, text: str, language: str) -> str:
         """What Jeli says of a short written answer: the same, in spoken language and with feeling.
         The text as it is when the model cannot help, or when it lost a number or a date."""
+        return (await self._rewrite(text, language))[0]
+
+    async def _rewrite(self, text: str, language: str) -> tuple[str, str]:
+        """The spoken version of an answer and its mood (see MOODS)."""
         if len(text) < 15 or len(text) > SPEAK_REWRITE_MAX_CHARS:
-            return text
+            return text, DEFAULT_MOOD
         prompt = f"Language: {LANG_LABELS.get(language, 'English')}\nWritten answer:\n{text}"
         try:
-            said = await self.llm.generate(prompt, Script, system=SPEAK_SYSTEM, timeout=8, temperature=0.7, attempts=1)
+            said = await self.llm.generate(prompt, Script, system=SPEAK_SYSTEM, timeout=8, temperature=0.7, attempts=2)
         except LLMUnavailable:
-            return text
+            return text, DEFAULT_MOOD
+        mood = said.mood.strip().lower() if said.mood.strip().lower() in MOODS else DEFAULT_MOOD
         result = " ".join(said.text.split())
         if not result or len(result) > len(text) * 1.6 + 80 or not set(_NUMBER.findall(text)) <= set(_NUMBER.findall(result)):
             log.info("Spoken rewrite rejected (empty, too long or a number lost): reading the answer as it is")
-            return text
-        return result
+            return text, mood
+        return result, mood
 
     async def speak(self, text: str, language: str = "en") -> bytes | None:
-        """The text read aloud; None when all TTS engines fail.
-        Tries Gemini TTS first (more natural, emotional), falls back to edge-tts on quota/error.
-        Long replies are truncated at a sentence boundary: the full text is sent alongside."""
+        """The text read aloud; None when all voices fail.
+        Gemini first, on every key: its native-audio voice, then Gemini TTS; edge-tts only when no
+        Gemini voice answers. Long replies are truncated at a sentence boundary: the full text is
+        sent alongside."""
         text = text.strip()
         if not text:
             return None
         if len(text) > MAX_SPOKEN_CHARS:
             cutoff = text[:MAX_SPOKEN_CHARS].rfind(". ")
             text = text[:cutoff + 1] if cutoff > 300 else text[:MAX_SPOKEN_CHARS]
-        speech = for_speech(await self.script(text, language))
-        audio = await self._speak_gemini(speech, language)
-        if audio:
-            return audio
-        return await self._speak_edge(speech, language)
+        said, mood = await self._rewrite(text, language)
+        speech = for_speech(said)
+        for engine in (lambda: self._speak_live(speech, mood), lambda: self._speak_gemini(speech, language, mood)):
+            audio = await engine()
+            if audio:
+                return audio
+        log.warning("No Gemini voice answered: the fallback voice speaks")
+        return await self._speak_edge(speech, language, mood)

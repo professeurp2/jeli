@@ -101,7 +101,11 @@ class Catchup:
                 return coming_up  # a quiet day can still bring a reminder
             texts = TEXTS[language]
             latest = await self.store.latest_message_at() if hasattr(self.store, "latest_message_at") else None
-            if latest and latest < since:
+            live = await self.store.follows_groups_live() if hasattr(self.store, "follows_groups_live") else False
+            if latest and latest < since and live:
+                # In the groups, which are simply quiet (a night, a weekend): say so, and since when.
+                nothing = texts["catchup_quiet"].format(since=_day(since, language), day=_day(latest, language), time=f"{latest:%H:%M}")
+            elif latest and latest < since:
                 # Not "nothing new": Jeli simply hasn't seen anything since (not in the groups yet).
                 nothing = texts["catchup_not_live"].format(day=_day(latest, language), time=f"{latest:%H:%M}")
             else:

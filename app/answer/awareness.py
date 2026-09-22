@@ -21,7 +21,7 @@ from app.answer.llm import LLM, LLMUnavailable
 from app.answer.persona import PERSONA, background
 from app.answer.prompts import LANGUAGES
 from app.answer.recaps import match_recordings
-from app.kb.store import Store
+from app.kb.store import LIVE_WINDOW, Store
 from app.models import Recording
 
 log = logging.getLogger(__name__)
@@ -102,7 +102,8 @@ class Awareness:
         chats = overview["chats"]
         if chats:
             latest = max(c["last_message"] for c in chats)
-            live = any(c["live"] for c in chats) and now - latest < timedelta(days=1)
+            # In the groups when a group received live messages lately: a quiet night is not "offline".
+            live = any(c["live"] and c["chat_id"].endswith("@g.us") and now - c["last_message"] < LIVE_WINDOW for c in chats)
             lines.append(
                 f"Jeli's memory of the groups goes up to {latest:%A %d %B %Y, %H:%M} UTC; "
                 + ("it receives new messages live." if live else "it is not connected to the groups yet, so it knows nothing said after that.")

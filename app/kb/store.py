@@ -3,7 +3,7 @@
 import logging
 from collections.abc import Sequence
 from dataclasses import dataclass
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 
 from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
@@ -15,6 +15,8 @@ from app.models import Deadline, Document, Recording, StoredMessage, UsageEvent
 log = logging.getLogger(__name__)
 
 INSERT_BATCH = 1000
+# Jeli is in the groups when it received group messages live within this window.
+LIVE_WINDOW = timedelta(days=3)
 
 INSERT_MESSAGES = """
 insert into jeli.messages (id, chat_id, source, author, author_id, sent_at, text)
@@ -505,6 +507,19 @@ class Store:
             "p95_ms": latency["p95"],
             "group_questions": [(row["at"], row["outcome"], row["question"]) for row in questions],
         }
+
+    async def follows_groups_live(self, within: timedelta = LIVE_WINDOW) -> bool:
+        """Whether Jeli is in the groups: it received group messages live lately. A quiet night or
+        weekend is not a disconnection."""
+        async with self._pool.connection() as conn:
+            row = await (
+                await conn.execute(
+                    "select exists(select 1 from jeli.messages where source = 'whatsapp_live' "
+                    "and chat_id like '%%@g.us' and sent_at > now() - %s) as live",
+                    (within,),
+                )
+            ).fetchone()
+        return bool(row["live"])
 
     async def latest_message_at(self) -> datetime | None:
         """The last group message Jeli knows: how far its memory of the groups goes."""
