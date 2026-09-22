@@ -52,7 +52,7 @@ SOURCE_REQUEST = re.compile(
 )
 KINDS = (
     "question", "social", "about_jeli", "catchup", "recap", "session_question", "deadlines", "file",
-    "list_documents", "list_sessions", "clarify", "voice", "image", "sources", "vague",
+    "list_documents", "list_sessions", "clarify", "voice", "image", "sources", "vague", "reminder",
 )
 # Kinds whose reply the model writes itself (no search).
 REPLYING_KINDS = ("social", "about_jeli", "clarify", "vague")
@@ -80,6 +80,10 @@ you, from the messages. Return:
   "sources": asks where the previous answer came from ("source?", "d'où tu tiens ça ?").
   "voice": only asks for the previous answer again by voice ("en vocal", "say it in a voice note").
   "image": asks for an image or illustration of something (the subject is in "standalone").
+  "reminder": asks Jeli to remind them of something later — before a meeting, a session, a
+    deadline, at a time ("remind me before the meeting", "rappelle-moi demain à 9 h", "préviens-moi
+    une heure avant") — or to cancel a reminder. "standalone" names what and when, from the
+    conversation so far.
   "clarify": the request is ambiguous in a way a search cannot settle — two sessions, two
     programmes, an unclear "this"/"ça", a period that could be several — and one short question
     would settle it. Give "reply": the question, one line, offering 2 or 3 options from what you

@@ -87,6 +87,26 @@ def build_activities(state, settings: Settings, runtime: Runtime) -> dict[str, A
             lambda: runtime["enabled.deadlines"],
         )
 
+    reminders = getattr(state, "reminders", None)
+    if reminders is not None and whatsapp is not None:
+
+        async def send_reminders() -> str:
+            sent, dropped = await reminders.send_due(whatsapp.remind)
+            if not sent and not dropped:
+                return "no reminder due"
+            return f"sent {_plural(sent, 'reminder')}" + (f", dropped {dropped} too late" if dropped else "")
+
+        activities["reminders"] = Activity(
+            "reminders",
+            "Reminders members asked for",
+            "Every minute, Jeli sends the reminders members asked for (\u201cremind me before the meeting\u201d), "
+            "in the chat where they asked. One that cannot go before the event starts is dropped.",
+            send_reminders,
+            every(timedelta(minutes=1), first=timedelta(seconds=30)),
+            lambda: runtime["enabled.reminders"],
+            blocked=not_connected,
+        )
+
     if catchup and whatsapp is not None:
 
         async def daily_summary() -> str:

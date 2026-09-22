@@ -245,6 +245,27 @@ create table if not exists jeli.feedback (
 );
 create index if not exists feedback_at on jeli.feedback (at desc);
 
+-- Reminders members asked for ("remind me before the meeting"): sent in the chat where they were
+-- asked, as a reply to the request.
+create table if not exists jeli.reminders (
+    id           bigint generated always as identity primary key,
+    created_at   timestamptz not null default now(),
+    platform     text not null,
+    chat_id      text not null,
+    message_id   text not null default '',   -- the member's request, replied to
+    member_key   text not null,
+    member_id    text not null default '',   -- to @mention them in a group
+    what         text not null,
+    event_at     timestamptz,
+    remind_at    timestamptz not null,
+    language     text not null default '',
+    message      text not null,
+    sent_at      timestamptz,                -- sent, or dropped (too late / no chat to send to)
+    sent         boolean not null default false,
+    cancelled_at timestamptz
+);
+create index if not exists reminders_due on jeli.reminders (remind_at) where sent_at is null and cancelled_at is null;
+
 -- Natural voice notes made today, per key (its fingerprint, never the key) and speech model: the
 -- free tier allows 10 a day each, renewed at midnight Pacific time (the dashboard shows what is left).
 create table if not exists jeli.voice_quota (

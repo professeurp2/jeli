@@ -97,6 +97,8 @@ class Responder:
         # Uninvited replies are capped per group, on top of the channel's own anti-ban limits.
         self.uninvited = SlidingWindowLimiter(duplicate_replies_per_hour, 3600)
         self._pending: set[asyncio.Task] = set()
+        # Reminders members ask for (app/answer/reminders.py), set at startup.
+        self.reminders = None
 
     async def respond(self, message: IncomingMessage) -> str | None:
         """The reply to a message, or None to stay silent. Each reply is counted for the dashboard."""
@@ -223,6 +225,9 @@ class Responder:
             self._drop(prefetch)
             last = turns[-1].reply if turns else ""
             return (Reply(last) if last else texts["help"]), "voice", language
+        if kind == "reminder" and self.reminders is not None:
+            self._drop(prefetch)
+            return await self.reminders.handle(message, question, language, turns), "reminder", language
         if kind == "catchup" and self.catchup:
             self._drop(prefetch)
             since = parse_iso(understood.since) or parse_since(text, datetime.now(timezone.utc))

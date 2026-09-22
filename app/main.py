@@ -22,6 +22,7 @@ from app.answer.recaps import Recaps
 from app.answer.responder import Responder
 from app.answer.understand import Understander
 from app.answer.emotion import Emotions
+from app.answer.reminders import Reminders
 from app.answer.voice import Voice
 from app.answer.citations import ignored_keys, is_ignored
 from app.config import get_settings
@@ -110,6 +111,8 @@ async def lifespan(app: FastAPI):
         store=store,
     )
     state.guard = Guard(record=store.record_incident if store else None)
+    state.reminders = Reminders(store, state.llm, deadlines=state.deadlines) if store and state.llm else None
+    state.responder.reminders = state.reminders
     state.voice = Voice(state.llm) if state.llm else None  # voice notes, heard and spoken
     if state.voice is not None:
         state.voice.store = store  # today's count of natural voice notes survives a restart

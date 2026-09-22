@@ -508,6 +508,63 @@ class Store:
             "group_questions": [(row["at"], row["outcome"], row["question"]) for row in questions],
         }
 
+    # --- Reminders members asked for ---------------------------------------------------------------
+
+    async def add_reminder(self, *, platform: str, chat_id: str, message_id: str, member_key: str, member_id: str,
+                           what: str, event_at: datetime | None, remind_at: datetime, language: str, message: str) -> int:
+        async with self._pool.connection() as conn:
+            row = await (
+                await conn.execute(
+                    "insert into jeli.reminders (platform, chat_id, message_id, member_key, member_id, what, event_at, remind_at, "
+                    "language, message) values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s) returning id",
+                    (platform, chat_id, message_id, member_key, member_id, what, event_at, remind_at, language, message),
+                )
+            ).fetchone()
+        return row["id"]
+
+    async def active_reminders(self, member_key: str) -> list[dict]:
+        async with self._pool.connection() as conn:
+            return await (
+                await conn.execute(
+                    "select id, chat_id, what, remind_at from jeli.reminders where member_key = %s "
+                    "and sent_at is null and cancelled_at is null order by remind_at",
+                    (member_key,),
+                )
+            ).fetchall()
+
+    async def cancel_reminders(self, member_key: str, chat_id: str) -> int:
+        async with self._pool.connection() as conn:
+            cursor = await conn.execute(
+                "update jeli.reminders set cancelled_at = now() where member_key = %s and chat_id = %s "
+                "and sent_at is null and cancelled_at is null",
+                (member_key, chat_id),
+            )
+        return cursor.rowcount
+
+    async def due_reminders(self, now: datetime) -> list[dict]:
+        async with self._pool.connection() as conn:
+            return await (
+                await conn.execute(
+                    "select id, platform, chat_id, message_id, member_id, what, event_at, remind_at, message from jeli.reminders "
+                    "where remind_at <= %s and sent_at is null and cancelled_at is null order by remind_at limit 50",
+                    (now,),
+                )
+            ).fetchall()
+
+    async def upcoming_reminders(self, limit: int = 20) -> list[dict]:
+        async with self._pool.connection() as conn:
+            return await (
+                await conn.execute(
+                    "select what, remind_at, chat_id from jeli.reminders where sent_at is null and cancelled_at is null "
+                    "order by remind_at limit %s",
+                    (limit,),
+                )
+            ).fetchall()
+
+    async def finish_reminder(self, reminder_id: int, sent: bool) -> None:
+        async with self._pool.connection() as conn:
+            await conn.execute("update jeli.reminders set sent_at = now(), sent = %s where id = %s", (sent, reminder_id))
+
     async def voice_quota(self, day: date) -> list[dict]:
         """Today's natural voice notes, per key fingerprint and speech model."""
         async with self._pool.connection() as conn:

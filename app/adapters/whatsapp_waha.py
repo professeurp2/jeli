@@ -978,6 +978,21 @@ class Waha:
             await self._post_quietly("/api/stopTyping", chat)
         await self.send_reply(message, reply)
 
+    async def remind(self, chat_id: str, text: str, reply_to: str | None = None, mentions: list[str] = ()) -> bool:
+        """A reminder a member asked for: in their chat, replying to their request, within the same
+        limits as every message. False when it could not go now (paused, session down, limit)."""
+        if self.suspended or self.paused or not self.hourly_limiter.allow("all"):
+            return False
+        chat = {"chatId": chat_id}
+        await self._post_quietly("/api/startTyping", chat)
+        try:
+            await asyncio.sleep(typing_duration(text))
+            await self.spacer.wait_turn()
+        finally:
+            await self._post_quietly("/api/stopTyping", chat)
+        await self.send_text(chat_id, text, reply_to=reply_to, mentions=list(mentions))
+        return True
+
     async def post(self, chat_id: str, text: str) -> bool:
         """A message Jeli sends on its own schedule (daily digest, weekly report), within the same limits.
         Returns False when it was not sent: session not WORKING or hourly limit reached."""
