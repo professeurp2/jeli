@@ -123,7 +123,8 @@ class Catchup:
         polls = [m.id for m in messages if m.text.startswith(POLL_MARK)]
         tallies = await self.store.poll_tallies(polls) if polls and hasattr(self.store, "poll_tallies") else {}
         lines = [
-            f"[{m.sent_at.astimezone(timezone.utc):%a %d %b %H:%M}] {self.chat_labels.get(m.chat_id, m.chat_id)} · "
+            f"[{m.sent_at.astimezone(timezone.utc):%a %d %b %H:%M}] "
+            f"{self.chat_labels.get(m.chat_id) or ('the group' if '@' in m.chat_id else m.chat_id)} · "
             f"{display_author(m.author)}{' (organiser)' if is_ignored(m, self.organisers) else ''}: "
             f"{' '.join(with_tally(m.text, tallies.get(m.id)).split())[:MAX_MESSAGE_CHARS]}"
             for m in messages

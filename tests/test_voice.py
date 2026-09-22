@@ -171,3 +171,9 @@ def test_a_key_over_quota_rests_alone_and_the_next_key_speaks(monkeypatch):
     assert [m.calls for m in models] == [1, 1, 1]
     asyncio.run(speaker._speak_gemini("hello", "en"))  # the two keys over quota are skipped
     assert [m.calls for m in models] == [1, 1, 2]
+
+
+def test_ids_and_phone_numbers_are_never_read_aloud():
+    said = spoken("Session le 24 dans 120363429618850959@g.us avec Diane, contact +251 34 567 8901, @23484567890 aussi.")
+    assert "@g.us" not in said and "1203" not in said and "251" not in said and "23484" not in said
+    assert "Diane" in said and "24" in said

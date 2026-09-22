@@ -41,9 +41,13 @@ GEMINI_TTS_KEY_REST_SECONDS = 3600
 # edge-tts — fallback when Gemini TTS quota is exhausted or unavailable.
 # edge-tts (7.x) escapes what it is given and builds its own SSML: it must receive plain text,
 # never SSML, or it reads the tags aloud ("Speak version 1.0 xmlns…").
+# The "Multilingual" neural voices are the most natural ones edge-tts offers (checked 22 Sep
+# with list_voices); Swahili and Amharic get their own voice instead of an English one.
 EDGE_VOICES = {
-    "fr": "fr-FR-DeniseNeural",
-    "en": "en-US-AriaNeural",
+    "fr": "fr-FR-VivienneMultilingualNeural",
+    "en": "en-US-AvaMultilingualNeural",
+    "sw": "sw-KE-ZuriNeural",
+    "am": "am-ET-MekdesNeural",
 }
 AUDIO_MIMETYPE = "audio/mpeg"  # edge-tts output
 AUDIO_BYTES_PER_SECOND = 16_000  # edge-tts MP3 at ~128 kbps (used for recording-delay timing)
@@ -61,6 +65,9 @@ VOICE_REQUEST = re.compile(
 QUOTE_LINE = re.compile(r"^\s*>.*$", re.MULTILINE)
 LINK = re.compile(r"https?://\S+")
 MENTION = re.compile(r"(?<!\w)@\d{5,}\b")
+# Technical identifiers that must never be read aloud: WhatsApp ids ("1203…@g.us") and phone numbers.
+JID = re.compile(r"\b\d{5,}(?::\d+)?@[\w.]+")
+PHONE = re.compile(r"\+\d[\d\s().-]{7,}\d")
 EMOJI = re.compile("[\U0001f000-\U0001faff☀-➿⬀-⯿️‍]")
 
 LISTEN_SYSTEM = """\
@@ -134,7 +141,7 @@ def spoken(reply: str) -> str:
     """What a voice note says of a written reply: its words, without the quote blocks, links, mentions
     and WhatsApp formatting — those stay in the text sent with it."""
     text = MENTION.sub("", QUOTE_LINE.sub("", reply))
-    text = LINK.sub("", text)
+    text = PHONE.sub("", JID.sub("", LINK.sub("", text)))
     text = re.sub(r"[*_~`]", "", text)
     text = re.sub(r"\s*\(/\w+\)", "", text)  # "(/catchup)": a command to type, not to say
     text = re.sub(r"(?<!\S)/(\w+)", r"\1", text)
