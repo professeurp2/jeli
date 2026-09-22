@@ -608,7 +608,7 @@ async def try_ask(request: Request, member: Change) -> JSONResponse:
         message = dataclasses.replace(message, text=without_voice_request(text))
     started = time.monotonic()
     reply = await state.responder.respond(message)
-    audio = await voice.speak(spoken(reply)) if reply and by_voice else None
+    audio = await voice.speak(spoken(reply), getattr(reply, "language", "")) if reply and by_voice else None
     files, after = [], None
     attachment, pending = getattr(reply, "attachment", None), getattr(reply, "pending", None)
     if pending:

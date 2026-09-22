@@ -888,7 +888,7 @@ class Waha:
             reply = await self.respond(message)
             if reply and by_voice:
                 await self._post_quietly(f"/api/{self.session}/presence", {**chat, "presence": "recording"})
-                audio = await self.voice.speak(spoken(reply), language)
+                audio = await self.voice.speak(spoken(reply), getattr(reply, "language", "") or language)
             if reply:
                 # Answer generation counts as typing time: only wait for what is left.
                 busy = min(VOICE_RECORDING_SECONDS, audio_seconds(audio)) if audio else typing_duration(reply)

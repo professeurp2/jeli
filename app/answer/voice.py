@@ -479,8 +479,9 @@ class Voice:
             log.info("Spoken rewrite came back as the written answer: asking again")
         return text, mood
 
-    async def speak(self, text: str, language: str = "en") -> bytes | None:
-        """The text read aloud; None when all voices fail.
+    async def speak(self, text: str, language: str = "") -> bytes | None:
+        """The text read aloud; None when all voices fail. `language`: the one the understanding
+        step chose for this reply (Reply.language); guessed from the words only when it is not given.
         Gemini first, on every key: Gemini TTS, then its native-audio voice; edge-tts only when no
         Gemini voice answers. Long replies are truncated at a sentence boundary: the full text is
         sent alongside."""
@@ -490,9 +491,10 @@ class Voice:
         if len(text) > MAX_SPOKEN_CHARS:
             cutoff = text[:MAX_SPOKEN_CHARS].rfind(". ")
             text = text[:cutoff + 1] if cutoff > 300 else text[:MAX_SPOKEN_CHARS]
-        # The answer's own language, not the question's (the dashboard gives none): a rewrite or a
-        # voice told another language translates the answer.
-        spoken_language = detect_language(text)
+        # The reply's language, decided by the model with the whole message in view: word lists
+        # mistake an answer mixing French and English names (a rewrite or a voice told the wrong
+        # language translates, or mixes, the answer). Guessed from the words only as a last resort.
+        spoken_language = language if language in LANG_LABELS else detect_language(text)
         said, mood = await self._rewrite(text, spoken_language)
         speech = for_speech(said)
         for engine in (

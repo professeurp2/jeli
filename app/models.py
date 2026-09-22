@@ -68,14 +68,19 @@ class Reply(str):
     # The verified sources behind the answer, as quotes ("> *Diane* · organiser, Thu 17 Sep …"),
     # whether shown or kept for "source?".
     cited: list[str]
+    # The language it is written in, as the understanding step decided it (a voice note says it in
+    # that language rather than guessing from the words); "" when unknown.
+    language: str
 
     def __new__(
-        cls, text: str, *, reply_to=None, quoted=None, mentions=(), attachment=None, pending=None, unanswered=False, cited=()
+        cls, text: str, *, reply_to=None, quoted=None, mentions=(), attachment=None, pending=None, unanswered=False, cited=(),
+        language="",
     ):
         reply = super().__new__(cls, text)
         reply.reply_to, reply.quoted, reply.mentions = reply_to, quoted, list(mentions)
         reply.attachment, reply.pending, reply.unanswered = attachment, pending, unanswered
         reply.cited = list(cited)
+        reply.language = language
         return reply
 
 

@@ -237,7 +237,7 @@ def test_try_jeli_answers_as_on_whatsapp_and_keeps_each_members_conversation(cli
 
 def test_try_jeli_plays_the_voice_note_jeli_would_send(client):
     class Voice:
-        async def speak(self, text):
+        async def speak(self, text, language=""):
             self.said = text
             return b"RIFF-voice"
 

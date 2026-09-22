@@ -106,6 +106,10 @@ class Responder:
             await self.conversations.warm(message)
             reply, kind, language = await self._route(message, language)
             if reply:
+                # The language the understanding step chose goes with the reply (for its voice note).
+                if not isinstance(reply, Reply):
+                    reply = Reply(reply)
+                reply.language = language
                 self.conversations.note(message, reply, getattr(reply, "cited", ()))
                 self._remember(message, language)
         else:

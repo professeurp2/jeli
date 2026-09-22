@@ -377,3 +377,44 @@ def test_a_list_is_summarised_as_a_person_would_tell_it():
     assert _script(told, listing) == told  # announcements' dates and numbers left out: a human summary
     assert _script("Mardi 22 septembre, puis le 25 septembre la soumission.", listing) == listing  # 25: a number it invented
     assert _script("Bientôt le module 1, puis le hackathon.", listing) == listing  # most of its dates lost
+
+
+def test_the_voice_says_the_reply_in_the_language_the_model_chose(monkeypatch):
+    from app.answer.voice import Voice
+
+    speaker = Voice(_ScriptLLM(""))
+    told = []
+
+    async def rewrite(text, language):
+        told.append(("rewrite", language))
+        return text, "calm"
+
+    async def tts(text, language, mood):
+        told.append(("tts", language))
+        return b"RIFF-tts"
+
+    monkeypatch.setattr(speaker, "_rewrite", rewrite)
+    monkeypatch.setattr(speaker, "_speak_gemini", tts)
+    # An English answer full of French names: the word lists would guess French.
+    mixed = "Your Wadhwani session is mardi 22 septembre at 3 PM, then the atelier with Diane."
+    asyncio.run(speaker.speak(mixed, "en"))
+    assert told == [("rewrite", "en"), ("tts", "en")]
+    told.clear()
+    asyncio.run(speaker.speak("La date limite est le jeudi 24 septembre, courage !"))  # none given: guessed
+    assert told == [("rewrite", "fr"), ("tts", "fr")]
+
+
+def test_the_responder_gives_its_reply_the_language_it_understood():
+    from datetime import datetime, timezone
+
+    from app.answer.responder import Responder
+    from app.answer.understand import Understood
+    from app.models import IncomingMessage
+
+    class Understands:
+        async def understand(self, text, language, turns=(), member=""):
+            return Understood(kind="social", reply="Hello! How can I help?", standalone=text, queries=[], language="en")
+
+    message = IncomingMessage("whatsapp", "g@g.us", "1", "Awa", "Bonjour Jeli, can you help me?", datetime(2026, 9, 22, tzinfo=timezone.utc), True, True)
+    reply = asyncio.run(Responder(None, understander=Understands()).respond(message))
+    assert reply == "Hello! How can I help?" and reply.language == "en"
