@@ -59,6 +59,9 @@ DEFAULT_MOOD = "calm"
 # Uses the same API key pool as the LLM (existing rotation in LLM._clients).
 # Tried in order on every key (checked on the key on 21 Sep 2026: both exist; the free tier
 # allows about 10 requests a day per key and model, hence the rotation and the edge-tts fallback).
+# The voices tried before the backup voice (edge-tts), as the team chose on the dashboard: all the
+# natural ones in turn, one of them, or none (the backup voice only: it spares the Gemini quota).
+VOICE_ENGINES = {"auto": ("natural", "live"), "natural": ("natural",), "live": ("live",), "backup": ()}
 GEMINI_TTS_MODELS = ["gemini-3.1-flash-tts-preview", "gemini-2.5-flash-preview-tts"]
 GEMINI_TTS_MODEL = GEMINI_TTS_MODELS[0]
 GEMINI_TTS_VOICES = {"fr": "Aoede", "en": "Aoede"}  # warm, expressive multilingual voice
@@ -292,6 +295,8 @@ class Voice:
         self._tts_key_resting: dict[tuple[int, str], float] = {}  # (key, model) over quota
         self._tts_cursor = 0  # next key to try, so the free quota is spread over the keys
         self._live_cursor = 0
+        # Which voice speaks first (set from the dashboard): see VOICE_ENGINES.
+        self.engine = "auto"
         # Today's use of the speech models' quota, per (key, model): kept in the database (store,
         # set at startup) so that a restart does not forget it.
         self.store = None
@@ -597,12 +602,14 @@ class Voice:
         spoken_language = language if language in LANG_LABELS else detect_language(text)
         said, mood = await self._rewrite(text, spoken_language)
         speech = for_speech(said)
-        for engine in (
-            lambda: self._speak_gemini(speech, spoken_language, mood),
-            lambda: self._speak_live(speech, mood, spoken_language),
-        ):
-            audio = await engine()
+        voices = {
+            "natural": lambda: self._speak_gemini(speech, spoken_language, mood),
+            "live": lambda: self._speak_live(speech, mood, spoken_language),
+        }
+        for name in VOICE_ENGINES.get(self.engine, VOICE_ENGINES["auto"]):
+            audio = await voices[name]()
             if audio:
                 return audio
-        log.warning("No Gemini voice answered: the fallback voice speaks")
+        if self.engine != "backup":
+            log.warning("No Gemini voice answered: the fallback voice speaks")
         return await self._speak_edge(speech, spoken_language, mood)

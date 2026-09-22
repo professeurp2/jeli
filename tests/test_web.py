@@ -252,6 +252,32 @@ def test_the_overview_shows_the_natural_voice_notes_left_today(client):
     app.state.voice = None
 
 
+def test_the_team_switches_the_voice_seeing_the_natural_voices_quota(client):
+    class Voice:
+        engine, voice_name = "auto", "aoede"
+
+        async def quota(self):
+            return {"total": 280, "remaining": 143, "used": 137, "keys": 14, "per_key": 20,
+                    "renews_at": datetime(2026, 9, 23, 7, 0, tzinfo=timezone.utc)}
+
+        def quota_marker(self):
+            return "137"
+
+    app.state.voice = voice = Voice()
+    sign_in(client)
+    page = client.get("/dashboard/settings").text
+    assert "Natural voice notes left today" in page and "143 / 280" in page
+    assert "Which voice speaks" in page and all(label in page for label in ("Automatic", "Natural voice", "Live voice", "Backup voice"))
+    form = {"csrf": csrf_of(page), "care": "balanced", "bot_name": "Jeli", "pointer_care": "careful", "duplicate_replies_per_hour": "3",
+            "whatsapp_user_limit": "4", "whatsapp_hourly_limit": "60", "whatsapp_min_send_interval_seconds": "4",
+            "sources": "one", "voice_engine": "backup", "voice_rate": "0", "voice_intro_rate": "50", "voice_name": "aoede",
+            "proactive_image_rate": "100"}
+    client.post("/dashboard/settings", data=form)
+    assert app.state.runtime["voice_engine"] == "backup" and voice.engine == "backup"  # applied at once
+    assert any("which voice speaks" in action for _, action in client.fake_store.audit)
+    app.state.voice = None
+
+
 def test_try_jeli_plays_the_voice_note_jeli_would_send(client):
     class Voice:
         async def speak(self, text, language=""):

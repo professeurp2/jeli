@@ -477,3 +477,29 @@ def test_the_voice_notes_left_today_follow_the_keys_and_survive_a_restart():
     # A key Google refuses leaves the total.
     llm._disable_key(2)
     assert asyncio.run(again.quota())["total"] == 40
+
+
+def test_the_team_chooses_which_voice_speaks_and_the_backup_always_takes_over(monkeypatch):
+    from app.answer.voice import Voice
+
+    speaker = Voice(_ScriptLLM(""))
+    tried = []
+
+    def voice(name, audio):
+        async def speak(*args):
+            tried.append(name)
+            return audio
+        return speak
+
+    async def rewrite(text, language):
+        return text, "calm"
+
+    monkeypatch.setattr(speaker, "_rewrite", rewrite)
+    monkeypatch.setattr(speaker, "_speak_gemini", voice("natural", None))
+    monkeypatch.setattr(speaker, "_speak_live", voice("live", None))
+    monkeypatch.setattr(speaker, "_speak_edge", voice("backup", b"mp3"))
+    for engine, expected in [("auto", ["natural", "live", "backup"]), ("natural", ["natural", "backup"]),
+                             ("live", ["live", "backup"]), ("backup", ["backup"])]:
+        speaker.engine, tried[:] = engine, []
+        assert asyncio.run(speaker.speak("La date limite est le jeudi 24 septembre.", "fr")) == b"mp3"
+        assert tried == expected, engine

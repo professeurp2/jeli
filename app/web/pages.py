@@ -405,6 +405,27 @@ async def overview(request: Request, member: Member) -> Response:
     return _page(request, member, title="Overview", subtitle="How Jeli is doing, at a glance", active="home", body=body, live=True)
 
 
+VOICE_ENGINE_CHOICES = [
+    ("auto", "Automatic"),
+    ("natural", "Natural voice"),
+    ("live", "Live voice"),
+    ("backup", "Backup voice"),
+]
+
+
+async def _voice_quota_line(state) -> str:
+    """The natural voice notes left today, as a settings row (next to the switch)."""
+    voice = getattr(state, "voice", None)
+    if voice is None or not hasattr(voice, "quota"):
+        return ""
+    quota = await voice.quota()
+    left, total = quota["remaining"], quota["total"]
+    tone = "bad" if total and not left else "warn" if total and left < total * 0.2 else "good"
+    text = (f"Google's natural voices allow {quota['per_key']} a day per access key ({quota['keys']} keys). "
+            f"Renewed at {quota['renews_at']:%H:%M} GMT. A key added on the server raises the total on its own.")
+    return _row("Natural voice notes left today", text, ui.pill(tone, f"{left:,} / {total:,}"))
+
+
 async def _voice_card(state) -> str:
     """The natural voice notes left today, out of the day's total. The total follows the access keys
     Jeli has: one added on the server (or refused by Google) changes it at the next start."""
@@ -1595,7 +1616,12 @@ async def settings_page(request: Request, member: Member) -> HTMLResponse:
                f'<output>{round(runtime["voice_intro_rate"] * 100)}%</output>')
         + _row("Voice personality", "The character of Jeli's voice. Warm is expressive and conversational; Clear is more neutral and professional.",
                _segmented("voice_name", runtime["voice_name"], _VOICE_PERSONALITIES))
+        + _row("Which voice speaks", "Automatic: the natural voice while today's quota lasts, then the live voice, then the backup voice. "
+               "Choose one to use it first. The backup voice is free and unlimited, less lively: it spares the natural voices' quota. "
+               "Whatever the choice, the backup voice takes over when the chosen one cannot speak.",
+               _segmented("voice_engine", runtime["voice_engine"], VOICE_ENGINE_CHOICES))
     )
+    voice_settings = await _voice_quota_line(_state(request)) + voice_settings
     pace = (
         ui.notice("warn", "WhatsApp blocks numbers that behave like machines. Raise these only if members really need it.")
         + '<div style="height:8px"></div>'
@@ -1637,6 +1663,7 @@ SETTING_WORDS = {
     "voice_rate": "voice reply rate",
     "voice_intro_rate": "voice reply rate for first contact",
     "voice_name": "voice personality",
+    "voice_engine": "which voice speaks",
     "whatsapp_user_limit": "answers per member",
     "whatsapp_hourly_limit": "answers per hour",
     "whatsapp_min_send_interval_seconds": "pause between messages",
@@ -1666,6 +1693,7 @@ async def settings_change(request: Request, member: Change) -> RedirectResponse:
         "voice_rate": str(int(str(form.get("voice_rate", "20"))) / 100),
         "voice_intro_rate": str(int(str(form.get("voice_intro_rate", "80"))) / 100),
         "voice_name": form.get("voice_name", "Aoede"),
+        "voice_engine": form.get("voice_engine", "auto"),
     }
     runtime = _state(request).runtime
     for key, value in changes.items():

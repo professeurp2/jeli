@@ -90,6 +90,9 @@ FIELDS = {
         Field("voice_intro_rate", "float", lambda s: 0.50, 0.0, 1.0),
         # Gemini TTS voice personality (voice name passed to the TTS model).
         Field("voice_name", "choice", lambda s: "aoede", choices=("aoede", "puck", "charon", "kore", "fenrir")),
+        # Which voice speaks: the best available in turn (auto), or one of them first; the backup
+        # voice (edge-tts: free, no quota) always takes over when the chosen one cannot speak.
+        Field("voice_engine", "choice", lambda s: "auto", choices=("auto", "natural", "live", "backup")),
     )
 }
 
