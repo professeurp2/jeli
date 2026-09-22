@@ -18,12 +18,30 @@ from pydantic import BaseModel, ValidationError
 log = logging.getLogger(__name__)
 
 URL = "https://api.groq.com/openai/v1/chat/completions"
+# Listening is a separate model: Whisper, hosted by Groq. It takes over when no Gemini model can
+# hear a voice note, so a member who speaks still gets an answer.
+HEAR_URL = "https://api.groq.com/openai/v1/audio/transcriptions"
+HEAR_MODEL = "whisper-large-v3-turbo"
+# Groq retires model ids without notice (measured 22 Sep: llama-3.3-70b-versatile answered 404 on
+# a fresh key). Rather than trust a name written months earlier, Jeli asks the key what it has and
+# keeps the best of it, in this order. A name is matched as a prefix, so dated variants count.
+LIST_URL = "https://api.groq.com/openai/v1/models"
+PREFERRED = ("llama-3.3-70b", "llama-3.1-70b", "kimi-k2", "gpt-oss-120b", "gpt-oss-20b", "llama-3.1-8b", "llama")
+# Models on the key that cannot answer a question: they listen, speak or moderate.
+NOT_FOR_ANSWERS = ("whisper", "tts", "guard", "embed", "prompt-")
 # A failing model (rate limit, overload) is left alone for a while rather than costing every call.
 REST_SECONDS = 120
 # The spare engine must not make the member wait longer than Gemini already has.
 TIMEOUT_SECONDS = 8
 
 Schema = TypeVar("Schema", bound=BaseModel)
+
+
+class _Alive(BaseModel):
+    """The shape of the startup check's answer (see Groq.check)."""
+
+    answered: bool
+    answer: str
 
 
 class BackupUnavailable(Exception):
@@ -42,6 +60,10 @@ class Groq:
         self._client = client
         self._resting_until: dict[str, float] = {}
         self.used = 0  # answers this engine has rescued, since the start
+        self.heard = 0  # voice notes it has listened to when Gemini could not
+        # What a first call proved, for the dashboard: "" not tried, "ok", or why it failed.
+        self.checked = ""
+        self.hear_model = HEAR_MODEL  # confirmed against the key by check()
         if self.available:
             log.info("Groq: spare engine ready, models %s", ", ".join(self.models))
 
@@ -53,6 +75,83 @@ class Groq:
         now = self._clock()
         fresh = [m for m in self.models if self._resting_until.get(m, 0) <= now]
         return fresh or self.models[:1]  # all resting: try the first again rather than give up
+
+    async def models_on_key(self) -> list[str]:
+        """The model ids this key can actually use, newest listing from Groq ([] when unreachable)."""
+        client = self._client or httpx.AsyncClient()
+        try:
+            response = await client.get(LIST_URL, headers={"Authorization": f"Bearer {self.api_key}"}, timeout=15)
+            if response.status_code >= 400:
+                log.warning("Groq would not list its models (%d)", response.status_code)
+                return []
+            return [str(m.get("id", "")) for m in response.json().get("data", []) if m.get("id")]
+        except (httpx.HTTPError, TimeoutError, ValueError) as error:
+            log.warning("Groq would not list its models (%s)", type(error).__name__)
+            return []
+        finally:
+            if self._client is None:
+                await client.aclose()
+
+    def _pick(self, available: list[str]) -> list[str]:
+        """The configured models the key really has; failing that, the best of what it does have."""
+        usable = [m for m in available if not any(bad in m for bad in NOT_FOR_ANSWERS)]
+        kept = [m for m in self.models if m in usable]
+        if kept:
+            return kept
+        found = [m for want in PREFERRED for m in usable if m.startswith(want)]
+        return list(dict.fromkeys(found)) or usable[:2]
+
+    async def check(self) -> str:
+        """One cheap call at startup, so the team sees on the dashboard whether the spare engine
+        really answers — rather than finding out the key is wrong the day Gemini goes down. The
+        model list is refreshed first: a name that no longer exists is replaced, not endured."""
+        if not self.available:
+            self.checked = ""
+            return ""
+        available = await self.models_on_key()
+        if available:
+            chosen = self._pick(available)
+            whisper = [m for m in available if "whisper" in m]
+            if whisper and self.hear_model not in whisper:
+                self.hear_model = next((m for m in whisper if "turbo" in m), whisper[0])
+                log.info("Groq: voice notes will be heard by %s", self.hear_model)
+            if chosen != self.models:
+                log.warning("Groq: models %s -> %s (what the key really has)", ", ".join(self.models), ", ".join(chosen))
+                self.models = chosen
+                self._resting_until.clear()
+        try:
+            await self.generate("Reply with {\"answered\": true, \"answer\": \"ok\"}.", _Alive, timeout=20)
+            self.checked = "ok"
+            log.info("Groq: the spare engine answered a test question")
+        except Exception as error:  # a check must never prevent the start
+            self.checked = type(error).__name__
+            log.error("Groq: the spare engine did NOT answer a test question (%s) — check GROQ_API_KEY", error)
+        return self.checked
+
+    async def hear(self, audio: bytes, filename: str = "voice.ogg", timeout: float = 30) -> str | None:
+        """What a voice note says, heard by Whisper. None when it could not listen."""
+        if not self.api_key or not audio:
+            return None
+        client = self._client or httpx.AsyncClient()
+        try:
+            response = await client.post(
+                HEAR_URL,
+                headers={"Authorization": f"Bearer {self.api_key}"},
+                files={"file": (filename, audio)},
+                data={"model": self.hear_model, "response_format": "json"},
+                timeout=timeout,
+            )
+            if response.status_code >= 400:
+                log.warning("Groq could not listen (%d)", response.status_code)
+                return None
+            self.heard += 1
+            return " ".join(str(response.json().get("text", "")).split())
+        except (httpx.HTTPError, TimeoutError, ValueError) as error:
+            log.warning("Groq could not listen (%s)", type(error).__name__)
+            return None
+        finally:
+            if self._client is None:
+                await client.aclose()
 
     def health(self) -> list[dict]:
         now = self._clock()

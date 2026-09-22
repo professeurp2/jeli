@@ -368,8 +368,12 @@ class Voice:
         try:
             heard = await self.llm.generate([part, "Transcribe this voice note."], Heard, system=LISTEN_SYSTEM, timeout=20, temperature=0, attempts=2)
         except LLMUnavailable:
-            log.warning("Could not listen to a voice note: no model available")
-            return None
+            # No Gemini model can hear it: Whisper, on the spare engine, listens instead.
+            backup = getattr(self.llm, "backup", None)
+            said = await backup.hear(audio) if backup is not None and backup.available else None
+            if said is None:
+                log.warning("Could not listen to a voice note: no model available")
+            return said
         return " ".join(heard.text.split())
 
     async def describe(self, image: bytes, mimetype: str) -> str:

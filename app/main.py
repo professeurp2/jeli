@@ -111,6 +111,8 @@ async def lifespan(app: FastAPI):
 
         if state.llm.client is not None:  # nothing to check without a Gemini key
             asyncio.create_task(check_models())
+        if backup.available:
+            asyncio.create_task(backup.check())
     state.light_llm = getattr(state, "light_llm", None) if state.llm else None
     state.understander = Understander(state.light_llm)
     if state.awareness is not None:
@@ -217,7 +219,14 @@ def _backup_health(llm) -> dict:
     backup = getattr(llm, "backup", None)
     if backup is None or not backup.available:
         return {"enabled": False}
-    return {"enabled": True, "used": backup.used, "models": backup.health()}
+    return {
+        "enabled": True,
+        # "" while the startup check runs, then "ok" or the error that stopped it.
+        "checked": backup.checked,
+        "used": backup.used,
+        "heard": backup.heard,
+        "models": backup.health(),
+    }
 
 
 @app.get("/health")

@@ -190,10 +190,16 @@ def _ai_busy(state) -> bool:
     return bool(llm) and all(resting for _, resting in llm.status())
 
 
-def _backup_rescues(state) -> int:
-    """Answers the spare engine (Groq) saved since the last start, 0 when it is off."""
+def _backup(state):
+    """The spare engine (Groq), or None when it is off."""
     backup = getattr(getattr(state, "llm", None), "backup", None)
-    return backup.used if backup is not None and backup.available else 0
+    return backup if backup is not None and backup.available else None
+
+
+def _backup_rescues(state) -> int:
+    """Answers the spare engine saved since the last start, 0 when it is off."""
+    backup = _backup(state)
+    return backup.used if backup else 0
 
 
 def _ref(key: str) -> str:
@@ -329,6 +335,13 @@ async def overview(request: Request, member: Member) -> Response:
         attention.append(ui.notice("bad" if level == "bad" else "warn", f"{esc(explanation)} <a href='/dashboard/whatsapp'>Open the WhatsApp page</a>"))
     if _ai_busy(state):
         attention.append(ui.notice("warn", "Jeli's AI is very busy right now: for a few minutes, it replies with the sources only."))
+    spare = _backup(state)
+    if spare is not None and spare.checked not in ("", "ok"):
+        attention.append(ui.notice(
+            "warn",
+            "The spare engine did not answer its test question at startup, so it cannot take over "
+            "if Google goes down. Check GROQ_API_KEY on the server."
+        ))
     rescued = _backup_rescues(state)
     if rescued:
         attention.append(ui.notice(

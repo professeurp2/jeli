@@ -503,3 +503,37 @@ def test_the_team_chooses_which_voice_speaks_and_the_backup_always_takes_over(mo
         speaker.engine, tried[:] = engine, []
         assert asyncio.run(speaker.speak("La date limite est le jeudi 24 septembre.", "fr")) == b"mp3"
         assert tried == expected, engine
+
+
+def test_a_voice_note_is_heard_by_whisper_when_no_gemini_model_can():
+    """With Gemini out, a member who speaks still gets an answer (app/answer/groq.py)."""
+    from types import SimpleNamespace
+
+    from app.answer.llm import LLMUnavailable
+    from app.answer.voice import Voice
+
+    class Backup:
+        available = True
+
+        async def hear(self, audio, filename="voice.ogg", timeout=30):
+            return "C'est quand la réunion ?"
+
+    class NoModel:
+        backup = Backup()
+
+        async def generate(self, *a, **kw):
+            raise LLMUnavailable
+
+    voice = Voice(NoModel())
+    assert asyncio.run(voice.listen(b"ogg-bytes", "audio/ogg")) == "C'est quand la réunion ?"
+    # Without a spare engine, Jeli still says honestly that it could not hear it.
+    voice = Voice(SimpleNamespace(backup=None, generate=NoModel().generate))
+    assert asyncio.run(voice.listen(b"ogg-bytes", "audio/ogg")) is None
+
+
+def test_bonsoir_is_french():
+    """Measured 22 Sep: "Bonsoir jeli" was answered in English — the word was missing."""
+    from app.answer.language import detect_language
+
+    assert detect_language("Bonsoir jeli") == "fr" and detect_language("Salut jeli") == "fr"
+    assert detect_language("hello Jeli") == "en" and detect_language("what did I miss?") == "en"

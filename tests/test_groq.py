@@ -122,3 +122,55 @@ def test_jeli_runs_on_the_spare_engine_alone_when_no_gemini_key_is_left():
     assert llm.client is None and llm.key_count == 0  # nothing to call at Google, nothing to check
     assert all(resting for _, resting in llm.status())  # the dashboard shows every model out
     assert asyncio.run(llm.answer("s", "When is the meeting?")).answer == "Friday"
+
+
+def test_the_spare_engine_proves_itself_at_startup():
+    """The team must not discover the key is wrong the day Gemini goes down."""
+    working = engine(lambda request: reply('{"answered": true, "answer": "ok"}'), models=("first",))
+    assert asyncio.run(working.check()) == "ok" and working.checked == "ok"
+    broken = engine(lambda request: httpx.Response(401), models=("first",))
+    assert asyncio.run(broken.check()) == "BackupUnavailable"  # said on /health and the dashboard
+    assert Groq("", ["first"]).checked == ""  # off: nothing claimed either way
+
+
+def test_whisper_listens_when_no_gemini_model_can():
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path.endswith("/audio/transcriptions")
+        body = request.read()
+        assert b"whisper" in body and b"voice.ogg" in body
+        return httpx.Response(200, json={"text": "  C'est quand la reunion ?  "})
+
+    made = engine(handler, models=("first",))
+    assert asyncio.run(made.hear(b"audio-bytes")) == "C'est quand la reunion ?"
+    assert made.heard == 1
+    assert asyncio.run(engine(lambda r: httpx.Response(500)).hear(b"audio")) is None
+    assert asyncio.run(Groq("", ["first"]).hear(b"audio")) is None
+
+
+def test_a_retired_model_id_is_replaced_by_what_the_key_really_has():
+    """Measured 22 Sep: Groq answered 404 on the configured name. Jeli asks rather than insists."""
+    listing = {"data": [{"id": "whisper-large-v3"}, {"id": "whisper-large-v3-turbo"},
+                        {"id": "llama-3.1-8b-instant"}, {"id": "llama-3.3-70b-versatile-0925"},
+                        {"id": "meta-llama/llama-guard-4-12b"}]}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/models"):
+            return httpx.Response(200, json=listing)
+        return reply('{"answered": true, "answer": "ok"}')
+
+    made = engine(handler, models=("gone-for-good",))
+    assert asyncio.run(made.check()) == "ok"
+    # The dated variant of the preferred model wins; the moderation model is never for answers.
+    assert made.models == ["llama-3.3-70b-versatile-0925", "llama-3.1-8b-instant"]
+    assert made.hear_model == "whisper-large-v3-turbo"
+
+
+def test_a_configured_model_the_key_has_is_kept():
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/models"):
+            return httpx.Response(200, json={"data": [{"id": "first"}, {"id": "llama-3.1-8b-instant"}]})
+        return reply('{"answered": true, "answer": "ok"}')
+
+    made = engine(handler, models=("first",))
+    asyncio.run(made.check())
+    assert made.models == ["first"]

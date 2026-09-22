@@ -8,6 +8,8 @@ FRENCH = set(
     le la les un une des du de est sont quel quelle quels quelles quand où comment pourquoi qui quoi
     que qu est-ce combien faut il elle nous vous ils elles pour avec dans sur pas mais ou et je tu
     moi mon ma mes ton ta tes notre votre leur leurs ce cette ces été sera date lieu merci bonjour aide
+    bonsoir salut coucou rebonjour oui non peux peut veux veut sais sait dis dit fais fait rien
+    demain hier aujourd hui prochaine prochain heure heures reunion réunion besoin stp
     """.split()
 )
 ENGLISH = set(
