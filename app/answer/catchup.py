@@ -34,11 +34,16 @@ was said about it). Upcoming deadlines and future events scheduled during this p
 Mix announcements (lines marked "(organiser)" first), decisions, upcoming deadlines and unanswered
 questions into ONE flat list ordered by importance — no section headers, no categories.
 
+Coming up: when a "Coming up" list is given (the dated events Jeli knows for the next days), fold
+into your items the ones a member must not miss, with their day and time — once each: never two
+items for the same thing (a submission and its "deadline" are one), and never who announced it,
+where or when (no sources, no numbers of people). Your list is all the member sees: be precise
+and short rather than complete.
+
 intro: before the list, 2 or 3 short sentences in your own warm voice, as a colleague catching a
-friend up: the gist of the period (busy or quiet, what stood out) and, when a "Coming up" list is
-given, the most pressing thing in it. Plain sentences: no bullet, no bold, no header; do not
-repeat the list word for word. Say "today", "tomorrow" or a weekday only when it is true for
-today's date, given with the messages.
+friend up: the gist of the period (busy or quiet, what stood out) and the most pressing thing
+coming. Plain sentences: no bullet, no bold, no header; do not repeat the list word for word. Say
+"today", "tomorrow" or a weekday only when it is true for today's date, given with the messages.
 
 Rules:
 - At most {MAX_ITEMS} items, most important first, each under 25 words.
@@ -146,9 +151,10 @@ class Catchup:
         sessions = [f"- «{r.title}» ({_day(r.recorded_at)})" for r in recordings]
         today = datetime.now(timezone.utc)
         prompt = (
-            f"Today is {today:%A %d %B %Y} (UTC).\n\nMessages, oldest first:\n" + "\n".join(lines)
+            # The language first as well: the light models follow the start of the request best.
+            f"Write in {LANGUAGES[language]}. Today is {today:%A %d %B %Y} (UTC).\n\nMessages, oldest first:\n" + "\n".join(lines)
             + ("\n\nCall recordings available:\n" + "\n".join(sessions) if sessions else "")
-            + (f"\n\nComing up (listed after your items, for the intro):\n{coming_up}" if coming_up else "")
+            + (f"\n\nComing up (fold what matters into your items, without the sources in brackets):\n{coming_up}" if coming_up else "")
             + f"\n\nWrite the intro and every item in {LANGUAGES[language]}."
         )
         try:
@@ -167,8 +173,8 @@ class Catchup:
                 for r in recordings
             ]
             parts.append(texts["catchup_recordings"] + "\n" + "\n".join(rec_lines))
-        if coming_up:
-            parts.append(coming_up)
+        # What is coming is in the model's own items (once, without sources), not in a second list
+        # repeating them; /deadlines gives the full list with who announced what.
         # The gist first, in Jeli's own words, as a person would tell it; then the details.
         intro = " ".join(digest.intro.split())
         lead = f"{intro}\n\n" if intro and len(intro) <= MAX_INTRO_CHARS else ""

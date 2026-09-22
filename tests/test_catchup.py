@@ -91,7 +91,7 @@ def test_digest_sections_and_recordings():
     [prompt] = llm.prompts
     assert "METI cohort · Awa Traoré: Submissions close" in prompt
     assert "I am a bot" not in prompt and "818 554 6555" not in prompt
-    assert prompt.startswith("Today is ") and prompt.endswith("Write the intro and every item in English.")
+    assert prompt.startswith("Write in English. Today is ") and prompt.endswith("Write the intro and every item in English.")
 
 
 def test_the_same_catchup_is_summarised_once():
@@ -126,9 +126,11 @@ def test_the_digest_opens_with_the_gist_in_jelis_own_words():
     digest = asyncio.run(Catchup(FakeStore(), llm, ignored_authors=["OtherBot"], deadlines=Deadlines()).summarize(MONDAY, "en"))
     intro, rest = digest.split("\n\n", 1)
     assert intro == said.intro
-    assert rest.startswith("🗓️ Catch-up since Mon 14 Sep (2 messages)") and rest.endswith(coming)
-    # The model sees what is coming up (for the intro) and today's date (for "tomorrow" to be true).
-    assert "Coming up (listed after your items, for the intro):\n" + coming in llm.prompts[0]
+    assert rest.startswith("🗓️ Catch-up since Mon 14 Sep (2 messages)")
+    # What is coming is folded into the model's own items: no second list repeating them, no sources.
+    assert "⏰ Coming up" not in digest
+    # The model sees what is coming up and today's date (for "tomorrow" to be true).
+    assert "Coming up (fold what matters into your items, without the sources in brackets):\n" + coming in llm.prompts[0]
     # An intro too long to be one: the digest as before.
     long = Digest(items=said.items, intro="blah " * 200)
     assert asyncio.run(Catchup(FakeStore(), FakeLLM(long)).summarize(MONDAY, "en")).startswith("🗓️ Catch-up since")
