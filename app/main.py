@@ -21,6 +21,7 @@ from app.answer.rag import Answerer
 from app.answer.recaps import Recaps
 from app.answer.responder import Responder
 from app.answer.understand import Understander
+from app.answer.emotion import Emotions
 from app.answer.voice import Voice
 from app.answer.citations import ignored_keys, is_ignored
 from app.config import get_settings
@@ -156,6 +157,7 @@ async def lifespan(app: FastAPI):
         state.whatsapp.in_conversation = state.responder.in_conversation
         state.whatsapp.warm = state.responder.warm
         state.whatsapp.voice = state.voice
+        state.whatsapp.emotions = Emotions(state.llm) if state.llm else None  # reactions that fit the feeling
         if state.documents:
             state.whatsapp.on_document = state.documents.add
         if store:

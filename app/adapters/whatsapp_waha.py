@@ -30,7 +30,7 @@ from app.adapters import Ingest, Respond
 from app.adapters.pacing import SendSpacer, SlidingWindowLimiter, reading_delay, typing_duration
 from app.answer.citations import is_ignored, poll_text
 from app.answer.language import TEXTS, detect_language
-from app.answer.react import emotion_emoji, is_correction
+from app.answer.react import is_correction
 from app.answer import illustrator
 from app.answer.illustrator import asks_for_image
 from app.answer.voice import MAX_SPOKEN_CHARS, audio_mimetype, audio_seconds, asks_for_voice, sources, spoken, without_voice_request
@@ -72,10 +72,15 @@ DOCUMENT_TYPES = (".pdf", ".docx", ".txt", ".md")
 MAX_DOCUMENT_BYTES = 15 * 1024 * 1024
 # Shown as "recording audio…" for as long as a person would take to record the voice note, at most.
 VOICE_RECORDING_SECONDS = 12
-# Reactions to messages not addressed to Jeli: only real emotion (sad news, a laugh, a success),
-# never a "thanks" or a "hello" (measured: reacting to every one of those in a 240-member group is
-# noise, and looks like a machine), and at most this many per group and hour.
-REACTION_WORTH = {"😢", "😄", "🎉"}
+# Reactions, chosen by the model from the message's feeling (app/answer/emotion.py). In a
+# conversation with Jeli: from a clear emotion on. On group messages not addressed to Jeli: only a
+# strong, real emotion (grief, a laugh, a success), never a "thanks" or a "hello" (measured:
+# reacting to every one of those in a 240-member group is noise, and looks like a machine), within
+# a daily budget of model calls; at most REACTIONS_PER_HOUR per chat, never in silent groups.
+CONVERSATION_REACTION_STRENGTH = 2
+GROUP_REACTION_STRENGTH = 2
+GROUP_REACTION_EMOTIONS = {"sadness", "humor", "joy", "pride"}
+GROUP_FEELINGS_PER_DAY = 300
 REACTIONS_PER_HOUR = 10
 # Images posted in a group (flyers, screenshots of a schedule) are described and remembered, so
 # that questions find them; at most this many a day, to spare the quota.
@@ -317,6 +322,8 @@ class Waha:
         self.on_vote = None
         # Listens to voice notes and speaks answers (app/answer/voice.py); None: text only.
         self.voice = None
+        # Feels the emotion of a message, emoji or sticker, for a fitting reaction (app/answer/emotion.py).
+        self.emotions = None
         # Image generation toggles (set from the dashboard via apply.py).
         self.enabled_images: bool = True          # explicit "génère une image de…" requests
         self.enabled_proactive_images: bool = True  # proactive suggestion after a rich answer
@@ -337,6 +344,7 @@ class Waha:
         # Jeli's own messages, to know which answer a reaction or a correction is about.
         self._sent: OrderedDict[str, tuple[str, str, str]] = OrderedDict()  # id → (chat, question, answer)
         self.reaction_limiter = SlidingWindowLimiter(REACTIONS_PER_HOUR, 3600)
+        self.feeling_limiter = SlidingWindowLimiter(GROUP_FEELINGS_PER_DAY, 86400)
         self.image_limiter = SlidingWindowLimiter(GROUP_IMAGES_PER_DAY, 86400)
         self._later: set[asyncio.Task] = set()
         self._admins: dict[str, tuple[float, set[str]]] = {}
@@ -650,11 +658,10 @@ class Waha:
         try:
             if self.warm is not None:
                 await self.warm(message)  # the conversation so far, after a restart
-            # Stickers: react warmly without going to the LLM, in a conversation with Jeli only.
+            # Stickers: Jeli looks at the sticker and reacts to its feeling, in a conversation with it.
             if message.is_sticker:
-                if not message.is_private and not self.paused and message.chat_id not in self.silent_groups \
-                        and self.in_conversation and self.in_conversation(message):
-                    await self.send_reaction(message.chat_id, message.message_id, random.choice(["😄", "❤️", "🙌", "😊", "🌟"]))
+                if message.is_private or message.addressed_to_bot or (self.in_conversation and self.in_conversation(message)):
+                    await self._react(message, CONVERSATION_REACTION_STRENGTH - 1, sticker=True)
                 return
             if message.voice_url:
                 message = await self._listen(message)
@@ -667,17 +674,45 @@ class Waha:
             if not message.addressed_to_bot and self.follow_up and self.follow_up(message):
                 message = dataclasses.replace(message, addressed_to_bot=True)
             if message.addressed_to_bot:
-                await self._converse(message)
+                # Feeling the message while answering it: a "merci ❤️" gets its ❤️ as the reply is typed.
+                await asyncio.gather(self._react(message, CONVERSATION_REACTION_STRENGTH), self._converse(message))
             else:
                 await self._step_in_if_needed(message)
                 # A reaction to real emotion in the group (not to every hello or thanks), dosed.
-                if (not message.is_private and not self.paused
-                        and message.chat_id not in self.silent_groups):
-                    emoji = emotion_emoji(message.text)
-                    if emoji in REACTION_WORTH and self.reaction_limiter.allow(message.chat_id):
-                        await self.send_reaction(message.chat_id, message.message_id, emoji)
+                if not message.is_private and message.text and message.chat_id not in self.silent_groups \
+                        and self.feeling_limiter.allow("groups"):
+                    await self._react(message, GROUP_REACTION_STRENGTH, emotions=GROUP_REACTION_EMOTIONS)
         except Exception:
             log.exception("Failed to handle WhatsApp message %s", message.message_id)
+
+    async def _react(self, message: IncomingMessage, min_strength: int, emotions: set[str] | None = None, sticker: bool = False) -> None:
+        """React to a message as its feeling calls for (the model reads the words, the emoji, or the
+        sticker's image); nothing for a neutral message. Never raises: a reaction is a courtesy."""
+        if self.emotions is None or self.paused or self.suspended or message.chat_id in self.silent_groups:
+            return
+        if self.guard and is_ignored(message, self.guard.blocked):
+            return  # a member the team blocked gets nothing, not even a reaction
+        try:
+            image = None
+            if sticker and message.image_url:
+                response = await self._http.get(httpx.URL(message.image_url).raw_path.decode())  # served by our WAHA
+                response.raise_for_status()
+                image = response.content
+            if not image and not message.text:
+                return
+            feeling = await self.emotions.feel(message.text, image=image, mimetype=message.image_mimetype or "image/webp")
+            if (
+                feeling is None
+                or not feeling.reaction
+                or feeling.strength < min_strength
+                or (emotions is not None and feeling.emotion not in emotions)
+                or not self.reaction_limiter.allow(message.chat_id)
+            ):
+                return
+            await self.send_reaction(message.chat_id, message.message_id, feeling.reaction)
+            log.info("Reacted %s to message %s (%s, strength %d)", feeling.reaction, message.message_id, feeling.emotion, feeling.strength)
+        except Exception:
+            log.exception("Could not react to message %s", message.message_id)
 
     def _remember_image(self, message: IncomingMessage) -> None:
         """Describe an image posted in a group and remember the description with its caption, so

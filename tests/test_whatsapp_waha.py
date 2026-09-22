@@ -11,7 +11,7 @@ from fastapi.testclient import TestClient
 from app.adapters import whatsapp_waha
 from app.adapters.whatsapp_waha import WEBHOOK_PATH, Waha, parse_message, verify_signature
 from app.answer.language import TEXTS
-from app.answer.react import emotion_emoji, is_correction
+from app.answer.react import is_correction
 from app.config import Settings, get_settings
 from app.main import app
 
@@ -347,29 +347,7 @@ def test_private_messages_go_only_to_numbers_on_whatsapp(monkeypatch):
     assert [(m["chatId"], m["text"]) for m in sent] == [("2347069310683@c.us", "Weekly report")]
 
 
-# --- Emoji reaction tests ---
-
-def test_emotion_emoji_detects_funny_messages():
-    assert emotion_emoji("hahaha c'est trop drôle 😂") == "😄"
-    assert emotion_emoji("MDR j'y crois pas") == "😄"
-    assert emotion_emoji("lol that was unexpected 🤣") == "😄"
-
-
-def test_emotion_emoji_detects_sad_messages():
-    assert emotion_emoji("Notre collègue est décédé hier soir 😢") == "😢"
-    assert emotion_emoji("He passed away this morning. RIP") == "😢"
-    assert emotion_emoji("Condoléances à sa famille") == "😢"
-
-
-def test_emotion_emoji_returns_none_for_neutral_messages():
-    assert emotion_emoji("The deadline is on Friday.") is None
-    assert emotion_emoji("When does registration close?") is None
-
-
-def test_sad_takes_priority_over_funny():
-    # A sad message that also contains 😂 is still treated as sad.
-    assert emotion_emoji("He passed away 😂") == "😢"
-
+# --- Reactions (the emotion itself is felt by a model: see tests/test_emotion.py) ---
 
 def test_is_correction_detects_corrections_in_french():
     assert is_correction("Jeli tu t'es trompé, c'est pas ça")
@@ -388,32 +366,39 @@ def test_is_correction_ignores_neutral_messages():
     assert not is_correction("Thank you Jeli!")
 
 
-def test_jeli_reacts_to_funny_group_messages(waha_env, calls):
-    """A funny message in the group gets a 😄 reaction from Jeli."""
-    event = message_event("haha trop drôle 😂")
+class FakeEmotions:
+    """Feels as the model would, from a table: text → (emotion, strength, reaction)."""
+
+    def __init__(self, table):
+        self.table, self.felt = table, []
+
+    async def feel(self, text="", image=None, mimetype=""):
+        from app.answer.emotion import Feeling
+
+        self.felt.append(text)
+        emotion, strength, reaction = self.table.get(text, ("neutral", 0, ""))
+        return Feeling(emotion=emotion, strength=strength, reaction=reaction)
+
+
+def test_jeli_reacts_to_strong_emotion_in_the_group(waha_env, calls):
+    """Sad news or a loud laugh in the group gets the reaction the model chose."""
+    emotions = FakeEmotions({"haha trop drôle 😂": ("humor", 3, "😂"), "Notre ami est décédé hier.": ("sadness", 3, "😢")})
     with TestClient(app) as client:
-        post_event(client, event)
-    reactions = [(path, payload) for path, payload in calls if path == "/api/sendReaction"]
-    assert len(reactions) == 1
-    _, react_payload = reactions[0]
-    assert react_payload["reaction"] == "😄"
-    assert react_payload["messageId"] == event["payload"]["id"]
+        app.state.whatsapp.emotions = emotions
+        post_event(client, message_event("haha trop drôle 😂", message_id="m1"))
+        post_event(client, message_event("Notre ami est décédé hier.", message_id="m2"))
+    reactions = [(p["messageId"], p["reaction"]) for path, p in calls if path == "/api/sendReaction"]
+    assert reactions == [("m1", "😂"), ("m2", "😢")]
 
 
-def test_jeli_reacts_to_sad_group_messages(waha_env, calls):
-    """A sad message (condolences/death) gets a 😢 reaction."""
-    event = message_event("Notre ami est décédé hier. Condoléances à sa famille.")
+def test_jeli_does_not_react_to_ordinary_chatter_or_thanks_in_the_group(waha_env, calls):
+    """No reaction to a neutral message, nor to a "thanks" or a "hello" between members."""
+    emotions = FakeEmotions({"Merci à tous !": ("gratitude", 2, "🙏")})
     with TestClient(app) as client:
-        post_event(client, event)
-    reactions = [p for path, p in calls if path == "/api/sendReaction"]
-    assert len(reactions) == 1
-    assert reactions[0]["reaction"] == "😢"
-
-
-def test_jeli_does_not_react_to_ordinary_chatter(waha_env, calls):
-    """No reaction to a neutral message."""
-    with TestClient(app) as client:
-        post_event(client, message_event("The pitch deck is due Friday."))
+        app.state.whatsapp.emotions = emotions
+        post_event(client, message_event("The pitch deck is due Friday.", message_id="m1"))
+        post_event(client, message_event("Merci à tous !", message_id="m2"))
+    assert emotions.felt == ["The pitch deck is due Friday.", "Merci à tous !"]
     assert not any(path == "/api/sendReaction" for path, _ in calls)
 
 
