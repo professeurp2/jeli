@@ -602,12 +602,19 @@ class Waha:
             log.info("Shared document %s not kept: %s", shared["filename"], error)
 
     async def send_reaction(self, chat_id: str, message_id: str, emoji: str) -> None:
-        """React to a message with an emoji. Non-critical: never raises."""
-        await self._post_quietly("/api/sendReaction", {
-            "chatId": chat_id,
-            "messageId": message_id,
-            "reaction": emoji,
-        })
+        """React to a message with an emoji. Non-critical: never raises.
+        WAHA's endpoint is PUT /api/reaction (read from its API specification, 22 Sep): the former
+        POST /api/sendReaction answered 404, so no reaction had ever been shown."""
+        try:
+            await self._put("/api/reaction", {"messageId": message_id, "reaction": emoji})
+        except httpx.HTTPError:
+            log.warning("WAHA /api/reaction failed, continuing")
+
+    async def _put(self, path: str, payload: dict) -> None:
+        response = await self._http.put(path, json={"session": self.session, **payload})
+        if response.is_error:
+            log.error("WAHA %s failed with %s: %s", path, response.status_code, response.text[:300])
+        response.raise_for_status()
 
     async def delete_message(self, chat_id: str, message_id: str) -> None:
         """Delete one of Jeli's own messages (e.g. a wrong answer). Non-critical: never raises."""

@@ -189,6 +189,7 @@ def calls(monkeypatch):
         captured.append((path, payload))
 
     monkeypatch.setattr(Waha, "_post", fake_post)
+    monkeypatch.setattr(Waha, "_put", fake_post)  # reactions: PUT /api/reaction
     return captured
 
 
@@ -387,7 +388,7 @@ def test_jeli_reacts_to_strong_emotion_in_the_group(waha_env, calls):
         app.state.whatsapp.emotions = emotions
         post_event(client, message_event("haha trop drôle 😂", message_id="m1"))
         post_event(client, message_event("Notre ami est décédé hier.", message_id="m2"))
-    reactions = [(p["messageId"], p["reaction"]) for path, p in calls if path == "/api/sendReaction"]
+    reactions = [(p["messageId"], p["reaction"]) for path, p in calls if path == "/api/reaction"]
     assert reactions == [("m1", "😂"), ("m2", "😢")]
 
 
@@ -399,7 +400,7 @@ def test_jeli_does_not_react_to_ordinary_chatter_or_thanks_in_the_group(waha_env
         post_event(client, message_event("The pitch deck is due Friday.", message_id="m1"))
         post_event(client, message_event("Merci à tous !", message_id="m2"))
     assert emotions.felt == ["The pitch deck is due Friday.", "Merci à tous !"]
-    assert not any(path == "/api/sendReaction" for path, _ in calls)
+    assert not any(path == "/api/reaction" for path, _ in calls)
 
 
 def test_correction_triggers_reaction_and_deletes_wrong_message(waha_env, calls):
@@ -419,10 +420,10 @@ def test_correction_triggers_reaction_and_deletes_wrong_message(waha_env, calls)
         post_event(client, message_event(f"@{BOT_PHONE} c'est faux, c'est mardi", message_id="correction-1"))
 
     paths = [path for path, _ in calls]
-    assert "/api/sendReaction" in paths
+    assert "/api/reaction" in paths
     assert "/api/deleteMessage" in paths
 
-    react = next((p for path, p in calls if path == "/api/sendReaction"), None)
+    react = next((p for path, p in calls if path == "/api/reaction"), None)
     assert react["reaction"] == "🙏"
     assert react["messageId"] == "correction-1"
 

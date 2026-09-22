@@ -74,6 +74,8 @@ def waha(monkeypatch):
             assert request.url.path == "/api/files/default/sticker.webp"
             return httpx.Response(200, content=b"RIFF-webp")
         sent.append((request.url.path, json.loads(request.content)))
+        if request.url.path == "/api/reaction":
+            assert request.method == "PUT"  # WAHA's endpoint (POST /api/sendReaction answered 404)
         return httpx.Response(201, json={"id": "jeli-1"})
 
     settings = Settings(_env_file=None, waha_url="http://waha.test:3000", waha_api_key="key", waha_webhook_hmac_key="h",
@@ -89,7 +91,7 @@ def waha(monkeypatch):
 
 
 def reactions(waha):
-    return [(body["messageId"], body["reaction"]) for path, body in waha.sent if path == "/api/sendReaction"]
+    return [(body["messageId"], body["reaction"]) for path, body in waha.sent if path == "/api/reaction"]
 
 
 STICKER = {"url": "http://localhost:3000/api/files/default/sticker.webp", "mimetype": "image/webp"}
