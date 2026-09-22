@@ -235,6 +235,23 @@ def test_try_jeli_answers_as_on_whatsapp_and_keeps_each_members_conversation(cli
     assert client.fake_store.tries_rows == []
 
 
+def test_the_overview_shows_the_natural_voice_notes_left_today(client):
+    class Voice:
+        async def quota(self):
+            return {"total": 280, "remaining": 143, "used": 137, "keys": 14, "per_key": 20,
+                    "renews_at": datetime(2026, 9, 23, 7, 0, tzinfo=timezone.utc)}
+
+        def quota_marker(self):
+            return "137"
+
+    app.state.voice = Voice()
+    sign_in(client)
+    page = client.get("/dashboard").text
+    assert "Natural voice notes left today" in page and "143 / 280" in page
+    assert "14 access keys × 20 a day · renews at 07:00 GMT" in page
+    app.state.voice = None
+
+
 def test_try_jeli_plays_the_voice_note_jeli_would_send(client):
     class Voice:
         async def speak(self, text, language=""):

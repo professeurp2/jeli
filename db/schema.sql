@@ -245,6 +245,17 @@ create table if not exists jeli.feedback (
 );
 create index if not exists feedback_at on jeli.feedback (at desc);
 
+-- Natural voice notes made today, per key (its fingerprint, never the key) and speech model: the
+-- free tier allows 10 a day each, renewed at midnight Pacific time (the dashboard shows what is left).
+create table if not exists jeli.voice_quota (
+    day        date not null,           -- in Pacific time, as Google counts
+    key_id     text not null,
+    model      text not null,
+    used       integer not null default 0,
+    exhausted  boolean not null default false,
+    primary key (day, key_id, model)
+);
+
 -- Least-privilege application role: data access to the jeli schema only.
 do $$
 begin

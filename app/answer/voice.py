@@ -12,11 +12,13 @@ When any step fails, the member gets the written answer instead: a voice reply i
 """
 
 import asyncio
+import hashlib
 import io
 import logging
 import re
 import time
 import wave
+from datetime import date, datetime, timedelta, timezone
 
 import edge_tts
 from google.genai import errors, types
@@ -69,6 +71,9 @@ GEMINI_TTS_TOTAL_SECONDS = 30.0
 GEMINI_TTS_SLOW_FAILURES = 2
 GEMINI_TTS_REST_SECONDS = 300
 GEMINI_TTS_KEY_REST_SECONDS = 3600
+# The free tier's daily quota, per project (key) and speech model (Google's 429 says "limit: 10"),
+# renewed at midnight Pacific time. Jeli counts what it used, so the team sees what is left.
+TTS_REQUESTS_PER_DAY = 10
 
 # edge-tts — fallback when Gemini TTS quota is exhausted or unavailable.
 # edge-tts (7.x) escapes what it is given and builds its own SSML: it must receive plain text,
@@ -244,6 +249,29 @@ def _over_quota(error: Exception) -> bool:
     return "RESOURCE_EXHAUSTED" in text or "quota" in text.lower()
 
 
+def _pacific_offset(moment: datetime) -> timedelta:
+    """Pacific time's offset from UTC at `moment`: -7 h from the second Sunday of March to the first
+    Sunday of November (2 a.m. local), -8 h otherwise."""
+    year = moment.year
+    march = datetime(year, 3, 8, 10, tzinfo=timezone.utc)  # 2 a.m. PST
+    start = march + timedelta(days=(6 - march.weekday()) % 7)
+    november = datetime(year, 11, 1, 9, tzinfo=timezone.utc)  # 2 a.m. PDT
+    end = november + timedelta(days=(6 - november.weekday()) % 7)
+    return timedelta(hours=-7) if start <= moment < end else timedelta(hours=-8)
+
+
+def quota_day(now: datetime | None = None) -> date:
+    """The day Google's daily quotas count: the date in Pacific time."""
+    now = now or datetime.now(timezone.utc)
+    return (now + _pacific_offset(now)).date()
+
+
+def quota_renewal(now: datetime | None = None) -> datetime:
+    """When the daily quotas renew next (midnight Pacific time), in UTC."""
+    now = now or datetime.now(timezone.utc)
+    return datetime.combine(quota_day(now) + timedelta(days=1), datetime.min.time(), timezone.utc) - _pacific_offset(now)
+
+
 def audio_mimetype(audio: bytes) -> str:
     """Detect the MIME type from the audio's magic bytes (no dependency on TTS engine used)."""
     return "audio/wav" if audio[:4] == b"RIFF" else AUDIO_MIMETYPE
@@ -264,6 +292,71 @@ class Voice:
         self._tts_key_resting: dict[tuple[int, str], float] = {}  # (key, model) over quota
         self._tts_cursor = 0  # next key to try, so the free quota is spread over the keys
         self._live_cursor = 0
+        # Today's use of the speech models' quota, per (key, model): kept in the database (store,
+        # set at startup) so that a restart does not forget it.
+        self.store = None
+        self._quota_day: date | None = None
+        self._used: dict[tuple[str, str], int] = {}
+        self._exhausted: set[tuple[str, str]] = set()
+
+    def _key_id(self, idx: int) -> str:
+        """A key's fingerprint, never the key itself."""
+        keys = getattr(self.llm, "_api_keys", None) or []
+        return hashlib.sha256(keys[idx].encode()).hexdigest()[:12] if idx < len(keys) else f"key{idx}"
+
+    async def _today(self) -> None:
+        """Start the day's count (Google renews the quota at midnight Pacific time), from what the
+        database kept of it."""
+        day = quota_day()
+        if day == self._quota_day:
+            return
+        self._quota_day, self._used, self._exhausted = day, {}, set()
+        if self.store is not None and hasattr(self.store, "voice_quota"):
+            try:
+                for row in await self.store.voice_quota(day):
+                    self._used[(row["key_id"], row["model"])] = row["used"]
+                    if row["exhausted"]:
+                        self._exhausted.add((row["key_id"], row["model"]))
+            except Exception:
+                log.exception("Could not read today's voice quota")
+
+    async def _count(self, idx: int, model: str, exhausted: bool = False) -> None:
+        """One voice note made on this key and model, or the key's quota found spent."""
+        await self._today()
+        pair = (self._key_id(idx), model)
+        if exhausted:
+            self._exhausted.add(pair)
+        else:
+            self._used[pair] = self._used.get(pair, 0) + 1
+        if self.store is not None and hasattr(self.store, "count_voice"):
+            try:
+                await self.store.count_voice(self._quota_day, pair[0], model, exhausted=exhausted)
+            except Exception:
+                log.exception("Could not save the voice quota")
+
+    async def quota(self) -> dict:
+        """The natural voice notes left today, out of the day's total: every valid key gives
+        TTS_REQUESTS_PER_DAY per speech model, so a key added (or refused) changes the total."""
+        await self._today()
+        clients = getattr(self.llm, "_clients", None) or []
+        valid = self.llm.valid_keys() if hasattr(self.llm, "valid_keys") else range(len(clients))
+        keys = [self._key_id(i) for i in valid]
+        per_key = len(GEMINI_TTS_MODELS) * TTS_REQUESTS_PER_DAY
+        used = sum(
+            TTS_REQUESTS_PER_DAY if (key, model) in self._exhausted else min(self._used.get((key, model), 0), TTS_REQUESTS_PER_DAY)
+            for key in keys
+            for model in GEMINI_TTS_MODELS
+        )
+        total = len(keys) * per_key
+        return {
+            "total": total, "remaining": max(0, total - used), "used": used, "keys": len(keys), "per_key": per_key,
+            "renews_at": quota_renewal(),
+        }
+
+    def quota_marker(self) -> str:
+        """Changes when the count does: the dashboard refreshes then."""
+        clients = getattr(self.llm, "_clients", None) or []
+        return f"{self._quota_day}:{sum(self._used.values())}:{len(self._exhausted)}:{len(clients)}"
 
     async def listen(self, audio: bytes, mimetype: str) -> str | None:
         """What the member said. Returns "" when nothing was heard (silence/noise/oversized audio),
@@ -397,6 +490,8 @@ class Voice:
                 idx = (self._tts_cursor + step) % len(clients)
                 if self._tts_key_resting.get((idx, model), 0.0) > time.monotonic():
                     continue
+                if self._quota_day == quota_day() and (self._key_id(idx), model) in self._exhausted:
+                    continue  # its quota for today is spent: not asked again until it renews
                 try:
                     response = await asyncio.wait_for(
                         clients[idx].aio.models.generate_content(model=model, contents=prompt, config=config),
@@ -406,12 +501,17 @@ class Voice:
                         pcm = response.candidates[0].content.parts[0].inline_data.data
                         if pcm:
                             self._tts_cursor = (idx + 1) % len(clients)
+                            await self._count(idx, model)
                             return wav(pcm)
                 except Exception as error:
                     if _over_quota(error):
                         log.info("Gemini TTS %s key %d over quota: next key", model, idx)
                         self._tts_key_resting[(idx, model)] = time.monotonic() + GEMINI_TTS_KEY_REST_SECONDS
+                        await self._count(idx, model, exhausted=True)
                         continue  # this key's daily quota is spent: the next key may have some left
+                    if isinstance(error, errors.APIError) and error.code in (401, 403) and hasattr(self.llm, "_disable_key"):
+                        self.llm._disable_key(idx)  # a key Google refuses: out of the count and the rotation
+                        continue
                     log.warning("Gemini TTS %s key %d failed: %s: %s", model, idx, type(error).__name__, error)
                     slow += 1
                     if slow >= GEMINI_TTS_SLOW_FAILURES:

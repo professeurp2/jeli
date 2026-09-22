@@ -111,6 +111,8 @@ async def lifespan(app: FastAPI):
     )
     state.guard = Guard(record=store.record_incident if store else None)
     state.voice = Voice(state.llm) if state.llm else None  # voice notes, heard and spoken
+    if state.voice is not None:
+        state.voice.store = store  # today's count of natural voice notes survives a restart
 
     async def respond(message: IncomingMessage) -> str | None:
         """What the channels call: nothing at all while the team has paused Jeli. A group message

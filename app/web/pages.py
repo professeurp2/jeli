@@ -116,6 +116,9 @@ async def _marker(request: Request) -> str:
     store = getattr(state, "store", None)
     whatsapp = getattr(state, "whatsapp", None)
     parts = [await store.change_marker() if store else "", str(state.runtime.paused), str(getattr(whatsapp, "status", ""))]
+    voice = getattr(state, "voice", None)
+    if voice is not None and hasattr(voice, "quota_marker"):
+        parts.append(voice.quota_marker())  # the voice notes left: the Overview follows each one
     parts += [f"{a.key}:{a.enabled}:{a.running}:{a.last_finished}:{a.last_ok}" for a in getattr(state, "activities", {}).values()]
     return hashlib.sha256("|".join(parts).encode()).hexdigest()[:20]
 
@@ -391,7 +394,7 @@ async def overview(request: Request, member: Member) -> Response:
         icon_name="chat",
         description="The latest exchanges with Jeli, as they happen — in the groups, in private, and your tries.",
     )
-    side = ui.card("Coming up", f'<div class="rows">{coming}</div>', icon_name="calendar", actions="<a class='btn small' href='/dashboard/deadlines'>All deadlines</a>") + ui.card(
+    side = await _voice_card(state) + ui.card("Coming up", f'<div class="rows">{coming}</div>', icon_name="calendar", actions="<a class='btn small' href='/dashboard/deadlines'>All deadlines</a>") + ui.card(
         "Activities", f'<div class="rows">{activities}</div>', icon_name="activity", actions="<a class='btn small' href='/dashboard/activities'>Manage</a>"
     )
     body = (
@@ -400,6 +403,30 @@ async def overview(request: Request, member: Member) -> Response:
         + f'<div class="grid side"><div class="grid">{feed}{usage_html}</div><div class="grid">{side}</div></div>'
     )
     return _page(request, member, title="Overview", subtitle="How Jeli is doing, at a glance", active="home", body=body, live=True)
+
+
+async def _voice_card(state) -> str:
+    """The natural voice notes left today, out of the day's total. The total follows the access keys
+    Jeli has: one added on the server (or refused by Google) changes it at the next start."""
+    voice = getattr(state, "voice", None)
+    if voice is None or not hasattr(voice, "quota"):
+        return ""
+    quota = await voice.quota()
+    total, left = quota["total"], quota["remaining"]
+    tone = "bad" if total and not left else "warn" if total and left < total * 0.2 else ""
+    renews = f"{quota['renews_at']:%H:%M} GMT"
+    stat = ui.stat(
+        "Natural voice notes left today",
+        f"{left:,} / {total:,}",
+        f"{quota['keys']} access keys × {quota['per_key']} a day · renews at {renews}",
+        tone,
+    )
+    hint = (
+        "When none are left, Jeli still answers by voice with its other voices until they renew. "
+        "Each access key added on the server adds "
+        f"{quota['per_key']} a day: this count follows on its own."
+    )
+    return ui.card("Voice notes", f'<div class="stats">{stat}</div><p class="hint">{esc(hint)}</p>', icon_name="mic")
 
 
 FEED_KINDS = {

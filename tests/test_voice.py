@@ -418,3 +418,62 @@ def test_the_responder_gives_its_reply_the_language_it_understood():
     message = IncomingMessage("whatsapp", "g@g.us", "1", "Awa", "Bonjour Jeli, can you help me?", datetime(2026, 9, 22, tzinfo=timezone.utc), True, True)
     reply = asyncio.run(Responder(None, understander=Understands()).respond(message))
     assert reply == "Hello! How can I help?" and reply.language == "en"
+
+
+class QuotaStore:
+    def __init__(self):
+        self.rows = {}
+
+    async def voice_quota(self, day):
+        return [{"key_id": k, "model": m, "used": used, "exhausted": ex} for (d, k, m), (used, ex) in self.rows.items() if d == day]
+
+    async def count_voice(self, day, key_id, model, exhausted=False):
+        used, ex = self.rows.get((day, key_id, model), (0, False))
+        self.rows[(day, key_id, model)] = (used + (0 if exhausted else 1), ex or exhausted)
+
+
+def test_the_voice_notes_left_today_follow_the_keys_and_survive_a_restart():
+    from types import SimpleNamespace
+
+    from google.genai import errors
+
+    from app.answer.llm import LLM
+    from app.answer.voice import GEMINI_TTS_MODELS, Voice
+
+    calls = []
+
+    def client(behaviour):
+        async def generate_content(model, contents, config):
+            calls.append(model)
+            return await behaviour()
+
+        return SimpleNamespace(aio=SimpleNamespace(models=SimpleNamespace(generate_content=generate_content)))
+
+    async def speaks():
+        pcm = SimpleNamespace(inline_data=SimpleNamespace(data=b"\x00\x00" * 100))
+        return SimpleNamespace(candidates=[SimpleNamespace(content=SimpleNamespace(parts=[pcm]))])
+
+    async def over_quota():
+        raise errors.ClientError(429, {"error": {"code": 429, "message": "quota", "status": "RESOURCE_EXHAUSTED"}})
+
+    llm = LLM(["key-a", "key-b", "key-c"], ["m"])
+    llm._clients = [client(over_quota), client(speaks), client(speaks)]
+    store = QuotaStore()
+    voice = Voice(llm)
+    voice.store = store
+    quota = asyncio.run(voice.quota())
+    assert (quota["total"], quota["remaining"], quota["keys"], quota["per_key"]) == (60, 60, 3, 20)  # 3 keys × 2 models × 10
+    assert asyncio.run(voice._speak_gemini("Bonjour", "fr"))[:4] == b"RIFF"  # key a over quota, key b speaks
+    assert asyncio.run(voice.quota())["remaining"] == 60 - 10 - 1  # a's quota on that model spent, one note on b
+    calls.clear()
+    voice._tts_key_resting.clear()  # even once the short rest is over, a spent key is not asked again today
+    voice._tts_cursor = 0
+    asyncio.run(voice._speak_gemini("Bonjour", "fr"))
+    assert calls == [GEMINI_TTS_MODELS[0]]  # straight to key b
+    # A restart: the count comes back from the database.
+    again = Voice(llm)
+    again.store = store
+    assert asyncio.run(again.quota())["remaining"] == 60 - 10 - 2
+    # A key Google refuses leaves the total.
+    llm._disable_key(2)
+    assert asyncio.run(again.quota())["total"] == 40

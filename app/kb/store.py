@@ -508,6 +508,23 @@ class Store:
             "group_questions": [(row["at"], row["outcome"], row["question"]) for row in questions],
         }
 
+    async def voice_quota(self, day: date) -> list[dict]:
+        """Today's natural voice notes, per key fingerprint and speech model."""
+        async with self._pool.connection() as conn:
+            return await (
+                await conn.execute("select key_id, model, used, exhausted from jeli.voice_quota where day = %s", (day,))
+            ).fetchall()
+
+    async def count_voice(self, day: date, key_id: str, model: str, exhausted: bool = False) -> None:
+        """One voice note made with this key and model, or its quota found spent for the day."""
+        async with self._pool.connection() as conn:
+            await conn.execute(
+                "insert into jeli.voice_quota (day, key_id, model, used, exhausted) values (%s, %s, %s, %s, %s) "
+                "on conflict (day, key_id, model) do update set used = jeli.voice_quota.used + excluded.used, "
+                "exhausted = jeli.voice_quota.exhausted or excluded.exhausted",
+                (day, key_id, model, 0 if exhausted else 1, exhausted),
+            )
+
     async def follows_groups_live(self, within: timedelta = LIVE_WINDOW) -> bool:
         """Whether Jeli is in the groups: it received group messages live lately. A quiet night or
         weekend is not a disconnection."""

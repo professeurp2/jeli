@@ -68,6 +68,8 @@ class LLM:
         self._clock = clock
         # Cooldown per (key_index, model_name) pair.
         self._resting_until: dict[tuple[int, str], float] = {}
+        # Keys Google refused (401): left out of every count until the 24 h are over.
+        self._invalid_until: dict[int, float] = {}
 
     @property
     def client(self) -> genai.Client:
@@ -82,7 +84,13 @@ class LLM:
         until = self._clock() + COOLDOWN_SECONDS["invalid"]
         for m in self.models:
             self._resting_until[(key, m)] = until
+        self._invalid_until[key] = until
         log.error("Key %d disabled for 24 h — verify it is valid and Gemini API is enabled on its project", key)
+
+    def valid_keys(self) -> list[int]:
+        """The keys Google accepts: all of them but those refused in the last 24 h."""
+        now = self._clock()
+        return [i for i in range(len(self._clients)) if self._invalid_until.get(i, 0) <= now]
 
     def status(self) -> list[tuple[str, int]]:
         """Each model and minimum seconds it still rests across all keys (0: at least one key ready)."""
