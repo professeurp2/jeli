@@ -212,3 +212,68 @@ def test_pairs_in_cooldown_are_skipped_while_others_are_fresh():
     asyncio.run(llm.answer("s", "p"))  # best: quota → rests; next answers
     asyncio.run(llm.answer("s", "p"))  # straight to next: the resting pair is not tried
     assert models.calls == ["best", "next", "next"]
+
+
+def test_a_model_out_of_its_daily_quota_everywhere_does_not_stop_the_next_model():
+    good = GeneratedAnswer(answered=True, answer="ok", sources=["1"])
+    daily = errors.ClientError(429, {"error": {"code": 429, "message": "quota", "status": "RESOURCE_EXHAUSTED",
+                                               "details": [{"quotaId": "GenerateRequestsPerDayPerProjectPerModel-FreeTier"}]}})
+
+    class ByModel:
+        calls = []
+
+        async def generate_content(self, model, contents, config):
+            self.calls.append(model)
+            if model == "best":
+                raise daily  # spent for the day, on every key
+            return SimpleNamespace(parsed=good, text=good.model_dump_json())
+
+    models = ByModel()
+    clients = [SimpleNamespace(aio=SimpleNamespace(models=models)) for _ in range(4)]
+    clock = SimpleNamespace(now=0.0)
+    llm = LLM("unused", ["best", "lite"], client=clients[0], clock=lambda: clock.now)
+    llm._clients = clients
+    # Only two attempts, as the optional steps ask: the refusals cost none of them.
+    assert asyncio.run(llm.generate("p", GeneratedAnswer, attempts=2)) == good
+    assert models.calls == ["best", "best", "best", "best", "lite"]  # every key of the best model, then the next one
+    clock.now += 3600  # an hour later: the day's quota is still spent on those keys
+    for _ in range(3):
+        asyncio.run(llm.generate("p", GeneratedAnswer, attempts=2))
+    assert models.calls.count("best") <= 4  # each key refused once a day at most, then left alone
+
+
+def test_the_daily_quota_renews_at_midnight_pacific_time():
+    from datetime import datetime, timezone
+
+    from app.answer.llm import quota_day, quota_renewal, seconds_until_quota_renewal
+
+    summer = datetime(2026, 9, 22, 12, 0, tzinfo=timezone.utc)
+    assert quota_day(summer).isoformat() == "2026-09-22" and quota_renewal(summer) == datetime(2026, 9, 23, 7, 0, tzinfo=timezone.utc)
+    assert seconds_until_quota_renewal(summer) == 19 * 3600
+    winter = datetime(2026, 12, 1, 7, 30, tzinfo=timezone.utc)
+    assert quota_day(winter).isoformat() == "2026-11-30" and quota_renewal(winter) == datetime(2026, 12, 1, 8, 0, tzinfo=timezone.utc)
+
+
+def test_a_key_out_of_quota_hands_over_to_the_same_model_on_the_next_key():
+    good = GeneratedAnswer(answered=True, answer="ok", sources=["1"])
+    daily = errors.ClientError(429, {"error": {"code": 429, "message": "PerDay quota", "status": "RESOURCE_EXHAUSTED"}})
+    overloaded = errors.ServerError(503, {"error": {"code": 503, "message": "high demand"}})
+
+    class Keys:
+        def __init__(self, behaviour):
+            self.behaviour, self.calls = behaviour, calls
+
+        async def generate_content(self, model, contents, config):
+            self.calls.append((self.behaviour, model))
+            if model != "best":
+                raise overloaded  # the lite models are overloaded
+            if self.behaviour == "spent":
+                raise daily
+            return SimpleNamespace(parsed=good, text=good.model_dump_json())
+
+    calls = []
+    clients = [SimpleNamespace(aio=SimpleNamespace(models=Keys(b))) for b in ("spent", "spent", "spent", "fresh")]
+    llm = LLM("unused", ["best", "lite"], client=clients[0])
+    llm._clients = clients
+    assert asyncio.run(llm.generate("p", GeneratedAnswer, attempts=2)) == good
+    assert calls == [("spent", "best"), ("spent", "best"), ("spent", "best"), ("fresh", "best")]  # never the overloaded lite

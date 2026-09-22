@@ -18,14 +18,14 @@ import logging
 import re
 import time
 import wave
-from datetime import date, datetime, timedelta, timezone
+from datetime import date
 
 import edge_tts
 from google.genai import errors, types
 from pydantic import BaseModel
 
 from app.answer.language import detect_language
-from app.answer.llm import LLM, LLMUnavailable
+from app.answer.llm import LLM, LLMUnavailable, quota_day, quota_renewal
 
 log = logging.getLogger(__name__)
 
@@ -250,29 +250,6 @@ def _over_quota(error: Exception) -> bool:
         return True
     text = str(error)
     return "RESOURCE_EXHAUSTED" in text or "quota" in text.lower()
-
-
-def _pacific_offset(moment: datetime) -> timedelta:
-    """Pacific time's offset from UTC at `moment`: -7 h from the second Sunday of March to the first
-    Sunday of November (2 a.m. local), -8 h otherwise."""
-    year = moment.year
-    march = datetime(year, 3, 8, 10, tzinfo=timezone.utc)  # 2 a.m. PST
-    start = march + timedelta(days=(6 - march.weekday()) % 7)
-    november = datetime(year, 11, 1, 9, tzinfo=timezone.utc)  # 2 a.m. PDT
-    end = november + timedelta(days=(6 - november.weekday()) % 7)
-    return timedelta(hours=-7) if start <= moment < end else timedelta(hours=-8)
-
-
-def quota_day(now: datetime | None = None) -> date:
-    """The day Google's daily quotas count: the date in Pacific time."""
-    now = now or datetime.now(timezone.utc)
-    return (now + _pacific_offset(now)).date()
-
-
-def quota_renewal(now: datetime | None = None) -> datetime:
-    """When the daily quotas renew next (midnight Pacific time), in UTC."""
-    now = now or datetime.now(timezone.utc)
-    return datetime.combine(quota_day(now) + timedelta(days=1), datetime.min.time(), timezone.utc) - _pacific_offset(now)
 
 
 def audio_mimetype(audio: bytes) -> str:

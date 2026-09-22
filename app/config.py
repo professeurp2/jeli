@@ -35,8 +35,10 @@ class Settings(BaseSettings):
     # Extra Gemini keys (comma-separated) for quota rotation: when one key is exhausted the next
     # takes over. Create additional projects on aistudio.google.com to multiply the free quota.
     gemini_api_keys: str = ""
-    # Answer models, tried in order: the next one takes over on quota, overload or timeout.
-    gemini_models: str = "gemini-3.6-flash,gemini-3.5-flash-lite,gemini-flash-lite-latest"
+    # Answer models, tried in order: the next one takes over on quota, overload or timeout. Each has
+    # its own free daily quota per key: gemini-3.1-flash-lite (checked 22 Sep, slower) adds a reserve
+    # when the others are spent or overloaded, without another project.
+    gemini_models: str ="gemini-3.6-flash,gemini-3.5-flash-lite,gemini-flash-lite-latest,gemini-3.1-flash-lite"
     # Transcription models, tried in order (they listen to the recording, window by window).
     transcription_models: str = "gemini-3.6-flash,gemini-3.5-flash-lite"
     # Below this similarity between the question and the best excerpt, Jeli says it doesn't know

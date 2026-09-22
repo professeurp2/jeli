@@ -6,6 +6,7 @@ Used for answers (fast, a few seconds) and for transcription (long, one call per
 import asyncio
 import logging
 import time
+from datetime import date, datetime, timedelta, timezone
 from collections.abc import Callable
 from typing import Any, TypeVar
 
@@ -42,6 +43,34 @@ class GeneratedAnswer(BaseModel):
     from_background: bool = False
 
 
+def _pacific_offset(moment: datetime) -> timedelta:
+    """Pacific time's offset from UTC at `moment`: -7 h from the second Sunday of March to the first
+    Sunday of November (2 a.m. local), -8 h otherwise."""
+    year = moment.year
+    march = datetime(year, 3, 8, 10, tzinfo=timezone.utc)  # 2 a.m. PST
+    start = march + timedelta(days=(6 - march.weekday()) % 7)
+    november = datetime(year, 11, 1, 9, tzinfo=timezone.utc)  # 2 a.m. PDT
+    end = november + timedelta(days=(6 - november.weekday()) % 7)
+    return timedelta(hours=-7) if start <= moment < end else timedelta(hours=-8)
+
+
+def quota_day(now: datetime | None = None) -> date:
+    """The day Google's daily quotas count: the date in Pacific time."""
+    now = now or datetime.now(timezone.utc)
+    return (now + _pacific_offset(now)).date()
+
+
+def quota_renewal(now: datetime | None = None) -> datetime:
+    """When the daily quotas renew next (midnight Pacific time), in UTC."""
+    now = now or datetime.now(timezone.utc)
+    return datetime.combine(quota_day(now) + timedelta(days=1), datetime.min.time(), timezone.utc) - _pacific_offset(now)
+
+
+def seconds_until_quota_renewal(now: datetime | None = None) -> float:
+    now = now or datetime.now(timezone.utc)
+    return max(60.0, (quota_renewal(now) - now).total_seconds())
+
+
 class LLMUnavailable(Exception):
     """Every model failed: quota, overload, timeout or unusable output."""
 
@@ -66,6 +95,7 @@ class LLM:
             self._clients = [genai.Client(api_key=k) for k in self._api_keys]
         self._next_key = 0  # round-robin cursor: advanced after each success
         self._clock = clock
+        self._wall_clock = lambda: datetime.now(timezone.utc)  # for daily quotas (tests may set it)
         # Cooldown per (key_index, model_name) pair.
         self._resting_until: dict[tuple[int, str], float] = {}
         # Keys Google refused (401): left out of every count until the 24 h are over.
@@ -75,9 +105,10 @@ class LLM:
     def client(self) -> genai.Client:
         return self._clients[self._next_key % len(self._clients)]
 
-    def _rest(self, key: int, model: str, reason: str) -> None:
-        self._resting_until[(key, model)] = self._clock() + COOLDOWN_SECONDS[reason]
-        log.warning("Key %d model %s %s, skipped for %d s", key, model, reason, COOLDOWN_SECONDS[reason])
+    def _rest(self, key: int, model: str, reason: str, seconds: float | None = None) -> None:
+        seconds = COOLDOWN_SECONDS[reason] if seconds is None else seconds
+        self._resting_until[(key, model)] = self._clock() + seconds
+        log.warning("Key %d model %s %s, skipped for %d s", key, model, reason, seconds)
 
     def _disable_key(self, key: int) -> None:
         """Mark all models on a key as invalid for 24 h (e.g. after 401 UNAUTHENTICATED)."""
@@ -149,7 +180,17 @@ class LLM:
             automatic_function_calling=types.AutomaticFunctionCallingConfig(disable=True),
         )
         tried: set[tuple[int, str]] = set()
-        for key_idx, model in self._build_pairs()[:attempts]:
+        # Slow failures (overload, timeout, unusable output) count against `attempts`: they cost the
+        # member's wait. A key refused or out of quota answers at once (a fraction of a second): the
+        # next pair is tried without counting, or a model spent everywhere would fail every call
+        # while the next model was free (measured 22 Sep: gemini-3.6-flash's daily quota gone on
+        # every key, and each call gave up after two refusals without reaching the lite models).
+        slow = 0
+        pairs = self._build_pairs()
+        position = 0
+        while position < len(pairs) and slow < attempts:
+            key_idx, model = pairs[position]
+            position += 1
             if (key_idx, model) in tried:
                 continue
             tried.add((key_idx, model))
@@ -165,14 +206,26 @@ class LLM:
             except errors.ClientError as error:
                 if error.code == 401:
                     self._disable_key(key_idx)  # bad key: skip all models on it for 24 h
+                elif error.code == 429 and "PerDay" in str(error):
+                    # The day's quota is spent: nothing to try again before it renews.
+                    self._rest(key_idx, model, "quota", seconds=seconds_until_quota_renewal(self._wall_clock()))
                 elif error.code in (404, 429):
                     self._rest(key_idx, model, "quota")
                 else:
                     raise
+                if error.code == 429:
+                    # A quota is per key: the same model on the next key may still have some —
+                    # tried next, before a lighter model (measured 22 Sep: the best model spent on
+                    # two keys, still free on others, while the lite ones were overloaded).
+                    later = next((i for i in range(position, len(pairs)) if pairs[i][1] == model), None)
+                    if later is not None:
+                        pairs.insert(position, pairs.pop(later))
             except (errors.ServerError, TimeoutError, httpx.TransportError):
                 self._rest(key_idx, model, "unavailable")
+                slow += 1
             except (ValidationError, ValueError) as error:
                 log.warning("Key %d model %s returned unusable output (%s), trying next", key_idx, model, type(error).__name__)
+                slow += 1
         raise LLMUnavailable
 
     async def answer(self, system: str, prompt: str) -> GeneratedAnswer:
