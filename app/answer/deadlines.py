@@ -158,7 +158,7 @@ class DeadlineExtractor:
             return "call recording"
         if message.chat_id.startswith(DOCUMENT_PREFIX):
             return "shared document"
-        return self.chat_labels.get(message.chat_id, message.chat_id)
+        return self.chat_labels.get(message.chat_id) or ("the group" if "@" in message.chat_id else message.chat_id)
 
 
 class Deadlines:
@@ -175,7 +175,7 @@ class Deadlines:
         elif deadline.chat_id.startswith(DOCUMENT_PREFIX):
             source = TEXTS[language]["deadline_in_document"]
         else:
-            source = self.chat_labels.get(deadline.chat_id, deadline.chat_id)
+            source = self.chat_labels.get(deadline.chat_id) or ("the group" if "@" in deadline.chat_id else deadline.chat_id)
         announced = _day(deadline.announced_at, language)
         return f"• {when} — {deadline.what} ({source}, {display_author(deadline.author)}, {announced})"
 
