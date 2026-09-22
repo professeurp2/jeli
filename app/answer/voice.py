@@ -550,7 +550,7 @@ class Voice:
 
     async def _rewrite(self, text: str, language: str) -> tuple[str, str]:
         """The spoken version of an answer and its mood (see MOODS)."""
-        if len(text) < 15 or len(text) > SPEAK_REWRITE_MAX_CHARS:
+        if self.llm is None or len(text) < 15 or len(text) > SPEAK_REWRITE_MAX_CHARS:
             return text, DEFAULT_MOOD
         label = LANG_LABELS.get(language, "English")
         # Said in the request, not only in the system: the light models follow the request.

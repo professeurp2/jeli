@@ -20,7 +20,7 @@ from app.answer.catchup import Catchup
 from app.answer.conversation import Conversations, member_of
 from app.answer.deadlines import Deadlines
 from app.answer.intents import SESSION_WORD, catchup_since, is_deadlines_request, is_recap_request, looks_like_question, parse_since
-from app.answer.language import TEXTS, detect_language
+from app.answer.language import TEXTS, detect_language, reaction_for
 from app.answer.rag import Answerer
 from app.answer.recaps import Recaps
 from app.answer.understand import Understander, parse_since as parse_iso
@@ -112,6 +112,9 @@ class Responder:
                 if not isinstance(reply, Reply):
                     reply = Reply(reply)
                 reply.language = language
+                # "I can't right now" said in words gets the feeling that goes with it, as a
+                # reaction on the member's message (app/answer/language.py).
+                reply.reaction = reply.reaction or reaction_for(reply, language)
                 self.conversations.note(message, reply, getattr(reply, "cited", ()))
                 self._remember(message, language)
         else:

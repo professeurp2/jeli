@@ -71,16 +71,20 @@ class Reply(str):
     # The language it is written in, as the understanding step decided it (a voice note says it in
     # that language rather than guessing from the words); "" when unknown.
     language: str
+    # An emoji put on the member's message with the reply. Set when the words alone are thin — Jeli
+    # saying it cannot right now — so the feeling shows before the sentence is read. "": none.
+    reaction: str
 
     def __new__(
         cls, text: str, *, reply_to=None, quoted=None, mentions=(), attachment=None, pending=None, unanswered=False, cited=(),
-        language="",
+        language="", reaction="",
     ):
         reply = super().__new__(cls, text)
         reply.reply_to, reply.quoted, reply.mentions = reply_to, quoted, list(mentions)
         reply.attachment, reply.pending, reply.unanswered = attachment, pending, unanswered
         reply.cited = list(cited)
         reply.language = language
+        reply.reaction = reaction
         return reply
 
 

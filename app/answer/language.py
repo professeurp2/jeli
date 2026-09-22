@@ -80,6 +80,9 @@ TEXTS = {
         "sources": "Sources",
         "fallback": "Things are a bit busy right now, but here's where the group discussed this — ask me again in a minute for a full answer:",
         "not_ready": "I'm still warming up — give me a moment and try again!",
+        # The member has had their share of answers for the day: said once, warmly, then Jeli
+        # carries on in writing. Never a refusal — the answer always follows.
+        "daily_cap": "You and I have talked a lot today 😊 I'll keep going in writing from here so there's enough of me to go round — here's your answer:",
         "already_covered": "💡 The group already covered this:",
         "catchup_header": "🗓️ Catch-up since {since} ({messages} messages)",
         "catchup_nothing": "All quiet since {since} — nothing new in the groups! ☀️",
@@ -167,6 +170,7 @@ TEXTS = {
         "sources": "Sources",
         "fallback": "C'est un peu chargé là, mais voici où le groupe en a parlé — redemande-moi dans une minute pour une réponse complète :",
         "not_ready": "Je suis encore en train de me réveiller — donne-moi un instant et réessaie !",
+        "daily_cap": "On a beaucoup échangé aujourd'hui toi et moi 😊 Je continue à l'écrit à partir de maintenant, pour qu'il en reste pour tout le monde — voici ta réponse :",
         "already_covered": "💡 Le groupe a déjà répondu à ça :",
         "catchup_header": "🗓️ Récap depuis {since} ({messages} messages)",
         "catchup_nothing": "Tout calme depuis {since} — rien de nouveau dans les groupes ! ☀️",
@@ -228,6 +232,30 @@ TEXTS = {
         "documents_header": "📄 Je garde {n} documents :",
     },
 }
+# When Jeli has to say it cannot answer right now, a reaction on the member's message carries what
+# the sentence cannot: the feeling arrives before the words are read. Keys of TEXTS, so the two
+# always say the same thing; anything else gets no reaction.
+FEELS = {
+    "not_ready": "😅",            # still warming up
+    "fallback": "🙏",             # busy: sources only
+    "catchup_unavailable": "😅",  # too many messages to summarise right now
+    "reminder_unavailable": "🙏",
+    "voice_reply_unavailable": "🎤",
+    "dont_know": "🤔",            # nothing on that in the group's memory
+    "dont_know_near": "🤔",
+}
+
+
+def reaction_for(text: str, language: str) -> str:
+    """The emoji that goes with one of Jeli's own apologies, "" for a real answer."""
+    texts = TEXTS[language]
+    for key, emoji in FEELS.items():
+        head = texts.get(key, "").split("{", 1)[0].strip()
+        if head and text.startswith(head):
+            return emoji
+    return ""
+
+
 # African languages fall back to English for system messages (guard texts, UI strings).
 # The LLM itself responds in the detected language; only these UI strings use the fallback.
 _TEXTS_FALLBACK = defaultdict(lambda: TEXTS["en"], TEXTS)

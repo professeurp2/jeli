@@ -23,6 +23,9 @@ class Settings(BaseSettings):
     whatsapp_user_limit: int = 5  # answers per member…
     whatsapp_user_window_seconds: int = 600  # …within this window
     whatsapp_hourly_limit: int = 120  # answers per hour, all chats together: a runaway loop stops here
+    # A member's share of answers in 24 h (0: no limit). Past it Jeli keeps answering, in writing
+    # only: voice notes are by far the biggest cost, and one person cannot spend everyone's day.
+    member_daily_limit: int = 40
     whatsapp_min_send_interval_seconds: float = 3.0  # minimum gap between two messages sent
 
     # Telegram — fallback channel.

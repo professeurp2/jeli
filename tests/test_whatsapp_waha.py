@@ -10,7 +10,7 @@ from fastapi.testclient import TestClient
 
 from app.adapters import whatsapp_waha
 from app.adapters.whatsapp_waha import WEBHOOK_PATH, Waha, parse_message, verify_signature
-from app.answer.language import TEXTS
+from app.answer.language import FEELS, TEXTS
 from app.answer.react import is_correction
 from app.config import Settings, get_settings
 from app.main import app
@@ -212,10 +212,12 @@ def test_webhook_answers_a_mention_once(waha_env, calls):
         assert post_event(client, event).status_code == 200
         assert post_event(client, event).status_code == 200  # retried delivery
 
-    # WAHA's recommended human-like sequence: seen, typing, stop typing, then send.
+    # WAHA's recommended human-like sequence: seen, typing, stop typing, then send. Having to say
+    # it cannot answer yet, Jeli puts the feeling on the member's message first (app/answer/language.py).
     paths = [path for path, _ in calls]
-    assert paths == ["/api/sendSeen", "/api/startTyping", "/api/stopTyping", "/api/sendText"]
-    _, reply = calls[3]
+    assert paths == ["/api/sendSeen", "/api/startTyping", "/api/stopTyping", "/api/reaction", "/api/sendText"]
+    assert calls[3][1]["reaction"] == FEELS["not_ready"]
+    _, reply = calls[4]
     assert reply["chatId"] == GROUP
     assert reply["reply_to"] == event["payload"]["id"]
     # No knowledge base in tests: Jeli says it isn't ready, in the question's language.
@@ -429,3 +431,64 @@ def test_correction_triggers_reaction_and_deletes_wrong_message(waha_env, calls)
 
     delete = next((p for path, p in calls if path == "/api/deleteMessage"), None)
     assert delete["messageId"] == wrong_message_id
+
+
+def test_a_member_past_their_share_of_the_day_is_told_once_then_answered_in_writing(waha_env, calls, monkeypatch):
+    """The barrier never silences anyone: it says so once, kindly, and drops the voice note."""
+    monkeypatch.setenv("MEMBER_DAILY_LIMIT", "2")
+    monkeypatch.setenv("WHATSAPP_USER_LIMIT", "20")  # the 10-minute anti-ban rule is tested elsewhere
+    get_settings.cache_clear()
+
+    async def respond(message):
+        return "Friday at 10."
+
+    with TestClient(app) as client:
+        app.state.whatsapp.respond = respond
+        # A voice that always speaks: it must fall silent once the member is past their share.
+        spoken_notes = []
+
+        class AlwaysSpeaks:
+            async def speak(self, text, language=""):
+                spoken_notes.append(text)
+                return b"audio"
+
+        app.state.whatsapp.voice = AlwaysSpeaks()
+        app.state.whatsapp.voice_rate = app.state.whatsapp.voice_intro_rate = 1.0
+        for i in range(3):
+            event = message_event(f"@{BOT_PHONE} question number {i}?", message_id=f"m{i}")
+            assert post_event(client, event).status_code == 200
+
+    said = [payload for path, payload in calls if path == "/api/sendText"]
+    reactions = [payload for path, payload in calls if path == "/api/reaction"]
+    # The first two answers say nothing about any limit; the third explains, then answers.
+    texts = [t["text"] for t in said]
+    assert texts.count(TEXTS["en"]["daily_cap"]) == 1
+    assert texts[-2:] == [TEXTS["en"]["daily_cap"], "Friday at 10."]
+    assert len(reactions) == 1  # the warmth goes with the sentence, once
+    assert len(spoken_notes) == 2  # the first two answers were spoken, the third is written only
+    # A fourth message is answered too, without repeating the sentence.
+    calls.clear()
+    with TestClient(app) as client:
+        app.state.whatsapp.respond = respond
+        app.state.whatsapp.member_daily_limit = 2
+        app.state.whatsapp.daily_limiter.limit = 2
+        for i in range(3):
+            later = message_event(f"@{BOT_PHONE} another question {i}?", message_id=f"n{i}")
+            assert post_event(client, later).status_code == 200
+    assert TEXTS["en"]["daily_cap"] not in [t["text"] for t in calls if isinstance(t, dict)]
+
+
+def test_without_a_limit_nothing_changes(waha_env, calls, monkeypatch):
+    monkeypatch.setenv("MEMBER_DAILY_LIMIT", "0")
+    monkeypatch.setenv("WHATSAPP_USER_LIMIT", "20")
+    get_settings.cache_clear()
+
+    async def respond(message):
+        return "Friday at 10."
+
+    with TestClient(app) as client:
+        app.state.whatsapp.respond = respond
+        for i in range(5):
+            asked = message_event(f"@{BOT_PHONE} yet another question {i}?", message_id=f"z{i}")
+            assert post_event(client, asked).status_code == 200
+    assert [p["text"] for path, p in calls if path == "/api/sendText"] == ["Friday at 10."] * 5

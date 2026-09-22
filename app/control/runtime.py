@@ -69,6 +69,8 @@ FIELDS = {
         Field("duplicate_replies_per_hour", "int", lambda s: s.duplicate_replies_per_hour, 1, 20),
         Field("whatsapp_user_limit", "int", lambda s: s.whatsapp_user_limit, 1, 20),
         Field("whatsapp_hourly_limit", "int", lambda s: s.whatsapp_hourly_limit, 5, 300),
+        # A member's share of answers in 24 h (0: no limit): past it, Jeli answers in writing only.
+        Field("member_daily_limit", "int", lambda s: s.member_daily_limit, 0, 200),
         Field("whatsapp_min_send_interval_seconds", "float", lambda s: s.whatsapp_min_send_interval_seconds, 1, 60),
         Field("daily_digest_time", "time", lambda s: s.daily_digest_time or "18:00"),
         Field("daily_digest_language", "choice", lambda s: s.daily_digest_language, choices=("en", "fr")),

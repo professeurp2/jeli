@@ -270,6 +270,7 @@ def test_the_team_switches_the_voice_seeing_the_natural_voices_quota(client):
     assert "Which voice speaks" in page and all(label in page for label in ("Automatic", "Natural voice", "Live voice", "Backup voice"))
     form = {"csrf": csrf_of(page), "care": "balanced", "bot_name": "Jeli", "pointer_care": "careful", "duplicate_replies_per_hour": "3",
             "whatsapp_user_limit": "4", "whatsapp_hourly_limit": "60", "whatsapp_min_send_interval_seconds": "4",
+            "member_daily_limit": "40",
             "sources": "one", "voice_engine": "backup", "voice_rate": "0", "voice_intro_rate": "50", "voice_name": "aoede",
             "proactive_image_rate": "100"}
     client.post("/dashboard/settings", data=form)
@@ -314,6 +315,7 @@ def test_settings_are_saved_applied_and_validated(client):
     form = {
         "csrf": token, "care": "careful", "bot_name": "Jeli", "pointer_care": "balanced", "duplicate_replies_per_hour": "2",
         "whatsapp_user_limit": "4", "whatsapp_hourly_limit": "60", "whatsapp_min_send_interval_seconds": "4",
+            "member_daily_limit": "40",
     }
     client.post("/dashboard/settings", data=form)
     runtime = app.state.runtime

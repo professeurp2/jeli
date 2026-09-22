@@ -158,7 +158,10 @@ class LLM:
         return sorted(self.models, key=lambda m: (self._model_until.get(m, 0) > now, self.models.index(m)))
 
     @property
-    def client(self) -> genai.Client:
+    def client(self) -> genai.Client | None:
+        """None without a single Gemini key: Jeli then runs on the spare engine alone."""
+        if not self._clients:
+            return None
         return self._clients[self._next_key % len(self._clients)]
 
     def _rest(self, key: int, model: str, reason: str, seconds: float | None = None) -> None:
@@ -194,6 +197,8 @@ class LLM:
         """Each model and minimum seconds it still rests across all keys (0: at least one key ready)."""
         now = self._clock()
         n = len(self._clients)
+        if not n:  # no Gemini key: every model is out, the spare engine carries the answers
+            return [(m, int(COOLDOWN_SECONDS["quota"])) for m in self.models]
         return [
             (m, min(max(0, int(self._resting_until.get((ki, m), 0) - now)) for ki in range(n)))
             for m in self.models

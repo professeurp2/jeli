@@ -111,3 +111,14 @@ def test_when_every_gemini_model_refuses_the_spare_engine_answers():
 def test_the_spare_engine_is_shared_by_the_light_models():
     made = engine(lambda request: reply('{"answered": true, "answer": "ok", "sources": []}'))
     assert gemini_all_failing(made).with_models(["lite"]).backup is made
+
+
+def test_jeli_runs_on_the_spare_engine_alone_when_no_gemini_key_is_left():
+    """Removing every Gemini key must not crash Jeli: the spare engine carries the text answers."""
+    from app.answer.llm import LLM
+
+    made = engine(lambda request: reply('{"answered": true, "answer": "Friday", "sources": []}'))
+    llm = LLM([], ["first"], backup=made)
+    assert llm.client is None and llm.key_count == 0  # nothing to call at Google, nothing to check
+    assert all(resting for _, resting in llm.status())  # the dashboard shows every model out
+    assert asyncio.run(llm.answer("s", "When is the meeting?")).answer == "Friday"

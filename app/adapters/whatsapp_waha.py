@@ -294,6 +294,12 @@ class Waha:
         self._seen: OrderedDict[str, None] = OrderedDict()
         self.user_limiter = SlidingWindowLimiter(settings.whatsapp_user_limit, settings.whatsapp_user_window_seconds)
         self.hourly_limiter = SlidingWindowLimiter(settings.whatsapp_hourly_limit, 3600)
+        # A member's share of answers for the day (set from the dashboard, 0: no limit). Past it,
+        # Jeli says so once, kindly, and carries on in writing: no voice note, which is what costs.
+        # It never silences anyone — the answer always follows the sentence.
+        self.member_daily_limit: int = settings.member_daily_limit
+        self.daily_limiter = SlidingWindowLimiter(settings.member_daily_limit, 86_400)
+        self._daily_notice = SlidingWindowLimiter(1, 86_400)  # the sentence is said once a day
         self.spacer = SendSpacer(settings.whatsapp_min_send_interval_seconds)
         # Set from WAHA's session.status events: Jeli stays silent while the session is not WORKING.
         self.paused = False
@@ -500,7 +506,8 @@ class Waha:
         if mentions:
             payload["mentions"] = list(mentions)
         result = await self._post("/api/sendText", payload)
-        return result.get("id")
+        # WAHA answers with the sent message, but an empty body must not lose what follows it.
+        return (result or {}).get("id")
 
     async def send_voice(self, chat_id: str, audio: bytes, reply_to: str | None = None) -> None:
         """A voice note: WAHA converts the audio to OGG/Opus for WhatsApp."""
@@ -626,6 +633,9 @@ class Waha:
     async def send_reply(self, message: IncomingMessage, reply: str) -> None:
         """Jeli's reply, as WhatsApp shows it: quoting the member's message, or the source message
         itself (WhatsApp's own reference), with its mentions."""
+        reaction = getattr(reply, "reaction", "")
+        if reaction:
+            await self.send_reaction(message.chat_id, message.message_id, reaction)
         sent_id = await self.send_text(
             message.chat_id,
             reply,
@@ -863,7 +873,10 @@ class Waha:
             await self._feedback(message.chat_id, wrong_id, "correction", question, answer)
         chat = {"chatId": message.chat_id}
         language = detect_language(message.text or "")
-        by_voice = self.voice is not None and message.reply_by_voice
+        # This member's share of the day: past it, the answer comes in writing only.
+        author = message.author_id or message.author or message.chat_id
+        over_cap = self.member_daily_limit > 0 and not self.daily_limiter.allow(author)
+        by_voice = self.voice is not None and message.reply_by_voice and not over_cap
         if message.reply_by_voice:
             # Always strip the voice-request clause so the responder sees the real question,
             # regardless of whether the voice module is wired up. Without this, "récap,
@@ -871,7 +884,7 @@ class Waha:
             message = dataclasses.replace(message, text=without_voice_request(message.text))
         # Probabilistic voice: reply by voice on a fraction of messages even without being asked.
         # Higher rate for first contact or self-introductions.
-        if self.voice and not by_voice:
+        if self.voice and not by_voice and not over_cap:
             author_id = message.author_id or message.author or ""
             is_new = bool(author_id) and author_id not in self._seen_members
             if author_id:
@@ -882,6 +895,12 @@ class Waha:
         await asyncio.sleep(reading_delay())
         await self._post_quietly("/api/sendSeen", {**chat, "messageIds": [message.message_id]})
         await self._post_quietly("/api/startTyping", chat)
+        if over_cap and self._daily_notice.allow(author):
+            # Said once a day, and never instead of the answer: the reaction carries the warmth,
+            # the sentence explains, the answer follows in writing.
+            await self.send_reaction(message.chat_id, message.message_id, "😊")
+            await self.send_text(message.chat_id, TEXTS[language]["daily_cap"], reply_to=message.message_id)
+            await self.spacer.wait_turn()
         audio = None
         try:
             typing_since = time.monotonic()

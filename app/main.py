@@ -67,18 +67,19 @@ async def lifespan(app: FastAPI):
     state.llm = state.answerer = state.catchup = state.recaps = state.deadlines = state.extractor = None
     state.documents = state.sessions = state.awareness = state.brief = None
     state.missing_models = []
-    if store and state.embedder:
-        # Groq, the spare engine: when every Gemini model refuses at once, it answers instead of
-        # Jeli telling the member to come back later. Shared by every tier (with_models copies it).
-        state.llm = LLM(
-            settings.api_key_list,
-            settings.answer_models,
-            backup=Groq(settings.groq_api_key, settings.groq_model_list),
-        )
+    # Groq, the spare engine: when every Gemini model refuses at once, it answers instead of Jeli
+    # telling the member to come back later. Shared by every tier (with_models copies it).
+    backup = Groq(settings.groq_api_key, settings.groq_model_list)
+    # Jeli thinks with Gemini, with the spare engine, or both. Only the memory search — questions
+    # about what was said in the groups — needs Google's embeddings: without them Jeli still
+    # catches up, lists deadlines, sets reminders and talks, on whichever engine answers.
+    if store and (state.embedder or backup.available):
+        state.llm = LLM(settings.api_key_list, settings.answer_models, backup=backup)
         # The answers members read (questions, catch-ups, session recaps and questions, the brief)
         # start with the best model; everything else uses the light models, 25 times more quota.
         state.light_llm = state.llm.with_models(settings.light_model_list)
-        state.answerer = Answerer(store, state.embedder, state.llm, min_similarity=runtime["answer_min_similarity"])
+        if state.embedder:
+            state.answerer = Answerer(store, state.embedder, state.llm, min_similarity=runtime["answer_min_similarity"])
         state.deadlines = Deadlines(store, llm=state.light_llm)
         state.catchup = Catchup(store, state.llm, deadlines=state.deadlines)
         state.recaps = Recaps(store, state.llm)
@@ -94,8 +95,9 @@ async def lifespan(app: FastAPI):
             store, state.llm.with_models(settings.transcription_model_list), state.recaps, learn_now, reader=state.light_llm
         )
         state.awareness = Awareness(store, state.light_llm, state.sessions)
-        state.answerer.explainer = state.awareness.explain
-        state.answerer.state = state.awareness.state
+        if state.answerer:
+            state.answerer.explainer = state.awareness.explain
+            state.answerer.state = state.awareness.state
         # The community brief: Jeli's general knowledge, background for every prompt.
         state.brief = Brief(store, state.llm)
         await state.brief.load()
@@ -107,7 +109,8 @@ async def lifespan(app: FastAPI):
             ))
             state.missing_models = await report_models(state.llm.client, wanted)
 
-        asyncio.create_task(check_models())
+        if state.llm.client is not None:  # nothing to check without a Gemini key
+            asyncio.create_task(check_models())
     state.light_llm = getattr(state, "light_llm", None) if state.llm else None
     state.understander = Understander(state.light_llm)
     if state.awareness is not None:

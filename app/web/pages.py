@@ -1640,6 +1640,13 @@ async def settings_page(request: Request, member: Member) -> HTMLResponse:
         + '<div style="height:8px"></div>'
         + _row("Answers per member", "In any 10 minutes. Beyond it, Jeli waits — and notes the person on the watchlist.", number("whatsapp_user_limit", 1, 20))
         + _row("Answers per hour, all groups together", "A safety net: Jeli stops for the rest of the hour.", number("whatsapp_hourly_limit", 5, 300))
+        + _row(
+            "A member's share of answers per day",
+            "Past it, Jeli says so once — kindly — and keeps answering in writing, without voice notes, "
+            "which is what costs. Nobody is ever left without an answer. 0 removes the limit. "
+            "The count restarts when Jeli is redeployed.",
+            number("member_daily_limit", 0, 200),
+        )
         + _row("Pause between two messages", "At least this many seconds between two messages Jeli sends.", number("whatsapp_min_send_interval_seconds", 1, 60, "0.5") + '<span class="muted small">seconds</span>')
     )
     body = ui.form(
@@ -1679,6 +1686,7 @@ SETTING_WORDS = {
     "voice_engine": "which voice speaks",
     "whatsapp_user_limit": "answers per member",
     "whatsapp_hourly_limit": "answers per hour",
+    "member_daily_limit": "a member's share of answers per day",
     "whatsapp_min_send_interval_seconds": "pause between messages",
 }
 
@@ -1702,6 +1710,7 @@ async def settings_change(request: Request, member: Change) -> RedirectResponse:
         "duplicate_replies_per_hour": form.get("duplicate_replies_per_hour", ""),
         "whatsapp_user_limit": form.get("whatsapp_user_limit", ""),
         "whatsapp_hourly_limit": form.get("whatsapp_hourly_limit", ""),
+        "member_daily_limit": form.get("member_daily_limit", ""),
         "whatsapp_min_send_interval_seconds": form.get("whatsapp_min_send_interval_seconds", ""),
         "voice_rate": str(int(str(form.get("voice_rate", "20"))) / 100),
         "voice_intro_rate": str(int(str(form.get("voice_intro_rate", "80"))) / 100),
