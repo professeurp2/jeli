@@ -45,6 +45,10 @@ class Settings(BaseSettings):
     # day): gemini-3.6-flash allows 20 requests, the Flash-Lite models 500 — used first for every call,
     # the 20 were gone by the morning.
     light_models: str = "gemini-3.1-flash-lite,gemini-3.5-flash-lite,gemini-flash-lite-latest,gemini-3-flash-preview"
+    # Groq, the spare engine: a free key from console.groq.com, used only for text answers when
+    # every Gemini model has refused (22 Sep: "high demand" on all of them at once). Empty: off.
+    groq_api_key: str = ""
+    groq_models: str = "llama-3.3-70b-versatile"
     # Transcription models, tried in order (they listen to the recording, window by window).
     transcription_models: str = "gemini-3.5-flash-lite,gemini-3.1-flash-lite,gemini-3.6-flash"
     # Below this similarity between the question and the best excerpt, Jeli says it doesn't know
@@ -102,6 +106,10 @@ class Settings(BaseSettings):
     @property
     def light_model_list(self) -> list[str]:
         return [model.strip() for model in self.light_models.split(",") if model.strip()]
+
+    @property
+    def groq_model_list(self) -> list[str]:
+        return [model.strip() for model in self.groq_models.split(",") if model.strip()]
 
     @property
     def answer_models(self) -> list[str]:

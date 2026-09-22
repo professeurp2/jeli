@@ -16,6 +16,7 @@ from app.kb.embeddings import MODEL as EMBEDDING_MODEL
 from app.answer.deadlines import DeadlineExtractor, Deadlines
 from app.answer.awareness import Awareness
 from app.answer.documents import Documents
+from app.answer.groq import Groq
 from app.answer.llm import LLM
 from app.answer.rag import Answerer
 from app.answer.recaps import Recaps
@@ -67,7 +68,13 @@ async def lifespan(app: FastAPI):
     state.documents = state.sessions = state.awareness = state.brief = None
     state.missing_models = []
     if store and state.embedder:
-        state.llm = LLM(settings.api_key_list, settings.answer_models)
+        # Groq, the spare engine: when every Gemini model refuses at once, it answers instead of
+        # Jeli telling the member to come back later. Shared by every tier (with_models copies it).
+        state.llm = LLM(
+            settings.api_key_list,
+            settings.answer_models,
+            backup=Groq(settings.groq_api_key, settings.groq_model_list),
+        )
         # The answers members read (questions, catch-ups, session recaps and questions, the brief)
         # start with the best model; everything else uses the light models, 25 times more quota.
         state.light_llm = state.llm.with_models(settings.light_model_list)
@@ -203,6 +210,13 @@ app.include_router(pages.router)
 app.add_exception_handler(pages.NoKnowledgeBase, pages.no_knowledge_base)
 
 
+def _backup_health(llm) -> dict:
+    backup = getattr(llm, "backup", None)
+    if backup is None or not backup.available:
+        return {"enabled": False}
+    return {"enabled": True, "used": backup.used, "models": backup.health()}
+
+
 @app.get("/health")
 async def health() -> dict:
     def enabled(name: str) -> bool:
@@ -219,6 +233,8 @@ async def health() -> dict:
         # The Gemini keys in rotation and each model's health: failures in a row, rest left, latency.
         "gemini_keys": getattr(getattr(app.state, "llm", None), "key_count", 0),
         "models": getattr(app.state, "llm", None).model_health() if getattr(app.state, "llm", None) else [],
+        # The spare engine: on or off, and how many answers it has rescued since the start.
+        "backup": _backup_health(getattr(app.state, "llm", None)),
         "daily_digest": "daily_summary" in activities and activities["daily_summary"].enabled,
         "team_report": "team_report" in activities and activities["team_report"].enabled,
     }

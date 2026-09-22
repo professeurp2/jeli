@@ -15,6 +15,8 @@ from google import genai
 from google.genai import errors, types
 from pydantic import BaseModel, ValidationError
 
+from app.answer.groq import BackupUnavailable, Groq
+
 log = logging.getLogger(__name__)
 
 # Per model: the whole answer must stay under 10 s, and a slow model should not block the fallback.
@@ -91,10 +93,13 @@ class LLM:
         models: list[str],
         client: genai.Client | None = None,
         clock: Callable[[], float] = time.monotonic,
+        backup: Groq | None = None,
     ):
         if not models:
             raise ValueError("At least one model is required")
         self.models = models
+        # The spare engine, another company: tried for text answers when Gemini has nothing left.
+        self.backup = backup
         if client:
             self._clients = [client]
             self._api_keys: list[str] = []
@@ -306,6 +311,13 @@ class LLM:
                 self._model_failed(model)
                 slow += 1
                 pairs[position:] = [pair for pair in pairs[position:] if pair[1] != model]
+        # Gemini has nothing left for this call: the spare engine answers rather than the member
+        # being told to come back later. Text only — a recording or a picture it cannot take.
+        if self.backup is not None and self.backup.available:
+            try:
+                return await self.backup.generate(contents, schema, system=system, temperature=temperature)
+            except BackupUnavailable as error:
+                log.warning("Spare engine could not answer either (%s)", error)
         raise LLMUnavailable
 
     async def answer(self, system: str, prompt: str) -> GeneratedAnswer:

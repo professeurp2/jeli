@@ -190,6 +190,12 @@ def _ai_busy(state) -> bool:
     return bool(llm) and all(resting for _, resting in llm.status())
 
 
+def _backup_rescues(state) -> int:
+    """Answers the spare engine (Groq) saved since the last start, 0 when it is off."""
+    backup = getattr(getattr(state, "llm", None), "backup", None)
+    return backup.used if backup is not None and backup.available else 0
+
+
 def _ref(key: str) -> str:
     """A reference to a person for the page's buttons: their number never leaves the server."""
     return hashlib.sha256(f"jeli-person:{key}".encode()).hexdigest()[:20]
@@ -323,6 +329,13 @@ async def overview(request: Request, member: Member) -> Response:
         attention.append(ui.notice("bad" if level == "bad" else "warn", f"{esc(explanation)} <a href='/dashboard/whatsapp'>Open the WhatsApp page</a>"))
     if _ai_busy(state):
         attention.append(ui.notice("warn", "Jeli's AI is very busy right now: for a few minutes, it replies with the sources only."))
+    rescued = _backup_rescues(state)
+    if rescued:
+        attention.append(ui.notice(
+            "info",
+            f"The spare engine answered {rescued} time{'s' if rescued > 1 else ''} since the last start, "
+            "when Google had nothing left. Members saw an answer instead of an apology."
+        ))
     unanswered = [q for q in (usage or {}).get("group_questions", []) if q[1] == "dont_know"]
     if unanswered:
         attention.append(ui.notice("info", f"{len(unanswered)} question{'s' if len(unanswered) > 1 else ''} Jeli couldn't answer this week. <a href='/dashboard/questions?show=unanswered'>See them</a>"))
