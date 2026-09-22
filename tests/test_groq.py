@@ -202,3 +202,35 @@ def test_a_configured_model_the_key_has_is_kept():
     made = engine(handler, models=("first",))
     asyncio.run(made.check())
     assert made.models == ["first"]
+
+
+def test_the_spare_engine_is_reached_sooner_than_a_fourth_slow_failure():
+    """The audit of 22 Sep: four overloaded models cost ~24 s before Groq was asked."""
+    from app.answer.llm import ATTEMPTS_BEFORE_BACKUP, GeneratedAnswer
+
+    tried = []
+
+    def gemini_overloaded():
+        from types import SimpleNamespace
+
+        from google.genai import errors
+
+        class Models:
+            async def generate_content(self, model, contents, config):
+                tried.append(model)
+                raise errors.ServerError(503, {"error": {"code": 503, "message": "high demand"}})
+
+        return SimpleNamespace(aio=SimpleNamespace(models=Models()))
+
+    from app.answer.llm import LLM
+
+    made = engine(lambda request: reply('{"answered": true, "answer": "ok", "sources": []}'))
+    llm = LLM("unused", ["a", "b", "c", "d"], client=gemini_overloaded(), backup=made)
+    assert asyncio.run(llm.answer("s", "text question")).answer == "ok"
+    assert len(tried) == ATTEMPTS_BEFORE_BACKUP  # not the full four
+    # A prompt Groq cannot take (a recording) still gets Gemini's full run.
+    tried.clear()
+    fresh = LLM("unused", ["a", "b", "c", "d"], client=gemini_overloaded(), backup=made)
+    with pytest.raises(Exception):
+        asyncio.run(fresh.generate([{"inline_data": b"audio"}], GeneratedAnswer))
+    assert len(tried) > ATTEMPTS_BEFORE_BACKUP

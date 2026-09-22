@@ -32,6 +32,10 @@ COOLDOWN_SECONDS = {"quota": 300, "unavailable": 60, "invalid": 86_400}
 # cursor spreads the load; a key that failed rests, so the next call starts elsewhere.
 MAX_ATTEMPTS = 4
 KEYS_PER_MODEL_FIRST = 2
+# When a spare engine is ready and the prompt is plain text, Gemini gets fewer slow failures before
+# handing over: measured in the audit of 22 Sep, four overloaded models cost the member about 24 s
+# of waiting before Groq was even asked. Two is enough to tell an outage from a slow model.
+ATTEMPTS_BEFORE_BACKUP = 2
 # A model that fails slowly (503 "high demand", a timeout, unusable output) does so on every key:
 # it rests for everyone, longer at each failure in a row (1, 2, 4… minutes, at most 15), and the
 # healthy models move ahead of it. Measured 22 Sep: with a fixed order, every answer paid a 6 s
@@ -247,6 +251,9 @@ class LLM:
         for optional steps so that a busy model never doubles the wait."""
         if attempts is None:
             attempts = MAX_ATTEMPTS
+        spare = self.backup is not None and self.backup.available and isinstance(contents, str)
+        if spare:
+            attempts = min(attempts, ATTEMPTS_BEFORE_BACKUP)
         def config_for(model: str) -> types.GenerateContentConfig:
             return types.GenerateContentConfig(
                 system_instruction=system,
