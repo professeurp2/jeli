@@ -34,6 +34,12 @@ was said about it). Upcoming deadlines and future events scheduled during this p
 Mix announcements (lines marked "(organiser)" first), decisions, upcoming deadlines and unanswered
 questions into ONE flat list ordered by importance — no section headers, no categories.
 
+intro: before the list, 2 or 3 short sentences in your own warm voice, as a colleague catching a
+friend up: the gist of the period (busy or quiet, what stood out) and, when a "Coming up" list is
+given, the most pressing thing in it. Plain sentences: no bullet, no bold, no header; do not
+repeat the list word for word. Say "today", "tomorrow" or a weekday only when it is true for
+today's date, given with the messages.
+
 Rules:
 - At most {MAX_ITEMS} items, most important first, each under 25 words.
 - Lead each item with a *bold* key phrase (WhatsApp syntax: *text*), e.g.:
@@ -50,6 +56,10 @@ Use only what the messages say: never add outside knowledge.
 
 class Digest(BaseModel):
     items: list[str]
+    intro: str = ""
+
+
+MAX_INTRO_CHARS = 450
 
 
 FRENCH_DAYS = ["lun.", "mar.", "mer.", "jeu.", "ven.", "sam.", "dim."]
@@ -134,10 +144,12 @@ class Catchup:
             for m in messages
         ]
         sessions = [f"- «{r.title}» ({_day(r.recorded_at)})" for r in recordings]
+        today = datetime.now(timezone.utc)
         prompt = (
-            "Messages, oldest first:\n" + "\n".join(lines)
+            f"Today is {today:%A %d %B %Y} (UTC).\n\nMessages, oldest first:\n" + "\n".join(lines)
             + ("\n\nCall recordings available:\n" + "\n".join(sessions) if sessions else "")
-            + f"\n\nWrite every item in {LANGUAGES[language]}."
+            + (f"\n\nComing up (listed after your items, for the intro):\n{coming_up}" if coming_up else "")
+            + f"\n\nWrite the intro and every item in {LANGUAGES[language]}."
         )
         try:
             digest = await self.llm.generate(prompt, Digest, system=SYSTEM, timeout=TIMEOUT_SECONDS)
@@ -157,4 +169,7 @@ class Catchup:
             parts.append(texts["catchup_recordings"] + "\n" + "\n".join(rec_lines))
         if coming_up:
             parts.append(coming_up)
-        return header + "\n\n" + "\n\n".join(parts)
+        # The gist first, in Jeli's own words, as a person would tell it; then the details.
+        intro = " ".join(digest.intro.split())
+        lead = f"{intro}\n\n" if intro and len(intro) <= MAX_INTRO_CHARS else ""
+        return lead + header + "\n\n" + "\n\n".join(parts)

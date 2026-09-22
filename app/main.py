@@ -68,7 +68,7 @@ async def lifespan(app: FastAPI):
     if store and state.embedder:
         state.llm = LLM(settings.api_key_list, settings.answer_models)
         state.answerer = Answerer(store, state.embedder, state.llm, min_similarity=runtime["answer_min_similarity"])
-        state.deadlines = Deadlines(store)
+        state.deadlines = Deadlines(store, llm=state.llm)
         state.catchup = Catchup(store, state.llm, deadlines=state.deadlines)
         state.recaps = Recaps(store, state.llm)
         state.extractor = DeadlineExtractor(store, state.llm)

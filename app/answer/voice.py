@@ -168,18 +168,21 @@ written answer below as what you would say in a voice note to a friend.
   written, digits as digits. Add nothing that is not in the answer.
 - Speak, do not read: natural spoken rhythm, contractions, short sentences, no lists, no symbols,
   no emoji, no markdown, no links, no ids, no phone numbers.
+- Summarise it as a person would tell it to a friend: a list becomes a few flowing sentences (the
+  most pressing first); leave out what a listener does not need — who announced each item, where
+  and when it was announced — but keep the day, date and time of each thing that is coming. Say
+  days and months in full ("mardi 22 septembre", not "mar. 22 sept.").
 - Let the feeling of the content come through: real enthusiasm for good news, a gentle reassuring
   tone for a problem or a "not found", calm warmth otherwise. A small human reaction at the start
   when it fits (a laugh, "ah,", "good news!"), never the same one twice in a row.
-- No greeting and no goodbye unless the answer has one. About as long as the answer.
+- No greeting and no goodbye unless the answer has one. No longer than the answer.
 Return "text", and "mood": the feeling your voice should carry — "joyful" (good news, a success,
 thanks, a welcome), "reassuring" (a problem, a delay, something missing or not found) or "calm"
 (plain information).
 """
-SPEAK_REWRITE_MAX_CHARS = 1200
+SPEAK_REWRITE_MAX_CHARS = 2000  # a digest or a list of deadlines is told, not read
 REWRITE_ATTEMPTS = 2
 _NUMBER = re.compile(r"\d+")
-_LIST_LINE = re.compile(r"^\s*[•\-]\s", re.MULTILINE)
 
 
 class Seen(BaseModel):
@@ -203,46 +206,16 @@ def without_voice_request(text: str) -> str:
     return VOICE_ASK.sub("", text).strip(" ,;:") or text
 
 
-# Where a listed item comes from, written for the eye: "(METI cohort, +251 ···34, mer. 16 sept.)".
-PROVENANCE = re.compile(r"\s*\((?:[^()]|\([^()]*\))*\)\s*$")
-DATED = re.compile(
-    r"···|\b(?:lun|mar|mer|jeu|ven|sam|dim|mon|tue|wed|thu|fri|sat|sun)\.?\s+\d|\b\d{1,2}\s+(?:sept|sep|oct|nov)\b",
-    re.IGNORECASE,
-)
-MASKED_NUMBER = re.compile(r"\+?\d{1,4}\s*·{2,}\s*\d{1,4}")
-# Days and months as written short, said in full ("mar. 22 sept." → "mardi 22 septembre").
-SPOKEN_DAYS = {
-    "lun": "lundi", "mar": "mardi", "mer": "mercredi", "jeu": "jeudi", "ven": "vendredi", "sam": "samedi", "dim": "dimanche",
-    "mon": "Monday", "tue": "Tuesday", "wed": "Wednesday", "thu": "Thursday", "fri": "Friday", "sat": "Saturday", "sun": "Sunday",
-}
-SPOKEN_MONTHS = {"sept": "septembre", "oct": "octobre", "nov": "novembre", "sep": "September"}
-SHORT_DAY = re.compile(
-    r"\b(lun|mar|mer|jeu|ven|sam|dim|mon|tue|wed|thu|fri|sat|sun)\.?"
-    r"(?=\s+\d{1,2}\s+(?:sept|sep|oct|nov|septembre|octobre|novembre|september|october|november)\b)",
-    re.IGNORECASE,
-)
-SHORT_MONTH = re.compile(r"(?<=\d )(sept|oct|nov|sep)\b\.?", re.IGNORECASE)
-
-
 def spoken(reply: str) -> str:
     """What a voice note says of a written reply: its words, without the quote blocks, links, mentions
-    and WhatsApp formatting — those stay in the text sent with it — nor where each listed item
-    comes from; days and months said in full."""
+    and WhatsApp formatting — those stay in the text sent with it."""
     text = MENTION.sub("", QUOTE_LINE.sub("", reply))
     text = PHONE.sub("", JID.sub("", LINK.sub("", text)))
     text = re.sub(r"[*_~`]", "", text)
     text = re.sub(r"\s*\(/\w+\)", "", text)  # "(/catchup)": a command to type, not to say
     text = re.sub(r"(?<!\S)/(\w+)", r"\1", text)
     text = EMOJI.sub("", text)
-    lines = []
-    for line in text.splitlines():
-        line = " ".join(line.split())
-        provenance = PROVENANCE.search(line)
-        if provenance and line.startswith(("•", "-")) and DATED.search(provenance.group()):
-            line = line[: provenance.start()]
-        line = SHORT_DAY.sub(lambda m: SPOKEN_DAYS[m.group(1).lower()], MASKED_NUMBER.sub("", line))
-        line = SHORT_MONTH.sub(lambda m: SPOKEN_MONTHS[m.group(1).lower()], line)
-        lines.append(" ".join(line.split()))
+    lines = (" ".join(line.split()) for line in text.splitlines())
     return "\n".join(line for line in lines if line).strip(" :").replace(" ,", ",")
 
 
@@ -480,18 +453,28 @@ class Voice:
         # Said in the request, not only in the system: the light models follow the request.
         prompt = f"Say this answer as a voice note, entirely in {label}, without a list:\n\n{text}"
         mood = DEFAULT_MOOD
+        written = set(_NUMBER.findall(text))
         for _ in range(REWRITE_ATTEMPTS):
             try:
-                said = await self.llm.generate(prompt, Script, system=SPEAK_SYSTEM, timeout=8, temperature=0.7, attempts=2)
+                said = await self.llm.generate(prompt, Script, system=SPEAK_SYSTEM, timeout=12, temperature=0.7, attempts=2)
             except LLMUnavailable:
                 return text, mood
             mood = said.mood.strip().lower() if said.mood.strip().lower() in MOODS else DEFAULT_MOOD
             result = " ".join(said.text.split())
-            if not result or len(result) > len(text) * 1.6 + 80 or not set(_NUMBER.findall(text)) <= set(_NUMBER.findall(result)):
-                log.info("Spoken rewrite rejected (empty, too long or a number lost): reading the answer as it is")
+            spoken_numbers = set(_NUMBER.findall(result))
+            # A human summary may leave out who announced what and when (dates, numbers of their
+            # own), not the facts: a number the answer does not have is never said, and a summary
+            # that dropped nearly all of its numbers lost what was coming.
+            if (
+                not result
+                or len(result) > len(text) * 1.6 + 80
+                or not spoken_numbers <= written
+                or len(spoken_numbers) < len(written) / 3
+            ):
+                log.info("Spoken rewrite rejected (empty, too long, a number added or nearly all lost): reading the answer as it is")
                 return text, mood
-            # The light models sometimes give the written answer back, list and all: ask again.
-            if result != " ".join(text.split()) and not _LIST_LINE.search(said.text):
+            # The light models sometimes give the written answer back as it is: ask again.
+            if result != " ".join(text.split()):
                 return result, mood
             log.info("Spoken rewrite came back as the written answer: asking again")
         return text, mood

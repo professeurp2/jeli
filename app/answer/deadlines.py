@@ -8,6 +8,7 @@ Every deadline keeps the message that announced it, so it can be cited.
 
 import logging
 import re
+import time
 from datetime import date, datetime, timedelta, timezone
 
 from pydantic import BaseModel
@@ -16,7 +17,8 @@ from app.answer.catchup import _day
 from app.answer.citations import display_author, ignored_keys, is_ignored
 from app.answer.language import TEXTS
 from app.answer.llm import LLM
-from app.answer.persona import PROGRAMMES
+from app.answer.persona import PERSONA, PROGRAMMES
+from app.answer.prompts import LANGUAGES
 from app.kb.indexer import DOCUMENT_PREFIX, RECORDING_PREFIX
 from app.kb.store import Store
 from app.models import Deadline, StoredMessage
@@ -161,10 +163,48 @@ class DeadlineExtractor:
         return self.chat_labels.get(message.chat_id) or ("the group" if "@" in message.chat_id else message.chat_id)
 
 
+INTRO_SYSTEM = PERSONA + """
+Your task now: a member asked what is coming up. Before the list below is shown to them, say the
+gist in 2 short sentences in your own warm voice, as a colleague would: what is most pressing
+(today or tomorrow first) and how busy the days ahead look. Plain sentences: no bullet, no bold, no
+list, no greeting; do not repeat every item. Say "today", "tomorrow" or a weekday only when it is
+true for today's date.
+"""
+INTRO_TIMEOUT = 6
+INTRO_CACHE_SECONDS = 600
+MAX_INTRO_CHARS = 350
+
+
+class Intro(BaseModel):
+    text: str
+
+
 class Deadlines:
-    def __init__(self, store: Store, chat_labels: dict[str, str] | None = None):
+    def __init__(self, store: Store, chat_labels: dict[str, str] | None = None, llm: LLM | None = None):
         self.store = store
         self.chat_labels = chat_labels or {}
+        self.llm = llm  # writes the few words said before the list; none without it
+        self._intros: dict[tuple, tuple[float, str]] = {}
+
+    async def _intro(self, lines: list[str], language: str, today: date) -> str:
+        """The gist of the coming days, said before the list; "" when no model can say it."""
+        if self.llm is None:
+            return ""
+        key = (language, today, tuple(lines))
+        cached = self._intros.get(key)
+        if cached and time.monotonic() - cached[0] < INTRO_CACHE_SECONDS:
+            return cached[1]
+        prompt = f"Today is {today:%A %d %B %Y}.\nComing up:\n" + "\n".join(lines) + f"\n\nWrite the 2 sentences in {LANGUAGES.get(language, 'English')}."
+        try:
+            said = await self.llm.generate(prompt, Intro, system=INTRO_SYSTEM, timeout=INTRO_TIMEOUT, temperature=0.6, attempts=2)
+        except Exception:
+            # A missing introduction costs nothing: the list is shown as before.
+            log.warning("No introduction for the deadlines list", exc_info=True)
+            return ""
+        intro = " ".join(said.text.split())
+        intro = intro if len(intro) <= MAX_INTRO_CHARS else ""
+        self._intros[key] = (time.monotonic(), intro)
+        return intro
 
     def _line(self, deadline: Deadline, language: str) -> str:
         when = _day(datetime.combine(deadline.due_date, datetime.min.time(), timezone.utc), language)
@@ -186,7 +226,10 @@ class Deadlines:
         deadlines = await self.store.deadlines_between(today, today + timedelta(days=days))
         if not deadlines:
             return texts["deadlines_none"].format(days=days)
-        return texts["deadlines_header"].format(days=days) + "\n" + "\n".join(self._line(d, language) for d in deadlines)
+        lines = [self._line(d, language) for d in deadlines]
+        intro = await self._intro(lines, language, today)
+        # The gist first, in Jeli's own words; then the list, with who announced what and where.
+        return (f"{intro}\n\n" if intro else "") + texts["deadlines_header"].format(days=days) + "\n" + "\n".join(lines)
 
     async def coming_up_section(self, language: str, days: int = 3, today: date | None = None) -> str | None:
         """For digests: what is due in the next few days, or None."""

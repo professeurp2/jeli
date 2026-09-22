@@ -139,3 +139,24 @@ def test_deadline_requests():
     assert is_deadlines_request("What are the upcoming deadlines?")
     assert is_deadlines_request("Quelles sont les prochaines échéances ?")
     assert not is_deadlines_request("When is the deadline for the hackathon?")  # a question: grounded answer
+
+
+def test_the_deadlines_list_opens_with_the_gist_in_jelis_own_words():
+    from app.answer.deadlines import Intro
+
+    store = FakeStore([])
+    store.deadlines = [
+        Deadline("Complete Module 1 activities", date(2026, 9, 22), "recording:module1", THU_17, author="Charles Bolton"),
+        Deadline("Hackathon: submit the chatbot", date(2026, 9, 24), "meti", THU_17, due_time="9:00 CAT"),
+    ]
+    today = date(2026, 9, 21)
+    llm = FakeLLM(Intro(text="Busy days ahead! Tomorrow you finish Module 1, and Thursday the hackathon closes."))
+    deadlines = Deadlines(store, chat_labels={"meti": "METI cohort"}, llm=llm)
+    reply = asyncio.run(deadlines.upcoming_reply("en", today=today))
+    assert reply.startswith("Busy days ahead! Tomorrow you finish Module 1, and Thursday the hackathon closes.\n\n⏰ Deadlines in the next 14 days\n• Tue 22 Sep")
+    assert llm.prompts[0].startswith("Today is Monday 21 September 2026.")
+    asyncio.run(deadlines.upcoming_reply("en", today=today))
+    assert len(llm.prompts) == 1  # the same list asked again: the same words, no new call
+    # No model, or a failing one: the list as before.
+    down = Deadlines(store, chat_labels={"meti": "METI cohort"}, llm=FakeLLM(error=ConnectionError("down")))
+    assert asyncio.run(down.upcoming_reply("en", today=today)).startswith("⏰ Deadlines in the next 14 days")

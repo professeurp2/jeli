@@ -91,7 +91,7 @@ def test_digest_sections_and_recordings():
     [prompt] = llm.prompts
     assert "METI cohort · Awa Traoré: Submissions close" in prompt
     assert "I am a bot" not in prompt and "818 554 6555" not in prompt
-    assert prompt.endswith("Write every item in English.")
+    assert prompt.startswith("Today is ") and prompt.endswith("Write the intro and every item in English.")
 
 
 def test_the_same_catchup_is_summarised_once():
@@ -109,3 +109,26 @@ def test_quiet_periods_and_unavailable_models():
     assert asyncio.run(quiet.summarize(NOW, "fr")) == TEXTS["fr"]["catchup_nothing"].format(since="sam. 19 sept.")
     down = Catchup(FakeStore(), FakeLLM(error=LLMUnavailable()))
     assert "can't summarise them right now" in asyncio.run(down.summarize(MONDAY, "en"))
+
+
+def test_the_digest_opens_with_the_gist_in_jelis_own_words():
+    coming = "⏰ Coming up\n• Thu 24 Sep — Hackathon: submit the chatbot"
+
+    class Deadlines:
+        async def coming_up_section(self, language):
+            return coming
+
+    said = Digest(
+        items=["*Hackathon submissions* (Thu 24 Sep): chatbot + code + install notes."],
+        intro="A fairly quiet start of the week: Awa reminded everyone about the submission. The big one is Thursday — the hackathon closes.",
+    )
+    llm = FakeLLM(said)
+    digest = asyncio.run(Catchup(FakeStore(), llm, ignored_authors=["OtherBot"], deadlines=Deadlines()).summarize(MONDAY, "en"))
+    intro, rest = digest.split("\n\n", 1)
+    assert intro == said.intro
+    assert rest.startswith("🗓️ Catch-up since Mon 14 Sep (2 messages)") and rest.endswith(coming)
+    # The model sees what is coming up (for the intro) and today's date (for "tomorrow" to be true).
+    assert "Coming up (listed after your items, for the intro):\n" + coming in llm.prompts[0]
+    # An intro too long to be one: the digest as before.
+    long = Digest(items=said.items, intro="blah " * 200)
+    assert asyncio.run(Catchup(FakeStore(), FakeLLM(long)).summarize(MONDAY, "en")).startswith("🗓️ Catch-up since")

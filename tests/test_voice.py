@@ -209,7 +209,7 @@ def test_a_rewrite_that_loses_a_date_or_the_model_failing_reads_the_answer_as_it
     assert _script("C'est bientôt, courage !") == written  # 24 and 15 lost
     assert _script(LLMUnavailable()) == written
     assert _script("") == written
-    long = "Un long récapitulatif. " * 80
+    long = "Un long récapitulatif. " * 100  # longer than a digest the rewrite tells
     assert _script("court", long) == long  # digests are read as they are
 
 
@@ -343,24 +343,6 @@ def test_the_spoken_rewrite_gives_the_mood_and_edge_follows_it(monkeypatch):
     assert made == {"voice": "fr-FR-VivienneMultilingualNeural", "rate": "+6%", "pitch": "+6Hz"}
 
 
-def test_a_list_is_said_without_where_each_item_comes_from_and_with_dates_in_full():
-    from app.answer.voice import for_speech
-
-    listing = (
-        "⏰ Échéances des 14 prochains jours\n"
-        "• mar. 22 sept. — Wadhwani Ignite: complete Module 1 (appel, Charles Bolton, jeu. 17 sept.)\n"
-        "• jeu. 24 sept. — Hackathon: build phase (METI cohort (avant Jeli), +251 ···34, mer. 16 sept.)\n"
-        "• Tue 22 Sep — Upload the pitch (PDF)\n"
-        "Le marché est ouvert (mar 3 fois)."
-    )
-    said = for_speech(spoken(listing))
-    assert said == (
-        "Échéances des 14 prochains jours. mardi 22 septembre — Wadhwani Ignite: complete Module 1. "
-        "jeudi 24 septembre — Hackathon: build phase. Tuesday 22 September — Upload the pitch (PDF). "
-        "Le marché est ouvert (mar 3 fois)"
-    )
-
-
 def test_a_rewrite_that_gives_the_list_back_is_asked_again():
     from app.answer.voice import Voice
 
@@ -372,10 +354,26 @@ def test_a_rewrite_that_gives_the_list_back_is_asked_again():
             self.calls += 1
             assert prompt.startswith("Say this answer as a voice note, entirely in French, without a list:")
             if self.calls == 1:
-                return schema(text=prompt.split("\n\n", 1)[1], mood="calm")  # the written answer, list and all
+                return schema(text=prompt.split("\n\n", 1)[1], mood="calm")  # the written answer, as it is
             return schema(text="Alors, mardi 22 septembre, tu finis le module 1, et jeudi 24 c'est la date limite.", mood="calm")
 
     listing = "Échéances\n• mardi 22 septembre — finir le module 1\n• jeudi 24 septembre — date limite"
     llm = EchoOnce()
     said = asyncio.run(Voice(llm).script(listing, "fr"))
     assert said.startswith("Alors, mardi 22 septembre") and llm.calls == 2
+
+
+def test_a_list_is_summarised_as_a_person_would_tell_it():
+    from app.answer.voice import SPEAK_SYSTEM, Voice
+
+    listing = (
+        "Échéances des 14 prochains jours\n"
+        "• mar. 22 sept. — Wadhwani Ignite: complete Module 1 (appel, Charles Bolton, jeu. 17 sept.)\n"
+        "• jeu. 24 sept. — Hackathon submission deadline (METI cohort, +234 ···84, lun. 21 sept.)"
+    )
+    # The model is told to leave out who announced what and when, and to keep what is coming.
+    assert "leave out what a listener does not need" in SPEAK_SYSTEM and "keep the day, date and time" in SPEAK_SYSTEM
+    told = "Alors, mardi 22 septembre tu finis le module 1 de Wadhwani Ignite, et jeudi 24 septembre c'est la soumission du hackathon."
+    assert _script(told, listing) == told  # announcements' dates and numbers left out: a human summary
+    assert _script("Mardi 22 septembre, puis le 25 septembre la soumission.", listing) == listing  # 25: a number it invented
+    assert _script("Bientôt le module 1, puis le hackathon.", listing) == listing  # most of its dates lost
