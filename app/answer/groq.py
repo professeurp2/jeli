@@ -26,9 +26,15 @@ HEAR_MODEL = "whisper-large-v3-turbo"
 # a fresh key). Rather than trust a name written months earlier, Jeli asks the key what it has and
 # keeps the best of it, in this order. A name is matched as a prefix, so dated variants count.
 LIST_URL = "https://api.groq.com/openai/v1/models"
-PREFERRED = ("llama-3.3-70b", "llama-3.1-70b", "kimi-k2", "gpt-oss-120b", "gpt-oss-20b", "llama-3.1-8b", "llama")
-# Models on the key that cannot answer a question: they listen, speak or moderate.
-NOT_FOR_ANSWERS = ("whisper", "tts", "guard", "embed", "prompt-")
+PREFERRED = ("llama-3.3-70b", "llama-3.1-70b", "kimi-k2", "gpt-oss-120b", "qwen3", "gpt-oss-20b", "llama-3.1-8b")
+# The families that hold a conversation. An allow-list, not a block-list: a key also carries models
+# that listen, speak or moderate, and their names say nothing reliable (measured 22 Sep: the first
+# pick was "canopylabs/orpheus-arabic-saudi", a voice). Whatever is chosen is then tried before it
+# is trusted, so an unknown name never becomes Jeli's spare engine on the strength of its spelling.
+CHAT_FAMILIES = ("llama", "qwen", "kimi", "gpt-oss", "mixtral", "mistral", "gemma", "deepseek")
+NOT_FOR_ANSWERS = ("whisper", "tts", "guard", "embed", "prompt-", "orpheus", "playai", "moderation")
+# Models tried at startup before the spare engine is declared ready.
+MODELS_KEPT = 2
 # A failing model (rate limit, overload) is left alone for a while rather than costing every call.
 REST_SECONDS = 120
 # The spare engine must not make the member wait longer than Gemini already has.
@@ -93,13 +99,15 @@ class Groq:
                 await client.aclose()
 
     def _pick(self, available: list[str]) -> list[str]:
-        """The configured models the key really has; failing that, the best of what it does have."""
+        """The models worth trying: the configured ones when the key has them, otherwise the
+        conversation models it does have, best first."""
         usable = [m for m in available if not any(bad in m for bad in NOT_FOR_ANSWERS)]
         kept = [m for m in self.models if m in usable]
         if kept:
             return kept
-        found = [m for want in PREFERRED for m in usable if m.startswith(want)]
-        return list(dict.fromkeys(found)) or usable[:2]
+        chat = [m for m in usable if any(family in m for family in CHAT_FAMILIES)]
+        best = [m for want in PREFERRED for m in chat if m.split("/")[-1].startswith(want)]
+        return list(dict.fromkeys(best + chat))
 
     async def check(self) -> str:
         """One cheap call at startup, so the team sees on the dashboard whether the spare engine
@@ -119,13 +127,28 @@ class Groq:
                 log.warning("Groq: models %s -> %s (what the key really has)", ", ".join(self.models), ", ".join(chosen))
                 self.models = chosen
                 self._resting_until.clear()
-        try:
-            await self.generate("Reply with {\"answered\": true, \"answer\": \"ok\"}.", _Alive, timeout=20)
+        # Candidates are tried, not trusted: whichever answer the test question become the spare
+        # engine, in the order they were preferred. The rest are dropped, whatever they are called.
+        candidates, working, failure = list(self.models), [], None
+        for model in candidates[: MODELS_KEPT + 2]:
+            self.models, self._resting_until = [model], {}
+            try:
+                await self.generate("Reply with {\"answered\": true, \"answer\": \"ok\"}.", _Alive, timeout=20)
+                working.append(model)
+                log.info("Groq: %s answered the test question", model)
+            except Exception as error:  # a check must never prevent the start
+                failure = error
+                log.warning("Groq: %s did not answer the test question (%s)", model, error)
+            if len(working) >= MODELS_KEPT:
+                break
+        self.models, self._resting_until = working or candidates, {}
+        self.used = 0  # the test calls are not answers it rescued
+        if working:
             self.checked = "ok"
-            log.info("Groq: the spare engine answered a test question")
-        except Exception as error:  # a check must never prevent the start
-            self.checked = type(error).__name__
-            log.error("Groq: the spare engine did NOT answer a test question (%s) — check GROQ_API_KEY", error)
+            log.info("Groq: spare engine ready, models %s", ", ".join(working))
+        else:
+            self.checked = type(failure).__name__ if failure else "no model"
+            log.error("Groq: the spare engine answered nothing — check GROQ_API_KEY and GROQ_MODELS")
         return self.checked
 
     async def hear(self, audio: bytes, filename: str = "voice.ogg", timeout: float = 30) -> str | None:

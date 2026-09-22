@@ -163,6 +163,34 @@ def test_a_retired_model_id_is_replaced_by_what_the_key_really_has():
     # The dated variant of the preferred model wins; the moderation model is never for answers.
     assert made.models == ["llama-3.3-70b-versatile-0925", "llama-3.1-8b-instant"]
     assert made.hear_model == "whisper-large-v3-turbo"
+    assert made.used == 0  # the test calls are not answers it rescued
+
+
+def test_a_model_that_does_not_answer_the_test_is_dropped_whatever_it_is_called():
+    """Measured 22 Sep: a key with no llama at all had a voice model picked as the spare engine."""
+    listing = {"data": [{"id": "canopylabs/orpheus-arabic-saudi"}, {"id": "qwen/qwen3.8-27b"},
+                        {"id": "llama-4-scout"}]}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/models"):
+            return httpx.Response(200, json=listing)
+        model = model_of(request)
+        # Only one of them really holds a conversation.
+        return reply('{"answered": true, "answer": "ok"}') if model == "qwen/qwen3.8-27b" else httpx.Response(400)
+
+    made = engine(handler, models=("gone-for-good",))
+    assert asyncio.run(made.check()) == "ok"
+    assert made.models == ["qwen/qwen3.8-27b"]  # the voice model was never a candidate
+
+
+def test_when_nothing_answers_the_dashboard_is_told():
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/models"):
+            return httpx.Response(200, json={"data": [{"id": "llama-4-scout"}]})
+        return httpx.Response(401)
+
+    made = engine(handler, models=("first",))
+    assert asyncio.run(made.check()) == "BackupUnavailable"
 
 
 def test_a_configured_model_the_key_has_is_kept():
