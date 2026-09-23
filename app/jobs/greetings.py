@@ -33,7 +33,7 @@ communauté, je garde la vôtre : les annonces, les décisions, les sessions enr
 • _/deadlines_ — tout ce qui arrive dans les deux semaines
 
 Écrivez-moi en français, in English, kwa Kiswahili — je réponds dans votre langue. Par écrit ou en \
-vocal, comme vous préférez.
+vocal, comme vous préférez. Vous pouvez même *m'appeler et me parler de vive voix* : demandez-moi « le lien de l'appel » et je vous l'envoie 📞
 
 *Deux choses importantes.* Je ne parle que si on m'adresse la parole : écrivez « Jeli » au début \
 de votre message, ou répondez à l'un des miens. Et je ne dis jamais rien que quelqu'un n'ait dit \

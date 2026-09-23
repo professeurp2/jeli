@@ -15,9 +15,10 @@ its requests per day are unlimited — only tokens per minute are capped.
 """
 
 import asyncio
-import base64
+import contextlib
 import json
 import logging
+import time
 
 from fastapi import APIRouter, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse
@@ -144,15 +145,33 @@ def _script() -> str:
     return """<script>
     const talk = document.getElementById('talk'), state = document.getElementById('state');
     const said = document.getElementById('said');
-    let socket, mic, context, out, playAt = 0, live = false;
+    let socket, mic, context, out, playAt = 0, live = false, searching = null;
 
-    function show(who, text) {
+    let open = {};  // the row each speaker is still adding to
+    function show(who, text, done) {
+      // The transcription arrives a few words at a time. One row per turn, not per fragment:
+      // "Jeli / demandé", "Jeli / un récap", "Jeli / de la" was the same sentence, cut to pieces.
+      let row = open[who];
+      if (!row) {
+        row = document.createElement('div');
+        row.className = 'row';
+        row.innerHTML = '<div class="row-text"><b></b><span></span></div>';
+        row.querySelector('b').textContent = who;
+        said.appendChild(row);
+        open[who] = row;
+      }
+      const line = row.querySelector('span');
+      line.textContent = (line.textContent + ' ' + text).replace(/\s+/g, ' ').trim();
+      if (done) delete open[who];
+      said.scrollTop = said.scrollHeight;
+    }
+    function note(text) {  // something Jeli is doing, not something it said
       const row = document.createElement('div');
       row.className = 'row';
-      row.innerHTML = '<div class="row-text"><b></b><span></span></div>';
-      row.querySelector('b').textContent = who;
+      row.innerHTML = '<div class="row-text"><span class="muted"></span></div>';
       row.querySelector('span').textContent = text;
       said.appendChild(row); said.scrollTop = said.scrollHeight;
+      return row;
     }
 
     function play(bytes) {
@@ -177,11 +196,20 @@ def _script() -> str:
       socket.onopen = () => { state.textContent = 'En ligne — parlez.'; document.querySelector('.call').classList.add('live'); talk.textContent = 'Raccrocher'; live = true; };
       socket.onmessage = (event) => {
         if (typeof event.data !== 'string') return play(new Uint8Array(event.data));
-        const note = JSON.parse(event.data);
-        if (note.said) show('Vous', note.said);
-        if (note.jeli) show('Jeli', note.jeli);
-        if (note.state) state.textContent = note.state;
-        if (note.end) stop();
+        const message = JSON.parse(event.data);
+        if (message.said) show('Vous', message.said);
+        if (message.jeli) show('Jeli', message.jeli);
+        if (message.turn) { delete open['Vous']; delete open['Jeli']; }
+        if (message.searching) {
+          searching = note('Jeli cherche dans la mémoire : « ' + message.searching + ' »');
+          state.textContent = 'Il consulte la mémoire du groupe…';
+        }
+        if (message.searched && searching) {
+          searching.querySelector('span').textContent += ' — trouvé';
+          searching = null; state.textContent = 'En ligne — parlez.';
+        }
+        if (message.state) state.textContent = message.state;
+        if (message.end) stop();
       };
       socket.onclose = () => stop();
       const source = context.createMediaStreamSource(stream);
@@ -230,40 +258,107 @@ async def call_socket(socket: WebSocket) -> None:
         await socket.close()
         return
     client: genai.Client = clients[0]
-    config = types.LiveConnectConfig(
+    instructions = await _instructions(state)
+    audio: asyncio.Queue = asyncio.Queue(maxsize=200)
+    ears = asyncio.create_task(_ears(socket, audio))
+    handle, model, until = None, None, time.monotonic() + MAX_CALL_SECONDS
+    try:
+        while time.monotonic() < until:
+            session_model = model or await _first_model_that_answers(client, instructions, handle, socket)
+            if session_model is None:
+                return
+            model = session_model
+            try:
+                async with client.aio.live.connect(
+                    model=model, config=_config(instructions, handle)
+                ) as session:
+                    log.info("A call is running on %s%s", model, " (resumed)" if handle else "")
+                    handle = await _talk(socket, session, state, audio)
+            except WebSocketDisconnect:
+                return
+            except Exception:
+                log.warning("The call's session ended on %s", model, exc_info=True)
+            if handle is None:
+                # Nothing to resume with: saying so is better than a silence the caller has to guess.
+                await _say(socket, {"state": "L'appel s'est arrêté. Rappelez quand vous voulez.", "end": True})
+                return
+            await _say(socket, {"state": "Un instant — je reprends…"})
+        await _say(socket, {"state": "L'appel a atteint sa durée maximale. Rappelez quand vous voulez.", "end": True})
+    finally:
+        ears.cancel()
+        with contextlib.suppress(Exception):
+            await socket.close()
+
+
+def _config(instructions: str, handle: str | None) -> types.LiveConnectConfig:
+    """How every session of a call is opened.
+
+    Two settings keep a call going. Context window compression slides the window instead of ending
+    the session when it fills — measured 23 Sep: without it, the call stopped mid-conversation with
+    no warning at all. Session resumption gives a handle to reopen with, so a session that does end
+    is picked up where it left off rather than started again from nothing.
+    """
+    return types.LiveConnectConfig(
         response_modalities=["AUDIO"],
-        system_instruction=await _instructions(state),
+        system_instruction=instructions,
         speech_config=types.SpeechConfig(
             voice_config=types.VoiceConfig(prebuilt_voice_config=types.PrebuiltVoiceConfig(voice_name=VOICE))
         ),
         tools=[SEARCH_TOOL],
         input_audio_transcription=types.AudioTranscriptionConfig(),
         output_audio_transcription=types.AudioTranscriptionConfig(),
+        context_window_compression=types.ContextWindowCompressionConfig(
+            sliding_window=types.SlidingWindow()
+        ),
+        session_resumption=types.SessionResumptionConfig(handle=handle),
     )
+
+
+async def _first_model_that_answers(client, instructions, handle, socket) -> str | None:
+    """The first Live model that takes the call; None when none of them will."""
     for model in CALL_MODELS:
         try:
-            async with client.aio.live.connect(model=model, config=config) as session:
-                log.info("A call started on %s", model)
-                await _talk(socket, session, state)
-            return
-        except WebSocketDisconnect:
-            return
+            async with client.aio.live.connect(model=model, config=_config(instructions, handle)):
+                return model
         except Exception:
             log.warning("Live model %s could not take the call", model, exc_info=True)
-    await socket.send_text(json.dumps({"state": NO_ENGINE, "end": True}))
-    await socket.close()
+    await _say(socket, {"state": NO_ENGINE, "end": True})
+    return None
 
 
-async def _talk(socket: WebSocket, session, state) -> None:
-    """The caller's voice one way, Jeli's the other, until one of them hangs up."""
+async def _say(socket: WebSocket, note: dict) -> None:
+    with contextlib.suppress(Exception):
+        await socket.send_text(json.dumps(note))
 
-    async def listen() -> None:
+
+async def _ears(socket: WebSocket, audio: asyncio.Queue) -> None:
+    """The caller's microphone, read once for the whole call and not per session: a reconnection
+    must not cost the socket its reader."""
+    while True:
+        chunk = await socket.receive_bytes()
+        if audio.full():  # the line is ahead of the model: the oldest sound is the one to drop
+            with contextlib.suppress(asyncio.QueueEmpty):
+                audio.get_nowait()
+        await audio.put(chunk)
+
+
+async def _talk(socket: WebSocket, session, state, audio: asyncio.Queue) -> str | None:
+    """One session of a call. Returns the handle to resume with, or None when there is none."""
+    resume: dict[str, str | None] = {"handle": None}
+
+    async def send() -> None:
         while True:
-            audio = await socket.receive_bytes()
-            await session.send_realtime_input(audio=types.Blob(data=audio, mime_type="audio/pcm;rate=16000"))
+            chunk = await audio.get()
+            await session.send_realtime_input(audio=types.Blob(data=chunk, mime_type="audio/pcm;rate=16000"))
 
-    async def speak() -> None:
+    async def receive() -> None:
         async for message in session.receive():
+            update = getattr(message, "session_resumption_update", None)
+            if update is not None and getattr(update, "resumable", False) and update.new_handle:
+                resume["handle"] = update.new_handle
+            if getattr(message, "go_away", None) is not None:
+                # Google warns before closing: the caller hears nothing, and the call continues.
+                log.info("The Live API asked to reconnect; the call carries on")
             content = getattr(message, "server_content", None)
             if content is not None:
                 for part in getattr(getattr(content, "model_turn", None), "parts", None) or []:
@@ -273,30 +368,31 @@ async def _talk(socket: WebSocket, session, state) -> None:
                 heard = getattr(getattr(content, "input_transcription", None), "text", "")
                 spoken = getattr(getattr(content, "output_transcription", None), "text", "")
                 if heard:
-                    await socket.send_text(json.dumps({"said": heard}))
+                    await _say(socket, {"said": heard})
                 if spoken:
-                    await socket.send_text(json.dumps({"jeli": spoken}))
+                    await _say(socket, {"jeli": spoken})
+                if getattr(content, "turn_complete", False):
+                    await _say(socket, {"turn": True})  # the sentence is finished: close the line
             calls = getattr(getattr(message, "tool_call", None), "function_calls", None) or []
             for call in calls:
                 question = (call.args or {}).get("question", "")
                 log.info("A caller asked the memory: %s", question[:120])
-                await socket.send_text(json.dumps({"state": "Jeli cherche dans la mémoire…"}))
+                await _say(socket, {"searching": question})
                 found = await _search(state, question)
                 await session.send_tool_response(
                     function_responses=[
                         types.FunctionResponse(id=call.id, name=call.name, response={"result": found})
                     ]
                 )
-                await socket.send_text(json.dumps({"state": "En ligne — parlez."}))
+                await _say(socket, {"searched": True})
 
-    ears = asyncio.create_task(listen())
-    mouth = asyncio.create_task(speak())
-    done, pending = await asyncio.wait(
-        {ears, mouth}, timeout=MAX_CALL_SECONDS, return_when=asyncio.FIRST_COMPLETED
-    )
+    mouth = asyncio.create_task(send())
+    ear = asyncio.create_task(receive())
+    done, pending = await asyncio.wait({mouth, ear}, return_when=asyncio.FIRST_COMPLETED)
     for task in pending:
         task.cancel()
     for task in done:
         error = task.exception()
         if error and not isinstance(error, WebSocketDisconnect):
-            log.warning("A call ended on an error", exc_info=error)
+            log.warning("A call session ended on an error", exc_info=error)
+    return resume["handle"]

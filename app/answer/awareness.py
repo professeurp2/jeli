@@ -15,6 +15,7 @@ from datetime import datetime, timedelta, timezone
 from pydantic import BaseModel
 
 from app.answer.citations import display_author, short_day
+from app.config import get_settings
 from app.answer.intents import SESSION_WORD
 from app.answer.language import TEXTS
 from app.answer.llm import LLM, LLMUnavailable
@@ -112,6 +113,12 @@ class Awareness:
                     if live
                     else "it is not connected to the groups yet, so it knows nothing said after that."
                 )
+            )
+        domain = get_settings().railway_public_domain
+        if domain:
+            lines.append(
+                f"Members can call you and talk out loud at https://{domain}/jeli/call — give that exact "
+                "link when someone asks to speak to you or asks for the call link."
             )
         recordings = await self.store.all_recordings()
         transcribed = [r for r in recordings if r.method != "link"]
