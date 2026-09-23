@@ -80,3 +80,27 @@ def test_an_action_runs_the_task_at_once():
 
 def test_without_a_model_nothing_is_commanded():
     assert asyncio.run(Admin(runtime(), None).handle("mets-toi en pause")) is None
+
+
+def test_the_app_starts_with_whatsapp_configured(monkeypatch):
+    """It crashed in production on 23 Sep at 01:46: the super admin was wired before the
+    activities existed, and no test had WhatsApp configured, so nothing caught it."""
+    from fastapi.testclient import TestClient
+
+    from app.adapters.whatsapp_waha import Waha
+    from app.config import get_settings
+    from app.main import app
+
+    monkeypatch.setenv("WAHA_URL", "http://waha.test:3000")
+    monkeypatch.setenv("WAHA_API_KEY", "k")
+    monkeypatch.setenv("WAHA_WEBHOOK_HMAC_KEY", "h")
+    monkeypatch.setenv("SUPER_ADMIN_NUMBER", "22300000000")
+    get_settings.cache_clear()
+
+    async def no_status_check(self):
+        pass
+
+    monkeypatch.setattr(Waha, "sync_status", no_status_check)
+    with TestClient(app) as client:
+        assert client.get("/health").json()["whatsapp"] is True
+        assert app.state.whatsapp is not None

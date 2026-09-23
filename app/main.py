@@ -188,8 +188,6 @@ async def lifespan(app: FastAPI):
         state.whatsapp.voice = state.voice
         state.whatsapp.emotions = Emotions(state.light_llm) if state.llm else None  # reactions that fit the feeling
         state.whatsapp.store = store  # the stickers the groups use, so Jeli answers with theirs
-        # The super admin steers Jeli in plain words from WhatsApp; without a model, nothing happens.
-        state.whatsapp.admin = Admin(runtime, state.light_llm, state.activities) if state.light_llm else None
         if state.documents:
             state.whatsapp.on_document = state.documents.add
         if store:
@@ -201,6 +199,10 @@ async def lifespan(app: FastAPI):
     # Background activities, then the team's settings applied to everything, now and after each change.
     state.activities = {}
     state.activities = build_activities(state, settings, runtime)
+    # The super admin steers Jeli in plain words from WhatsApp (app/control/admin.py). Wired here,
+    # after the activities exist: it can ask for one of them to run now.
+    if state.whatsapp is not None and state.light_llm is not None:
+        state.whatsapp.admin = Admin(runtime, state.light_llm, state.activities)
     apply(state, runtime)
     runtime.listeners.append(lambda changed: apply(state, runtime))
     for activity in state.activities.values():
