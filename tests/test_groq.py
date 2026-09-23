@@ -382,3 +382,51 @@ def test_a_short_prompt_refused_is_a_refusal_not_a_size():
     with pytest.raises(BackupUnavailable):
         asyncio.run(made.generate("Reply with ok.", Shape))
     assert len(tried) == 1  # refused once and rested, not shortened over and over
+
+
+def test_a_per_minute_token_limit_is_a_size_and_the_source_is_shortened():
+    """Measured 23 Sep at 17:16: a 473-message catch-up asked for 5,548 input tokens when 1,671
+    were left in the minute's budget, and the member was told Jeli could not summarise them."""
+    import json
+
+    asked = []
+    minute = {"used": 5329, "limit": 7000}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        said = json.loads(request.read())["messages"][1]["content"]
+        asked.append(len(said))
+        wanted = len(said) // 4  # roughly a token per four characters
+        if minute["used"] + wanted > minute["limit"]:
+            return httpx.Response(429, json={"error": {"message": (
+                "Rate limit reached for model `qwen` in organization `org_x` service tier `on_demand` "
+                f"on input tokens per minute (ITPM): Limit {minute['limit']}, Used {minute['used']}, "
+                f"Requested {wanted}. Please try again in 33s."
+            )}})
+        return reply('{"answered": true, "answer": "ok"}')
+
+    made = engine(handler, models=("first",))
+    assert asyncio.run(made.generate("x" * 40_000, Shape)).answer == "ok"
+    assert len(asked) > 1 and asked[-1] < asked[0]  # shortened until it fit the minute
+
+
+def test_the_days_budget_being_gone_is_not_a_size():
+    """Nothing fits once the day is spent: the model rests until it renews, and the next one tries."""
+    from app.answer.groq import DAY_REST_SECONDS
+
+    tried = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        import json
+
+        tried.append(json.loads(request.read())["model"])
+        if tried[-1] == "first":
+            return httpx.Response(429, json={"error": {"message": (
+                "Rate limit reached for model `gpt-oss-120b` on tokens per day (TPD): "
+                "Limit 200000, Used 197831, Requested 3694. Please try again in 10m58s."
+            )}})
+        return reply('{"answered": true, "answer": "ok"}')
+
+    made = engine(handler)
+    assert asyncio.run(made.generate("x" * 40_000, Shape)).answer == "ok"
+    assert tried == ["first", "second"]  # not shortened: handed over
+    assert made._resting_until["first"] >= DAY_REST_SECONDS

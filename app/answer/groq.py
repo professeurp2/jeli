@@ -51,6 +51,15 @@ SHRINK_FACTOR = 0.5
 # prompt refused is a refusal, not a size.
 TOO_BIG_WORDS = ("too large", "too long", "context_length", "context length", "maximum context", "reduce the length")
 SHRINK_FLOOR = 4_000
+# A free tier also refuses by the minute: "Rate limit reached … on input tokens per minute (ITPM):
+# Limit 7000, Used 5329, Requested 5548". That is a size, said differently — the request will never
+# fit until it is smaller. Measured 23 Sep at 17:16: a 473-message catch-up could not fit in any
+# minute's budget, so the member was told Jeli could not summarise them. Shortening fits it.
+PER_MINUTE_WORDS = ("per minute", "tpm", "itpm", "otpm")
+# The day's budget is another matter: nothing fits once it is gone, so the next model is tried and
+# this one rests until it renews rather than being asked again every minute.
+PER_DAY_WORDS = ("per day", "tpd", "rpd")
+DAY_REST_SECONDS = 3600
 # The head holds the instructions and the oldest context; the tail holds what is most recent, which
 # is what members ask about. The middle is what goes.
 KEEP_HEAD = 0.3
@@ -261,12 +270,21 @@ class Groq:
             return "failed", None
         if response.status_code >= 400:
             said = response.text[:300]
-            too_big = response.status_code == 413 or any(word in said.lower() for word in TOO_BIG_WORDS)
+            lowered = said.lower()
+            spent_for_today = response.status_code == 429 and any(word in lowered for word in PER_DAY_WORDS)
+            too_big = (
+                response.status_code == 413
+                or any(word in lowered for word in TOO_BIG_WORDS)
+                # A per-minute token limit is a size, said differently: a smaller request fits.
+                or (response.status_code == 429 and not spent_for_today
+                    and any(word in lowered for word in PER_MINUTE_WORDS))
+            )
             if too_big and len(text) > SHRINK_FLOOR:
-                log.info("Groq %s: this source is more than it takes, shortening", model)
+                log.info("Groq %s: this source is more than it takes right now, shortening", model)
                 return "too big", None  # the model is fine: the prompt was not
-            log.warning("Groq %s refused (%d): %s", model, response.status_code, said)
-            self._resting_until[model] = self._clock() + REST_SECONDS
+            rest = DAY_REST_SECONDS if spent_for_today else REST_SECONDS
+            log.warning("Groq %s refused (%d), resting %d s: %s", model, response.status_code, rest, said)
+            self._resting_until[model] = self._clock() + rest
             return "failed", None
         try:
             answer = schema.model_validate_json(response.json()["choices"][0]["message"]["content"])
