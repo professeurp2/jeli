@@ -187,7 +187,7 @@ def test_jeli_answers_a_strong_feeling_with_one_of_the_groups_own_stickers():
     sent = []
     store = Stickers({"humor": "http://waha.test/api/files/laugh.webp"})
     waha = _channel(store)
-    waha.send_sticker = lambda chat, url, reply_to=None: sent.append((chat, url, reply_to))
+    waha.send_sticker = lambda chat, url='', reply_to=None, data=None: sent.append((chat, url, data))
 
     async def no_wait():
         return None
@@ -196,12 +196,27 @@ def test_jeli_answers_a_strong_feeling_with_one_of_the_groups_own_stickers():
     message = parse_message(message_event("😂😂", chat_id=AWA), "Jeli")
     asyncio.run(waha._answer_with_a_sticker(message, _feeling("humor", 4)))
     assert sent and sent[0][1] == "http://waha.test/api/files/laugh.webp"
-    # A faint feeling, or one the groups have no sticker for, gets nothing.
+    # A faint feeling, or one that calls for no sticker at all, gets nothing.
     sent.clear()
     asyncio.run(waha._answer_with_a_sticker(message, _feeling("humor", 1)))
     asyncio.run(waha._answer_with_a_sticker(message, _feeling("worry", 5)))
-    asyncio.run(waha._answer_with_a_sticker(message, _feeling("joy", 5)))  # known feeling, no sticker yet
     assert sent == []
+    # A feeling the groups have no sticker for yet: Jeli sends its own, as bytes (no hosting).
+    asyncio.run(waha._answer_with_a_sticker(message, _feeling("joy", 5, reaction="🎉")))
+    assert len(sent) == 1 and sent[0][1] == "" and sent[0][2][:4] == b"RIFF"
+
+
+def test_jelis_own_stickers_say_the_same_thing_as_its_reactions():
+    """Measured 23 Sep: Jeli had learned no sticker from the groups, so the feature could never
+    fire. Its own pack is drawn from the very emojis it reacts with (scripts/make_stickers.py)."""
+    from app.answer.emotion import REACTIONS
+    from app.answer.stickers import for_reaction, known
+
+    assert len(known()) >= 10, "the pack is missing: run python -m scripts.make_stickers"
+    for emoji in REACTIONS:
+        sticker = for_reaction(emoji)
+        assert sticker and sticker[:4] == b"RIFF", emoji
+    assert for_reaction("") is None and for_reaction("🦖") is None
 
 
 def test_stickers_stay_rare_and_can_be_switched_off():
@@ -214,7 +229,7 @@ def test_stickers_stay_rare_and_can_be_switched_off():
     sent = []
     store = Stickers({"humor": "http://waha.test/api/files/laugh.webp"})
     waha = _channel(store)
-    waha.send_sticker = lambda chat, url, reply_to=None: sent.append(url)
+    waha.send_sticker = lambda chat, url='', reply_to=None, data=None: sent.append(url or data)
 
     async def no_wait():
         return None

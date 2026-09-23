@@ -31,6 +31,7 @@ from app.adapters.pacing import SendSpacer, SlidingWindowLimiter, reading_delay,
 from app.answer.citations import NUMBER_OF_LID, is_ignored, poll_text
 from app.answer.language import TEXTS, detect_language
 from app.answer.react import is_correction
+from app.answer import stickers
 from app.answer import illustrator
 from app.answer.illustrator import asks_for_image
 from app.answer.voice import MAX_SPOKEN_CHARS, audio_mimetype, audio_seconds, asks_for_voice, sources, spoken, without_voice_request
@@ -815,9 +816,17 @@ class Waha:
                 log.warning("Could not remember an older message of %s", chat_id, exc_info=True)
         return remembered
 
-    async def send_sticker(self, chat_id: str, file_url: str, reply_to: str | None = None) -> None:
-        """A sticker, by the URL our own WAHA serves it from. `convert` lets WAHA make the WebP."""
-        payload: dict[str, Any] = {"chatId": chat_id, "file": {"url": file_url}, "convert": True}
+    async def send_sticker(
+        self, chat_id: str, file_url: str = "", reply_to: str | None = None, data: bytes | None = None
+    ) -> None:
+        """A sticker: one of the groups' own, by the URL our WAHA serves it from, or one of Jeli's
+        own, sent as bytes so it needs no hosting. `convert` lets WAHA make the WebP."""
+        if data:
+            file = {"mimetype": stickers.MIMETYPE, "filename": "jeli.webp",
+                    "data": base64.b64encode(data).decode()}
+        else:
+            file = {"url": file_url}
+        payload: dict[str, Any] = {"chatId": chat_id, "file": file, "convert": True}
         if reply_to:
             payload["reply_to"] = reply_to
         await self._post("/api/sendSticker", payload)
@@ -825,24 +834,30 @@ class Waha:
     async def _answer_with_a_sticker(self, message: IncomingMessage, feeling) -> None:
         """A sticker back, when a member's own sticker or a strong feeling calls for one.
 
-        An emoji on their message is a nod; a sticker is Jeli joining in. It only ever sends one
-        the groups themselves use, and only a few times an hour per chat: a bot that posts images
-        all day is both tiring and the kind of volume WhatsApp restricts."""
+        An emoji on their message is a nod; a sticker is Jeli joining in. The groups' own sticker
+        comes first — their visual language, learned as they use it — and Jeli's own only when they
+        have none for that feeling yet. A few times an hour per chat: a bot that posts images all
+        day is both tiring and the kind of volume WhatsApp restricts."""
         if (
             not self.enabled_stickers
-            or self.store is None
             or feeling.strength < STICKER_STRENGTH
             or feeling.emotion not in STICKER_EMOTIONS
             or not self.sticker_limiter.allow(message.chat_id)
         ):
             return
-        file_url = await self.store.pick_sticker(feeling.emotion)
-        if not file_url:
-            return  # the groups have never used one for this feeling: nothing to borrow
+        file_url = await self.store.pick_sticker(feeling.emotion) if self.store is not None else None
+        mine = None if file_url else stickers.for_reaction(feeling.reaction)
+        if not file_url and not mine:
+            return  # nothing to say in pictures for this feeling
         try:
             await self.spacer.wait_turn()
-            await self.send_sticker(message.chat_id, file_url, reply_to=message.message_id)
-            log.info("Answered message %s with a %s sticker", message.message_id, feeling.emotion)
+            await self.send_sticker(
+                message.chat_id, file_url or "", reply_to=message.message_id, data=mine
+            )
+            log.info(
+                "Answered message %s with a %s sticker (%s)", message.message_id, feeling.emotion,
+                "the groups' own" if file_url else "Jeli's own",
+            )
         except Exception:
             log.warning("Could not send a sticker to %s", message.chat_id, exc_info=True)
 
