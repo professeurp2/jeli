@@ -567,3 +567,30 @@ def test_a_long_answer_never_makes_a_member_wait_more_than_the_budget():
     assert budget(LONGEST)[1] <= GEMINI_TTS_TOTAL_MAX_SECONDS
     # A short answer is still given a sensible minimum.
     assert budget(80)[1] == GEMINI_TTS_TOTAL_SECONDS
+
+
+def test_the_ear_knows_jelis_own_name():
+    """Measured 23 Sep at 19:32: a member asked "c'est qui Jeli, est-ce que c'est toi ?" and the
+    transcription wrote "Gilly". Jeli then answered about a stranger — it was never asked about
+    itself. A name the model has never been given is a name it cannot hear."""
+    from app.answer.voice import LISTEN_SYSTEM
+
+    assert "JELI" in LISTEN_SYSTEM
+    for misheard in ("Jelly", "Gilly", "Gelil", "Jenny", "Djeli"):
+        assert misheard in LISTEN_SYSTEM, misheard
+    # The community's own proper nouns travel with it: they are misheard for the same reason.
+    for name in ("UniPods", "METI", "Wadhwani", "timbuktoo"):
+        assert name in LISTEN_SYSTEM, name
+
+
+def test_jeli_knows_that_jeli_is_itself():
+    """It denied being Jeli when the groups listed the chatbots to test: its own name was in the
+    memory as someone else's. Identity belongs to the persona every prompt inherits."""
+    from app.answer.catchup import SYSTEM as CATCHUP
+    from app.answer.persona import PERSONA
+    from app.answer.prompts import SYSTEM as ANSWERS
+
+    assert "you ARE Jeli" in PERSONA
+    assert "first person" in PERSONA
+    for prompt in (ANSWERS, CATCHUP):
+        assert "you ARE Jeli" in prompt  # inherited, not repeated

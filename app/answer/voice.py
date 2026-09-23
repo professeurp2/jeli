@@ -132,6 +132,11 @@ EMOJI = re.compile("[\U0001f000-\U0001faff⌀-⏿☀-➿⬀-⯿️‍]")
 LISTEN_SYSTEM = """\
 Write down, word for word, what is said in this WhatsApp voice note, in the language it is spoken
 (English, French or another). No comments, no timestamps; "" if nothing is said.
+
+These names are said constantly in this community; spell them this way, even when the recording is
+unclear. The assistant the member is speaking to is called JELI (pronounced "jeh-lee", and heard as
+Jelly, Gilly, Gelil, Jenny, Djeli or Geli — it is always Jeli). The programmes are UniPods, METI,
+timbuktoo, UNDP, Wadhwani Ignite, MIT Universal AI, and the hackathon.
 """
 _BULLET = re.compile(r"\n\s*[-•]\s*")
 _NEWLINES = re.compile(r"\n+")

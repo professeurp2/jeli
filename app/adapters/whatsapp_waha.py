@@ -88,7 +88,11 @@ REACTIONS_PER_HOUR = 10
 # their own stickers, only these feelings, and a few times an hour per chat: an emoji on a message
 # is a nod, a sticker is joining in, and a bot posting images all day is tiring — and the kind of
 # volume WhatsApp restricts.
-STICKER_STRENGTH = 3
+# The same bar as a reaction: if a feeling is clear enough for Jeli to put an emoji on it, it is
+# clear enough to answer in kind. What keeps stickers rare is the hourly cap below, not an
+# unreachable threshold — measured 23 Sep at 19:21, the model felt "joy, strength 2" on a real
+# message, and asking for 3 (grief, a loud laugh, a big success) meant a sticker never went out.
+STICKER_STRENGTH = CONVERSATION_REACTION_STRENGTH
 STICKER_EMOTIONS = {"joy", "humor", "pride", "sadness", "gratitude", "love", "encouragement"}
 STICKERS_PER_HOUR = 4
 # Images posted in a group (flyers, screenshots of a schedule) are described and remembered, so

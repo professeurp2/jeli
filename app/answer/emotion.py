@@ -64,6 +64,10 @@ class Emotions:
         try:
             feeling = await self.llm.generate(contents, Feeling, system=FEEL_SYSTEM, timeout=FEEL_TIMEOUT, temperature=0.2, attempts=2)
         except LLMUnavailable:
+            # Measured 23 Sep at 19:35: a member sent a sticker, no model could look at it, and
+            # Jeli stayed silent without a word in the logs — the feature looked broken when it
+            # was only blind.
+            log.info("No model could read this message's feeling: no reaction, no sticker")
             return None
         except Exception:
             # A reaction is a courtesy: a network drop or an unusable answer must never cost the reply.
