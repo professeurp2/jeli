@@ -1937,7 +1937,25 @@ async def team_page(request: Request, member: Member) -> Response:
         icon_name="chat",
         description="Everywhere else Jeli only answers. These two it posts itself — once each, when you press.",
     )
-    body = f'<div class="grid two">{members_card}{password_card}</div>{greetings_card}{log_card}'
+    teams_card = ui.card(
+        "Microsoft Teams meetings",
+        '<div class="rows">'
+        + _row(
+            "Share a transcript",
+            "Download a meeting's transcript from Teams and share it in the group, or add it on the "
+            "Knowledge page. Jeli reads it like any document — no permission needed from anyone.",
+            "",
+        )
+        + _row(
+            "Or have Jeli fetch them itself",
+            "That needs your Microsoft 365 administrator. Send them this link: it says exactly what "
+            "is asked for, what Jeli would read and would never read, and the two commands.",
+            '<a class="btn small" href="/teams">Open the page for them</a>',
+        )
+        + "</div>",
+        icon_name="book",
+    )
+    body = f'<div class="grid two">{members_card}{password_card}</div>{greetings_card}{teams_card}{log_card}'
     return _page(request, member, title="Team", subtitle="Who runs Jeli, and who did what", active="team", body=body, live=True)
 
 
