@@ -34,6 +34,7 @@ from app.answer.documents import missing_documents
 from app.answer.voice import asks_for_voice, spoken, without_voice_request
 from app.ingest.whatsapp_export import attachments, export_documents, message_ids, parse_export, read_export_bytes, who_shared
 from app.kb.indexer import RECORDING_PREFIX
+from app.jobs.greetings import GOODBYE, HELLO, GOODBYE_TEXT, HELLO_TEXT, send_greeting
 from app.models import Attachment, Deadline, IncomingMessage, StoredMessage
 from app.web import ui
 from app.web.auth import SESSION_COOKIE, allowed_change, auth_of, client_address, is_https, safe_next, signed_in
@@ -294,6 +295,25 @@ async def pause(request: Request, member: Change) -> RedirectResponse:
     await _state(request).runtime.update({"paused": paused}, member, "Paused Jeli" if paused else "Resumed Jeli")
     text = "Jeli is paused: it answers nobody and posts nothing until you resume it." if paused else "Jeli is answering again."
     return _done(request, safe_next(str(form.get("next", ""))), text, "warn" if paused else "good")
+
+
+@router.post("/dashboard/greeting")
+async def greeting(request: Request, member: Change) -> RedirectResponse:
+    """Post Jeli's hello, or its goodbye, in the cohort group — once each (app/jobs/greetings.py)."""
+    form = await request.form()
+    which = HELLO if str(form.get("which", "")) == "hello" else GOODBYE
+    state = _state(request)
+    whatsapp = getattr(state, "whatsapp", None)
+    groups = state.runtime["groups"]
+    if whatsapp is None or not groups:
+        return _done(request, "/dashboard/team", "WhatsApp is not connected, or no group is set.", "bad")
+    outcome = await send_greeting(whatsapp, getattr(state, "store", None), which, groups[0], member)
+    said = {
+        "sent": "Posted in the group. Jeli will not post it again.",
+        "already sent": "That message was already posted: Jeli never repeats it.",
+        "no group": "No group is set.",
+    }[outcome]
+    return _done(request, "/dashboard/team", said, "good" if outcome == "sent" else "warn")
 
 
 # --- Overview -------------------------------------------------------------------------------------
@@ -1892,7 +1912,32 @@ async def team_page(request: Request, member: Member) -> Response:
     )
     password_card = ui.card("My password", password, icon_name="key", description="At least 10 characters. Nobody else sees it, not even the team.")
     log_card = ui.card("Activity log", ui.table(["When", "Who", "What"], log_rows, empty_text="Nothing yet."), icon_name="list", description="Every change made on this dashboard, and by whom.")
-    body = f'<div class="grid two">{members_card}{password_card}</div>{log_card}'
+    sent = await _store(request).load_settings() if hasattr(_store(request), "load_settings") else {}
+
+    def greeting_form(which: str, label: str, text: str, done: bool) -> str:
+        return ui.form(
+            "/dashboard/greeting",
+            csrf,
+            f'<input type="hidden" name="which" value="{which}">'
+            f'<pre class="quote" style="white-space:pre-wrap">{esc(text.strip())}</pre>'
+            '<div class="actions" style="margin-top:12px">'
+            + (ui.pill("good", "Already posted") if done else ui.button(label, kind="primary", icon_name="chat"))
+            + "</div>",
+        )
+
+    greetings_card = ui.card(
+        "The two messages Jeli posts on its own",
+        '<div class="rows">'
+        + _row("Hello", "Posted once in the group, to introduce Jeli to the cohort.", "")
+        + greeting_form("hello", "Post the hello", HELLO_TEXT, bool(sent.get(HELLO)))
+        + '<div style="height:16px"></div>'
+        + _row("Goodbye", "Posted once when the testing is over.", "")
+        + greeting_form("goodbye", "Post the goodbye", GOODBYE_TEXT, bool(sent.get(GOODBYE)))
+        + "</div>",
+        icon_name="chat",
+        description="Everywhere else Jeli only answers. These two it posts itself — once each, when you press.",
+    )
+    body = f'<div class="grid two">{members_card}{password_card}</div>{greetings_card}{log_card}'
     return _page(request, member, title="Team", subtitle="Who runs Jeli, and who did what", active="team", body=body, live=True)
 
 

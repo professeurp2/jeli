@@ -35,6 +35,7 @@ from app.answer import illustrator
 from app.answer.illustrator import asks_for_image
 from app.answer.voice import MAX_SPOKEN_CHARS, audio_mimetype, audio_seconds, asks_for_voice, sources, spoken, without_voice_request
 from app.config import Settings
+from app.control.admin import is_super_admin
 from app.control.guard import Guard, REPEAT_WINDOW, member_key as guard_member_key
 from app.models import Attachment, IncomingMessage, Reply
 
@@ -321,6 +322,9 @@ class Waha:
         self.silent_groups: set[str] = set()
         # Team members' numbers (digits only): only they can run admin commands.
         self.admin_numbers: list[str] = settings.team_number_list
+        # The one person who may steer Jeli in plain words (app/control/admin.py); "" : nobody.
+        self.super_admin_number: str = settings.super_admin_number
+        self.admin = None  # set at startup when a model and the settings are available
         # Picture URL to set at startup (e.g. a King Julien image). Empty: no change.
         self._bot_picture_url: str = settings.bot_picture_url
         # Spots and silences members who misuse Jeli (floods, repeats, manipulation attempts).
@@ -888,6 +892,14 @@ class Waha:
         # Admin commands bypass all rate limits, silence and suspension.
         if self._is_admin(message) and await self._try_admin_command(message):
             return
+        # The super admin steers Jeli in plain words, in private (app/control/admin.py).
+        if self.admin is not None and message.is_private and is_super_admin(
+            self.super_admin_number, message.author_id, message.author
+        ):
+            done = await self.admin.handle(message.text or "", actor="super admin")
+            if done:
+                await self.send_text(message.chat_id, done, reply_to=message.message_id)
+                return
         refusal = self.may_reply(message)
         if refusal is not None:
             await self._explain_refusal(message, refusal)

@@ -27,6 +27,7 @@ from app.answer.reminders import Reminders
 from app.answer.voice import Voice
 from app.answer.citations import ignored_keys, is_ignored
 from app.config import get_settings
+from app.control.admin import Admin
 from app.control.apply import apply
 from app.control.guard import Guard
 from app.control.runtime import Runtime
@@ -187,6 +188,8 @@ async def lifespan(app: FastAPI):
         state.whatsapp.voice = state.voice
         state.whatsapp.emotions = Emotions(state.light_llm) if state.llm else None  # reactions that fit the feeling
         state.whatsapp.store = store  # the stickers the groups use, so Jeli answers with theirs
+        # The super admin steers Jeli in plain words from WhatsApp; without a model, nothing happens.
+        state.whatsapp.admin = Admin(runtime, state.light_llm, state.activities) if state.light_llm else None
         if state.documents:
             state.whatsapp.on_document = state.documents.add
         if store:

@@ -80,6 +80,9 @@ class Settings(BaseSettings):
     # The team members' WhatsApp numbers, comma-separated. Personal data: set it on the server only.
     # These are the only people allowed to use admin commands (/silence, /resume).
     team_numbers: str = ""
+    # The one number that may steer Jeli in plain words from WhatsApp (app/control/admin.py).
+    # Personal data, and it decides who commands Jeli: set it on the server only, never in the repo.
+    super_admin_number: str = ""
     # Public URL of Jeli's WhatsApp profile picture (set once at startup via WAHA API). Empty: no change.
     bot_picture_url: str = ""
     # The community's organisers (names and/or numbers, comma-separated): their messages are
