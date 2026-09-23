@@ -551,6 +551,7 @@ def test_a_long_answer_never_makes_a_member_wait_more_than_the_budget():
         GEMINI_TTS_TIMEOUT,
         GEMINI_TTS_TOTAL_MAX_SECONDS,
         GEMINI_TTS_TOTAL_SECONDS,
+        MAX_SPOKEN_CHARS as LONGEST,
     )
 
     def budget(chars: int) -> tuple[float, float]:
@@ -563,6 +564,6 @@ def test_a_long_answer_never_makes_a_member_wait_more_than_the_budget():
     attempt, total = budget(525)  # the recap of that morning
     assert 35 <= attempt <= 45 and total <= GEMINI_TTS_TOTAL_MAX_SECONDS
     # Even the longest voice note Jeli will ever send stays within the budget.
-    assert budget(MAX_SPOKEN_CHARS)[1] <= GEMINI_TTS_TOTAL_MAX_SECONDS
+    assert budget(LONGEST)[1] <= GEMINI_TTS_TOTAL_MAX_SECONDS
     # A short answer is still given a sensible minimum.
     assert budget(80)[1] == GEMINI_TTS_TOTAL_SECONDS
