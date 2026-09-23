@@ -20,6 +20,8 @@ from fastapi import HTTPException, Request
 log = logging.getLogger(__name__)
 
 SESSION_COOKIE = "jeli_session"
+VISITOR_COOKIE = "jeli_visitor"
+VISITOR_SECONDS = 24 * 3600
 SESSION_SECONDS = 7 * 24 * 3600
 SCRYPT = {"n": 2**14, "r": 8, "p": 1, "dklen": 32}
 FAILURES_ALLOWED = 5
@@ -128,6 +130,27 @@ class Auth:
 
     def csrf(self, session: str) -> str:
         return self._sign(f"csrf|{session}")[:32]
+
+    # --- Visitors -------------------------------------------------------------------------------
+    # A member of the groups looking at Jeli's public page. They prove nothing but their number,
+    # which Jeli already knows from the groups: the page is read-only and the chat is capped, so
+    # the worst a wrong number buys is a look at what the community already sees every day.
+
+    def new_visitor(self, number: str, name: str) -> str:
+        payload = f"{number}|{' '.join(name.split()).replace('|', ' ')[:40]}|{int(self.clock()) + VISITOR_SECONDS}"
+        return f"{payload}|{self._sign(payload)}"
+
+    def visitor(self, cookie: str | None) -> tuple[str, str] | None:
+        """(number, name) when the cookie is genuine and current, else None."""
+        if not cookie or cookie.count("|") != 3:
+            return None
+        payload, signature = cookie.rsplit("|", 1)
+        if not hmac.compare_digest(self._sign(payload), signature):
+            return None
+        number, name, expires = payload.split("|")
+        if not expires.isdigit() or int(expires) < self.clock():
+            return None
+        return number, name
 
 
 def client_address(request: Request) -> str:

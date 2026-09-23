@@ -516,6 +516,25 @@ class Store:
             "group_questions": [(row["at"], row["outcome"], row["question"]) for row in questions],
         }
 
+    async def member_by_number(self, digits: str) -> str | None:
+        """The name a number writes under in the groups, or None when Jeli has never seen it.
+
+        This is how a member proves who they are on Jeli's public page: not a password, but the
+        fact that Jeli has already heard them in the community.
+        """
+        if not digits:
+            return None
+        async with self._pool.connection() as conn:
+            row = await (
+                await conn.execute(
+                    "select author, count(*) as n from jeli.messages "
+                    "where regexp_replace(split_part(split_part(author_id, '@', 1), ':', 1), '\\D', '', 'g') = %s "
+                    "group by author order by n desc limit 1",
+                    (digits,),
+                )
+            ).fetchone()
+        return row["author"] if row else None
+
     async def chunks_missing_gemini(self, limit: int = 100) -> list[dict]:
         """Passages kept while Google was unreachable: they have the local vector, not Gemini's."""
         async with self._pool.connection() as conn:

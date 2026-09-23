@@ -271,6 +271,10 @@ def login_page(error: str = "", next_path: str = "/dashboard") -> str:
 
 
 CSS = """
+/* Jeli's public page (app/web/public.py): the same look as the dashboard, one readable column. */
+.public { max-width: 720px; margin: 0 auto; padding: 32px 16px 64px; display: grid; gap: 18px; }
+.public .card { margin: 0; }
+.public .wa-chat { min-height: 220px; max-height: 420px; overflow-y: auto; }
 :root {
   color-scheme: light;
   --page: #f5f4f0; --surface: #ffffff; --surface-2: #faf9f6; --border: #e6e3db; --border-strong: #d6d2c7;

@@ -39,7 +39,7 @@ from app.kb.local_embeddings import LocalEmbedder
 from app.kb.store import Store
 from app.models import IncomingMessage
 from app.system_certificates import use_system_certificates
-from app.web import pages
+from app.web import pages, public
 from app.web.auth import Auth
 
 
@@ -222,6 +222,7 @@ app = FastAPI(title="Jeli", lifespan=lifespan, docs_url=None, redoc_url=None, op
 app.include_router(whatsapp_waha.router)
 app.include_router(telegram.router)
 app.include_router(pages.router)
+app.include_router(public.router)
 app.add_exception_handler(pages.NoKnowledgeBase, pages.no_knowledge_base)
 
 
