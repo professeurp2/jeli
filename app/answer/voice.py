@@ -33,7 +33,9 @@ log = logging.getLogger(__name__)
 # after 1.5 s, then streamed in real time (32 s of speech in 34 s); its quota is not the 10-a-day one
 # of the TTS models below. Word for word on French texts, a question read and not answered — but a
 # French text full of English names was once said in English: hence second, told the language.
-LIVE_VOICE_MODELS = ["gemini-3.1-flash-live-preview", "gemini-2.5-flash-native-audio-latest"]
+# The Live API's own family: measured on AI Studio on 23 Sep, its requests per day are unlimited —
+# only tokens per minute are capped. It is the one voice that cannot run out.
+LIVE_VOICE_MODELS = ["gemini-3.8-live", "gemini-3.1-flash-live-preview", "gemini-2.5-flash-native-audio-latest"]
 LIVE_MAX_CHARS = 900  # about a minute of speech; longer answers go to the faster TTS below
 LIVE_FIRST_AUDIO_SECONDS = 8.0
 CHARS_PER_SECOND = 15  # measured: 14–17 characters of French speech per second
@@ -73,7 +75,15 @@ HUMAN_DELIVERY = (
 # The voices tried before the backup voice (edge-tts), as the team chose on the dashboard: all the
 # natural ones in turn, one of them, or none (the backup voice only: it spares the Gemini quota).
 VOICE_ENGINES = {"auto": ("natural", "live"), "natural": ("natural",), "live": ("live",), "backup": ()}
-GEMINI_TTS_MODELS = ["gemini-3.1-flash-tts-preview", "gemini-2.5-flash-preview-tts"]
+# Each speech model has its own free daily quota per key (about 10), so a model added here is
+# quota added, not quota shared. Measured on the key on 23 Sep: the two 3.8 voices answered in
+# 2.0 and 2.5 s and were not in this list — 320 natural voice notes a day became 640.
+GEMINI_TTS_MODELS = [
+    "gemini-3.8-flash-tts",
+    "gemini-3.1-flash-tts-preview",
+    "gemini-3.8-flash-lite-tts",
+    "gemini-2.5-flash-preview-tts",
+]
 GEMINI_TTS_MODEL = GEMINI_TTS_MODELS[0]
 GEMINI_TTS_VOICES = {"fr": "Aoede", "en": "Aoede"}  # warm, expressive multilingual voice
 GEMINI_TTS_TIMEOUT = 12.0  # per attempt, plus the time to say the text (a longer text takes longer)

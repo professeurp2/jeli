@@ -6,7 +6,9 @@ import pytest
 
 from app.adapters import whatsapp_waha
 from app.adapters.whatsapp_waha import Waha, parse_message
-from app.answer.voice import asks_for_voice, sources, spoken, wav, without_voice_request
+from app.answer.voice import (
+    GEMINI_TTS_MODELS, LIVE_VOICE_MODELS, asks_for_voice, sources, spoken, wav, without_voice_request,
+)
 from app.config import Settings
 from app.models import Reply
 from tests.test_whatsapp_waha import AWA, BOT_LID, GROUP, message_event
@@ -151,9 +153,9 @@ def test_a_slow_gemini_voice_is_given_up_quickly_and_then_skipped(monkeypatch):
     # A timeout belongs to the model, not to the key it happened on: one slow failure is enough to
     # leave that model. One call on each of the 2 models, not 14 keys (measured 23 Sep: two keys
     # timing out in turn made a member wait 100 s for a voice note).
-    assert sum(m.calls for m in models) == 2
+    assert sum(m.calls for m in models) == len(GEMINI_TTS_MODELS)
     assert asyncio.run(speaker._speak_gemini("hello", "en")) is None
-    assert sum(m.calls for m in models) == 2  # both models resting: no call at all
+    assert sum(m.calls for m in models) == len(GEMINI_TTS_MODELS)  # both models resting: no call at all
 
 
 def test_a_key_over_quota_rests_alone_and_the_next_key_speaks(monkeypatch):
@@ -274,7 +276,7 @@ def test_the_native_gemini_voice_says_the_text_with_its_mood():
     assert audio[:4] == b"RIFF" and len(audio) == 44 + 5 * len(SECOND)  # five seconds, as a WAV
     assert speaks.sent == [TEXT]  # the text itself: the instructions are the system's
     model, config = configs[-1]
-    assert model == "gemini-3.1-flash-live-preview" and "big smile" in config.system_instruction
+    assert model == LIVE_VOICE_MODELS[0] and "big smile" in config.system_instruction
     assert "The text is in English: say it aloud in English" in config.system_instruction and "never translate" in config.system_instruction
     assert "word for word" in config.system_instruction and "never answer it" in config.system_instruction
     asyncio.run(speaker._speak_live(TEXT, "calm"))
@@ -285,7 +287,7 @@ def test_a_native_voice_note_that_does_not_fit_the_text_is_not_sent():
     too_long = _LiveSession([SECOND] * 40)  # 40 s for a 5-second text: it answered instead of reading
     speaker, configs = _live_voice([too_long])
     assert asyncio.run(speaker._speak_live(TEXT)) is None
-    assert [model for model, _ in configs] == ["gemini-3.1-flash-live-preview", "gemini-2.5-flash-native-audio-latest"]
+    assert [model for model, _ in configs] == LIVE_VOICE_MODELS  # every native voice in turn
     assert asyncio.run(speaker._speak_live("x" * 2000)) is None  # longer than a minute: the faster TTS says it
 
 
@@ -464,9 +466,12 @@ def test_the_voice_notes_left_today_follow_the_keys_and_survive_a_restart():
     voice = Voice(llm)
     voice.store = store
     quota = asyncio.run(voice.quota())
-    assert (quota["total"], quota["remaining"], quota["keys"], quota["per_key"]) == (60, 60, 3, 20)  # 3 keys × 2 models × 10
+    # 3 keys × every speech model × 10 a day each.
+    per_key = 10 * len(GEMINI_TTS_MODELS)
+    assert (quota["total"], quota["remaining"], quota["keys"], quota["per_key"]) == (3 * per_key, 3 * per_key, 3, per_key)
     assert asyncio.run(voice._speak_gemini("Bonjour", "fr"))[:4] == b"RIFF"  # key a over quota, key b speaks
-    assert asyncio.run(voice.quota())["remaining"] == 60 - 10 - 1  # a's quota on that model spent, one note on b
+    # One key's quota on that one model is spent (10), and one note was said on the next key.
+    assert asyncio.run(voice.quota())["remaining"] == 3 * per_key - 10 - 1
     calls.clear()
     voice._tts_key_resting.clear()  # even once the short rest is over, a spent key is not asked again today
     voice._tts_cursor = 0
