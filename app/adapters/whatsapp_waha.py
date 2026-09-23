@@ -325,6 +325,9 @@ class Waha:
         # The one person who may steer Jeli in plain words (app/control/admin.py); "" : nobody.
         self.super_admin_number: str = settings.super_admin_number
         self.admin = None  # set at startup when a model and the settings are available
+        # Jeli's own WhatsApp ids, as WAHA reports them: needed to read a mention of itself in a
+        # message that did not arrive through a webhook (see remember_history).
+        self._me: dict = {}
         # Picture URL to set at startup (e.g. a King Julien image). Empty: no change.
         self._bot_picture_url: str = settings.bot_picture_url
         # Spots and silences members who misuse Jeli (floods, repeats, manipulation attempts).
@@ -396,7 +399,9 @@ class Waha:
         try:
             response = await self._http.get(f"/api/sessions/{self.session}")
             response.raise_for_status()
-            status = response.json().get("status")
+            session = response.json()
+            status = session.get("status")
+            self._me = session.get("me") or self._me
         except (httpx.HTTPError, ValueError) as error:
             log.error("Cannot read the session status from WAHA at %s: %r", self._http.base_url, error)
             return
@@ -749,6 +754,40 @@ class Waha:
             await self._answer_with_a_sticker(message, feeling)
         except Exception:
             log.exception("Could not react to message %s", message.message_id)
+
+    async def remember_history(self, chat_id: str, since: datetime, limit: int = 300) -> int:
+        """Read what a group said since `since` and remember it — without answering any of it.
+
+        Used after a restart or a crash (app/ingest/history.py). WhatsApp still holds the messages
+        WAHA could not deliver while Jeli was down; this is how the memory closes the gap. Nothing
+        here replies: these messages are hours old, and a bot that wakes up and answers a whole
+        morning at once is what gets a number restricted.
+        """
+        if self.ingest is None:
+            return 0
+        response = await self._http.get(
+            f"/api/{self.session}/chats/{httpx.URL(chat_id).raw_path.decode()}/messages",
+            params={
+                "limit": limit,
+                "downloadMedia": "false",
+                "filter.timestamp.gte": int(since.timestamp()),
+                "filter.fromMe": "false",
+            },
+        )
+        response.raise_for_status()
+        payloads = response.json() or []
+        me = self._me
+        remembered = 0
+        for payload in payloads:
+            message = parse_message({"event": "message", "payload": payload, "me": me}, self.bot_name)
+            if message is None or message.is_private:
+                continue  # private messages are a conversation, not the group's memory
+            try:
+                await self.ingest(message)
+                remembered += 1
+            except Exception:
+                log.warning("Could not remember an older message of %s", chat_id, exc_info=True)
+        return remembered
 
     async def send_sticker(self, chat_id: str, file_url: str, reply_to: str | None = None) -> None:
         """A sticker, by the URL our own WAHA serves it from. `convert` lets WAHA make the WebP."""
@@ -1254,6 +1293,8 @@ async def receive_webhook(
     if shared and (not adapter.groups or shared["chat_id"] in adapter.groups):
         background_tasks.add_task(adapter.keep_document, shared)
 
+    if event.get("me"):
+        adapter._me = event["me"]  # kept for the messages read back from history, which carry none
     message = parse_message(event, adapter.bot_name)
     # Acknowledge at once and handle in the background, so WAHA never times out and retries.
     if message and adapter.accepts(message) and adapter.first_delivery(message.message_id):

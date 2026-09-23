@@ -32,6 +32,7 @@ from app.control.apply import apply
 from app.control.guard import Guard
 from app.control.runtime import Runtime
 from app.control.setup import build_activities
+from app.ingest.history import catch_up
 from app.ingest.live import LiveIngestor
 from app.ingest.sessions import Sessions
 from app.kb.embeddings import Embedder
@@ -207,6 +208,21 @@ async def lifespan(app: FastAPI):
     runtime.listeners.append(lambda changed: apply(state, runtime))
     for activity in state.activities.values():
         activity.start()
+
+    async def close_the_gap() -> None:
+        """What the groups said while Jeli was restarting, redeploying or down (23 Sep: seven
+        hours). WhatsApp still has it; Jeli reads it back and remembers it, without answering."""
+        try:
+            added = await catch_up(state.whatsapp, store, runtime["groups"] or list(settings.whatsapp_groups))
+            if added:
+                memory = state.activities.get("memory")
+                if memory:
+                    memory.run_now("Jeli")  # index it now rather than at the next round
+        except Exception:
+            logging.getLogger(__name__).exception("Could not catch up on what was said while Jeli was away")
+
+    if state.whatsapp is not None and store is not None:
+        asyncio.create_task(close_the_gap())
     yield
     for activity in state.activities.values():
         await activity.close()

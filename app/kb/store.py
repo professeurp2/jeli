@@ -677,6 +677,18 @@ class Store:
             ).fetchone()
         return bool(row["live"])
 
+    async def latest_per_chat(self) -> dict[str, datetime]:
+        """The last live message Jeli holds in each group: where to pick the history back up after
+        a restart (app/ingest/history.py)."""
+        async with self._pool.connection() as conn:
+            rows = await (
+                await conn.execute(
+                    "select chat_id, max(sent_at) as latest from jeli.messages "
+                    "where source = 'whatsapp_live' group by chat_id"
+                )
+            ).fetchall()
+        return {row["chat_id"]: row["latest"] for row in rows}
+
     async def latest_message_at(self) -> datetime | None:
         """The last group message Jeli knows: how far its memory of the groups goes."""
         async with self._pool.connection() as conn:
