@@ -1618,7 +1618,13 @@ async def settings_page(request: Request, member: Member) -> HTMLResponse:
         + _row("At most, per group and per hour", "Jeli speaks uninvited rarely, to stay discreet.", number("duplicate_replies_per_hour", 1, 20) + '<span class="muted small">times</span>')
     )
     images = (
-        _row("Generate images on request", "When a member asks for an image, diagram or illustration, Jeli generates one with a high-quality AI engine and sends it inline.",
+        _row(
+            "Answer strong feelings with a sticker",
+            "When a member's message or sticker carries a clear feeling, Jeli answers with one of the "
+            "groups' own stickers — never a pack of its own, and at most a few times an hour per group.",
+            f'<label class="check"><input type="checkbox" name="enabled_stickers"{" checked" if runtime["enabled.stickers"] else ""}> On</label>',
+        )
+        + _row("Generate images on request", "When a member asks for an image, diagram or illustration, Jeli generates one with a high-quality AI engine and sends it inline.",
              f'<label class="check"><input type="checkbox" name="enabled_images"{" checked" if runtime["enabled.images"] else ""}> On</label>')
         + _row("Suggest images proactively", "After a rich answer (statistics, deadlines, comparisons…), Jeli decides whether a visual would help and offers one automatically.",
                f'<label class="check"><input type="checkbox" name="enabled_proactive_images"{" checked" if runtime["enabled.proactive_images"] else ""}> On</label>')
@@ -1691,6 +1697,7 @@ SETTING_WORDS = {
     "duplicate_min_similarity": "how similar a repeated question must be",
     "duplicate_replies_per_hour": "earlier answers per hour",
     "enabled.images": "image generation on request",
+    "enabled.stickers": "stickers for strong feelings",
     "enabled.proactive_images": "proactive image suggestions",
     "proactive_image_rate": "proactive image rate",
     "voice_rate": "voice reply rate",
@@ -1717,6 +1724,7 @@ async def settings_change(request: Request, member: Change) -> RedirectResponse:
         "enabled.brief": bool(form.get("enabled_brief")),
         "duplicate_detection": bool(form.get("duplicate_detection")),
         "enabled.images": bool(form.get("enabled_images")),
+        "enabled.stickers": bool(form.get("enabled_stickers")),
         "enabled.proactive_images": bool(form.get("enabled_proactive_images")),
         "proactive_image_rate": str(int(str(form.get("proactive_image_rate", "100"))) / 100),
         "duplicate_min_similarity": POINTER_CARE.get(str(form.get("pointer_care")), 0.70),

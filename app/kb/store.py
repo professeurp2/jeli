@@ -516,6 +516,45 @@ class Store:
             "group_questions": [(row["at"], row["outcome"], row["question"]) for row in questions],
         }
 
+    # --- Stickers the groups use -------------------------------------------------------------------
+
+    async def remember_sticker(self, file_url: str, emotion: str, chat_id: str = "") -> None:
+        """A sticker seen in a group, with the feeling the model read in it. Jeli answers with the
+        group's own stickers rather than a pack of its own: it speaks their visual language."""
+        async with self._pool.connection() as conn:
+            await conn.execute(
+                "insert into jeli.stickers (file_url, emotion, chat_id) values (%s, %s, %s) "
+                "on conflict (file_url) do update set emotion = excluded.emotion",
+                (file_url, emotion, chat_id),
+            )
+
+    async def pick_sticker(self, emotion: str) -> str | None:
+        """A sticker that says this feeling — the one used longest ago, so Jeli does not repeat
+        itself. None when the groups have never used one for it."""
+        async with self._pool.connection() as conn, conn.transaction():
+            row = await (
+                await conn.execute(
+                    "select file_url from jeli.stickers where emotion = %s "
+                    "order by used_at nulls first, times_used limit 1",
+                    (emotion,),
+                )
+            ).fetchone()
+            if not row:
+                return None
+            await conn.execute(
+                "update jeli.stickers set used_at = now(), times_used = times_used + 1 where file_url = %s",
+                (row["file_url"],),
+            )
+        return row["file_url"]
+
+    async def sticker_count(self) -> dict[str, int]:
+        """How many stickers Jeli knows, per feeling — for the dashboard."""
+        async with self._pool.connection() as conn:
+            rows = await (
+                await conn.execute("select emotion, count(*) as n from jeli.stickers group by emotion order by n desc")
+            ).fetchall()
+        return {row["emotion"]: row["n"] for row in rows}
+
     # --- Reminders members asked for ---------------------------------------------------------------
 
     async def add_reminder(self, *, platform: str, chat_id: str, message_id: str, member_key: str, member_id: str,

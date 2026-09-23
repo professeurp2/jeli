@@ -298,7 +298,7 @@ def test_gemini_voices_come_first_and_the_fallback_voice_last(monkeypatch):
         return audio
 
     rewritten_in = []
-    monkeypatch.setattr(speaker, "_rewrite", lambda text, language: rewritten_in.append(language) or _done((text, "joyful")))
+    monkeypatch.setattr(speaker, "_rewrite", lambda text, language, acted=True: rewritten_in.append(language) or _done((text, "joyful")))
     monkeypatch.setattr(speaker, "_speak_gemini", lambda text, language, mood: engine(("tts", language, mood), b"RIFF-tts"))
     monkeypatch.setattr(speaker, "_speak_live", lambda text, mood, language: engine(("live", language, mood), b"RIFF-live"))
     monkeypatch.setattr(speaker, "_speak_edge", lambda text, language, mood: engine(("edge", language, mood), b"mp3"))
@@ -385,7 +385,7 @@ def test_the_voice_says_the_reply_in_the_language_the_model_chose(monkeypatch):
     speaker = Voice(_ScriptLLM(""))
     told = []
 
-    async def rewrite(text, language):
+    async def rewrite(text, language, acted=True):
         told.append(("rewrite", language))
         return text, "calm"
 
@@ -491,7 +491,7 @@ def test_the_team_chooses_which_voice_speaks_and_the_backup_always_takes_over(mo
             return audio
         return speak
 
-    async def rewrite(text, language):
+    async def rewrite(text, language, acted=True):
         return text, "calm"
 
     monkeypatch.setattr(speaker, "_rewrite", rewrite)

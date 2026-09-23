@@ -82,6 +82,13 @@ GROUP_REACTION_STRENGTH = 2
 GROUP_REACTION_EMOTIONS = {"sadness", "humor", "joy", "pride"}
 GROUP_FEELINGS_PER_DAY = 300
 REACTIONS_PER_HOUR = 10
+# Jeli answers with a sticker when the feeling is strong and the groups have one that says it. Only
+# their own stickers, only these feelings, and a few times an hour per chat: an emoji on a message
+# is a nod, a sticker is joining in, and a bot posting images all day is tiring — and the kind of
+# volume WhatsApp restricts.
+STICKER_STRENGTH = 3
+STICKER_EMOTIONS = {"joy", "humor", "pride", "sadness", "gratitude", "love", "encouragement"}
+STICKERS_PER_HOUR = 4
 # Images posted in a group (flyers, screenshots of a schedule) are described and remembered, so
 # that questions find them; at most this many a day, to spare the quota.
 GROUP_IMAGES_PER_DAY = 60
@@ -350,6 +357,10 @@ class Waha:
         # Jeli's own messages, to know which answer a reaction or a correction is about.
         self._sent: OrderedDict[str, tuple[str, str, str]] = OrderedDict()  # id → (chat, question, answer)
         self.reaction_limiter = SlidingWindowLimiter(REACTIONS_PER_HOUR, 3600)
+        self.sticker_limiter = SlidingWindowLimiter(STICKERS_PER_HOUR, 3600)
+        self.enabled_stickers: bool = True  # set from the dashboard (apply.py)
+        # The knowledge base, for the stickers the groups use (set at startup in app/main.py).
+        self.store = None
         self.feeling_limiter = SlidingWindowLimiter(GROUP_FEELINGS_PER_DAY, 86400)
         self.image_limiter = SlidingWindowLimiter(GROUP_IMAGES_PER_DAY, 86400)
         self._later: set[asyncio.Task] = set()
@@ -728,8 +739,43 @@ class Waha:
                 return
             await self.send_reaction(message.chat_id, message.message_id, feeling.reaction)
             log.info("Reacted %s to message %s (%s, strength %d)", feeling.reaction, message.message_id, feeling.emotion, feeling.strength)
+            if sticker and message.image_url and self.store is not None:
+                # The groups' own stickers, with what each one says: Jeli answers with theirs.
+                await self.store.remember_sticker(message.image_url, feeling.emotion, message.chat_id)
+            await self._answer_with_a_sticker(message, feeling)
         except Exception:
             log.exception("Could not react to message %s", message.message_id)
+
+    async def send_sticker(self, chat_id: str, file_url: str, reply_to: str | None = None) -> None:
+        """A sticker, by the URL our own WAHA serves it from. `convert` lets WAHA make the WebP."""
+        payload: dict[str, Any] = {"chatId": chat_id, "file": {"url": file_url}, "convert": True}
+        if reply_to:
+            payload["reply_to"] = reply_to
+        await self._post("/api/sendSticker", payload)
+
+    async def _answer_with_a_sticker(self, message: IncomingMessage, feeling) -> None:
+        """A sticker back, when a member's own sticker or a strong feeling calls for one.
+
+        An emoji on their message is a nod; a sticker is Jeli joining in. It only ever sends one
+        the groups themselves use, and only a few times an hour per chat: a bot that posts images
+        all day is both tiring and the kind of volume WhatsApp restricts."""
+        if (
+            not self.enabled_stickers
+            or self.store is None
+            or feeling.strength < STICKER_STRENGTH
+            or feeling.emotion not in STICKER_EMOTIONS
+            or not self.sticker_limiter.allow(message.chat_id)
+        ):
+            return
+        file_url = await self.store.pick_sticker(feeling.emotion)
+        if not file_url:
+            return  # the groups have never used one for this feeling: nothing to borrow
+        try:
+            await self.spacer.wait_turn()
+            await self.send_sticker(message.chat_id, file_url, reply_to=message.message_id)
+            log.info("Answered message %s with a %s sticker", message.message_id, feeling.emotion)
+        except Exception:
+            log.warning("Could not send a sticker to %s", message.chat_id, exc_info=True)
 
     def _remember_image(self, message: IncomingMessage) -> None:
         """Describe an image posted in a group and remember the description with its caption, so

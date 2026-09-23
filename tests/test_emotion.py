@@ -139,3 +139,92 @@ def test_no_reaction_to_a_plain_question_in_a_silent_group_or_from_a_blocked_mem
     waha.silent_groups, waha.guard = set(), Guard()
     asyncio.run(waha.handle(parse_message(message_event("Merci Jeli 😭❤️", chat_id=AWA, message_id="m3"), "Jeli")))
     assert reactions(waha) == []
+
+
+def _feeling(emotion, strength, reaction="😂"):
+    from app.answer.emotion import Feeling
+
+    return Feeling(emotion=emotion, strength=strength, reaction=reaction, is_bad_news=False)
+
+
+class Stickers:
+    """The groups' own stickers, as the knowledge base keeps them."""
+
+    def __init__(self, known=None):
+        self.known = dict(known or {})
+        self.remembered = []
+        self.picked = []
+
+    async def remember_sticker(self, file_url, emotion, chat_id=""):
+        self.remembered.append((file_url, emotion, chat_id))
+        self.known.setdefault(emotion, file_url)
+
+    async def pick_sticker(self, emotion):
+        self.picked.append(emotion)
+        return self.known.get(emotion)
+
+
+def _channel(store, **kw):
+    from app.adapters.whatsapp_waha import Waha
+    from app.config import Settings
+
+    async def respond(message):
+        return None
+
+    waha = Waha(Settings(waha_url="http://waha.test", waha_api_key="k"), respond)
+    waha.store = store
+    for name, value in kw.items():
+        setattr(waha, name, value)
+    return waha
+
+
+def test_jeli_answers_a_strong_feeling_with_one_of_the_groups_own_stickers():
+    import asyncio
+
+    from tests.test_whatsapp_waha import AWA, message_event
+    from app.adapters.whatsapp_waha import parse_message
+
+    sent = []
+    store = Stickers({"humor": "http://waha.test/api/files/laugh.webp"})
+    waha = _channel(store)
+    waha.send_sticker = lambda chat, url, reply_to=None: sent.append((chat, url, reply_to))
+
+    async def no_wait():
+        return None
+
+    waha.spacer.wait_turn = no_wait
+    message = parse_message(message_event("😂😂", chat_id=AWA), "Jeli")
+    asyncio.run(waha._answer_with_a_sticker(message, _feeling("humor", 4)))
+    assert sent and sent[0][1] == "http://waha.test/api/files/laugh.webp"
+    # A faint feeling, or one the groups have no sticker for, gets nothing.
+    sent.clear()
+    asyncio.run(waha._answer_with_a_sticker(message, _feeling("humor", 1)))
+    asyncio.run(waha._answer_with_a_sticker(message, _feeling("worry", 5)))
+    asyncio.run(waha._answer_with_a_sticker(message, _feeling("joy", 5)))  # known feeling, no sticker yet
+    assert sent == []
+
+
+def test_stickers_stay_rare_and_can_be_switched_off():
+    import asyncio
+
+    from app.adapters.whatsapp_waha import STICKERS_PER_HOUR
+    from tests.test_whatsapp_waha import AWA, message_event
+    from app.adapters.whatsapp_waha import parse_message
+
+    sent = []
+    store = Stickers({"humor": "http://waha.test/api/files/laugh.webp"})
+    waha = _channel(store)
+    waha.send_sticker = lambda chat, url, reply_to=None: sent.append(url)
+
+    async def no_wait():
+        return None
+
+    waha.spacer.wait_turn = no_wait
+    message = parse_message(message_event("😂", chat_id=AWA), "Jeli")
+    for _ in range(STICKERS_PER_HOUR + 3):
+        asyncio.run(waha._answer_with_a_sticker(message, _feeling("humor", 4)))
+    assert len(sent) == STICKERS_PER_HOUR  # a few an hour, then Jeli keeps quiet
+    sent.clear()
+    waha.enabled_stickers = False
+    asyncio.run(waha._answer_with_a_sticker(message, _feeling("humor", 4)))
+    assert sent == []

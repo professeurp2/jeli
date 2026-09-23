@@ -552,13 +552,33 @@ class Voice:
         The text as it is when the model cannot help, or when it lost a number or a date."""
         return (await self._rewrite(text, language))[0]
 
-    async def _rewrite(self, text: str, language: str) -> tuple[str, str]:
+    async def _can_act(self) -> bool:
+        """Whether a Gemini voice is likely to read this one: those act, the backup voice reads.
+        Without a key, with the backup voice chosen, or with the day's natural voices spent, the
+        feeling has to be written into the words instead."""
+        if self.engine == "backup" or not getattr(self.llm, "_clients", None):
+            return False
+        try:
+            return (await self.quota())["remaining"] > 0 if self.store is not None else True
+        except Exception:  # the count must never stop a voice note
+            return True
+
+    async def _rewrite(self, text: str, language: str, acted: bool = True) -> tuple[str, str]:
         """The spoken version of an answer and its mood (see MOODS)."""
         if self.llm is None or len(text) < 15 or len(text) > SPEAK_REWRITE_MAX_CHARS:
             return text, DEFAULT_MOOD
         label = LANG_LABELS.get(language, "English")
         # Said in the request, not only in the system: the light models follow the request.
         prompt = f"Say this answer as a voice note, entirely in {label}, without a list:\n\n{text}"
+        if not acted:
+            # The backup voice reads: it changes pace and pitch with the mood, but it cannot smile,
+            # laugh or lean on a word. So the warmth has to be in the words themselves — which is
+            # how a person writing a voice note to a friend does it anyway.
+            prompt += (
+                "\n\nThe voice reading this cannot act: it cannot smile, laugh or stress a word. "
+                "Carry the feeling in the words instead — how you would open, an aside, a short "
+                "sentence where it lands. Never describe the feeling, never add stage directions."
+            )
         mood = DEFAULT_MOOD
         self.direction = ""
         written = set(_NUMBER.findall(text))
@@ -604,7 +624,7 @@ class Voice:
         # mistake an answer mixing French and English names (a rewrite or a voice told the wrong
         # language translates, or mixes, the answer). Guessed from the words only as a last resort.
         spoken_language = language if language in LANG_LABELS else detect_language(text)
-        said, mood = await self._rewrite(text, spoken_language)
+        said, mood = await self._rewrite(text, spoken_language, acted=await self._can_act())
         speech = for_speech(said)
         voices = {
             "natural": lambda: self._speak_gemini(speech, spoken_language, mood),

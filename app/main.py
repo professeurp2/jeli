@@ -186,6 +186,7 @@ async def lifespan(app: FastAPI):
         state.whatsapp.warm = state.responder.warm
         state.whatsapp.voice = state.voice
         state.whatsapp.emotions = Emotions(state.light_llm) if state.llm else None  # reactions that fit the feeling
+        state.whatsapp.store = store  # the stickers the groups use, so Jeli answers with theirs
         if state.documents:
             state.whatsapp.on_document = state.documents.add
         if store:

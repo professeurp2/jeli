@@ -87,6 +87,8 @@ FIELDS = {
         Field("enabled.team_report", "bool", lambda s: bool(s.team_report_time)),
         # Image generation (Imagen 3 primary, Pollinations.ai fallback).
         Field("enabled.images", "bool", lambda s: True),
+        # Jeli answers a strong feeling with one of the groups' own stickers.
+        Field("enabled.stickers", "bool", lambda s: True),
         Field("enabled.proactive_images", "bool", lambda s: True),
         # Fraction of eligible answers that trigger a proactive image offer (0–1).
         Field("proactive_image_rate", "float", lambda s: 1.0, 0.0, 1.0),

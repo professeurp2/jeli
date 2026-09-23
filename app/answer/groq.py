@@ -39,12 +39,52 @@ MODELS_KEPT = 2
 REST_SECONDS = 120
 # The spare engine must not make the member wait longer than Gemini already has.
 TIMEOUT_SECONDS = 8
-# Gemini reads a million tokens; a free Groq model does not. Measured 22 Sep: a day in the groups
-# is 742 messages and about 142,000 characters, which Groq refuses outright. Past this, the call is
-# declined here rather than sent to be rejected — the caller can then ask for less (app/answer/catchup.py).
-MAX_PROMPT_CHARS = 60_000
+# Gemini reads a million tokens; a free model does not. Rather than guess each model's limit — it
+# differs per model and changes without notice — the source is sent, and shortened only when the
+# server says it is too big. This ceiling is just a sanity bound, so a runaway prompt is not posted.
+MAX_PROMPT_CHARS = 200_000
+SHRINK_ROUNDS = 4
+SHRINK_FACTOR = 0.5
+# How the server says "too big", whatever the wording it uses that day.
+TOO_BIG_WORDS = ("too large", "too long", "context_length", "context length", "maximum context", "reduce the length")
+# The head holds the instructions and the oldest context; the tail holds what is most recent, which
+# is what members ask about. The middle is what goes.
+KEEP_HEAD = 0.3
+OMITTED = "\n\n[… {n:,} characters from the middle are missing: this is only part of the source …]\n\n"
+# Said to the model when it reads only part, so the answer admits it. Whatever the question was —
+# a catch-up, a recap, a document — the honesty travels with the answer instead of being bolted on
+# by each caller.
+TOLD_PART = (
+    "\n\nIMPORTANT: you were given only part of the source; its middle was left out. Answer with "
+    "what you have, and say so plainly in one short sentence, in the language you are answering in."
+)
 
 Schema = TypeVar("Schema", bound=BaseModel)
+
+
+def _as_text(contents: Any) -> str | None:
+    """The prompt as plain text, or None when it carries something Groq cannot read.
+
+    Gemini takes a list of parts, and several of Jeli's steps build one even when every part is
+    text (the emotions, for instance, send ["Message: …"]). Refusing those would quietly cost the
+    spare engine a feature per caller — measured 23 Sep: "not a text prompt" on every message."""
+    if isinstance(contents, str):
+        return contents
+    if isinstance(contents, (list, tuple)) and contents and all(isinstance(part, str) for part in contents):
+        return "\n\n".join(contents)
+    return None
+
+
+def _shorten(text: str, budget: int) -> str:
+    """`text` cut down to `budget` characters, keeping its beginning and its end."""
+    if len(text) <= budget or budget <= 0:
+        return text
+    # The note about the gap counts against the budget: the result really is `budget` long, so a
+    # halving is a halving and the shrinking cannot stall (measured: it added 88 characters back).
+    room = max(1, budget - len(OMITTED.format(n=len(text))))
+    head = int(room * KEEP_HEAD)
+    kept = text[:head] + OMITTED.format(n=len(text) - room) + text[len(text) - (room - head):]
+    return kept[:budget] if len(kept) > budget else kept
 
 
 class _Alive(BaseModel):
@@ -195,6 +235,43 @@ class Groq:
             f"It must follow this JSON schema exactly, including every required field:\n{shape}"
         )
 
+    async def _ask(self, client, model, text, schema, system, temperature, timeout, partial):
+        """One call. Returns ("ok", answer), ("too big", None) or ("failed", None)."""
+        instructions = self._instructions(schema, system) + (TOLD_PART if partial else "")
+        body = {
+            "model": model,
+            "messages": [
+                {"role": "system", "content": instructions},
+                {"role": "user", "content": text},
+            ],
+            "temperature": temperature,
+            "response_format": {"type": "json_object"},
+        }
+        try:
+            response = await client.post(
+                URL, json=body, headers={"Authorization": f"Bearer {self.api_key}"}, timeout=timeout
+            )
+        except (httpx.HTTPError, TimeoutError) as error:
+            log.warning("Groq %s failed (%s), resting", model, type(error).__name__)
+            self._resting_until[model] = self._clock() + REST_SECONDS
+            return "failed", None
+        if response.status_code >= 400:
+            said = response.text[:300]
+            if response.status_code == 413 or any(word in said.lower() for word in TOO_BIG_WORDS):
+                log.info("Groq %s: this source is more than it takes, shortening", model)
+                return "too big", None  # the model is fine: the prompt was not
+            log.warning("Groq %s refused (%d): %s", model, response.status_code, said)
+            self._resting_until[model] = self._clock() + REST_SECONDS
+            return "failed", None
+        try:
+            answer = schema.model_validate_json(response.json()["choices"][0]["message"]["content"])
+        except (ValidationError, ValueError, KeyError, IndexError) as error:
+            log.warning("Groq %s returned unusable output (%s), resting", model, type(error).__name__)
+            self._resting_until[model] = self._clock() + REST_SECONDS
+            return "failed", None
+        self._resting_until[model] = 0.0
+        return "ok", answer
+
     async def generate(
         self,
         contents: Any,
@@ -203,42 +280,47 @@ class Groq:
         timeout: float = TIMEOUT_SECONDS,
         temperature: float = 0.2,
     ) -> Schema:
+        """An answer, whatever the size of what it is asked to read.
+
+        Gemini reads a million tokens; a free model does not, and every part of Jeli that hands it
+        a long source — a day of messages, a session transcript, a document — would otherwise fail
+        the same way. So the source is shortened until it fits, keeping the beginning and the end,
+        and the model is told it is reading only part of it and asked to say so in its answer.
+        Nothing here knows what a catch-up or a recap is: it works for all of them at once.
+        """
         if not self.available:
             raise BackupUnavailable("no Groq key")
-        if not isinstance(contents, str):
+        text = _as_text(contents)
+        if text is None:
             # Recordings, pictures and stickers: Groq is not given them.
             raise BackupUnavailable("not a text prompt")
-        if len(contents) > MAX_PROMPT_CHARS:
-            raise BackupUnavailable(f"prompt too large for the spare engine ({len(contents):,} characters)")
-        body = {
-            "messages": [
-                {"role": "system", "content": self._instructions(schema, system)},
-                {"role": "user", "content": contents},
-            ],
-            "temperature": temperature,
-            "response_format": {"type": "json_object"},
-        }
-        headers = {"Authorization": f"Bearer {self.api_key}"}
         client = self._client or httpx.AsyncClient()
+        partial = False
+        if len(text) > MAX_PROMPT_CHARS:  # a ceiling, before the server is even asked
+            text, partial = _shorten(text, MAX_PROMPT_CHARS), True
         try:
-            for model in self._ready():
-                try:
-                    response = await client.post(URL, json={**body, "model": model}, headers=headers, timeout=timeout)
-                    if response.status_code >= 400:
-                        log.warning(
-                            "Groq %s refused (%d): %s", model, response.status_code, response.text[:300]
+            for _ in range(SHRINK_ROUNDS + 1):
+                too_big = False
+                for model in self._ready():
+                    outcome, answer = await self._ask(
+                        client, model, text, schema, system, temperature, timeout, partial
+                    )
+                    if outcome == "ok":
+                        self.used += 1
+                        log.info(
+                            "Groq %s answered where Gemini could not (%d times so far)%s",
+                            model, self.used, ", from part of the source" if partial else "",
                         )
-                        self._resting_until[model] = self._clock() + REST_SECONDS
-                        continue
-                    text = response.json()["choices"][0]["message"]["content"]
-                    result = schema.model_validate_json(text)
-                    self.used += 1
-                    self._resting_until[model] = 0.0
-                    log.info("Groq %s answered where Gemini could not (%d times so far)", model, self.used)
-                    return result
-                except (httpx.HTTPError, TimeoutError, ValidationError, ValueError, KeyError, IndexError) as error:
-                    log.warning("Groq %s failed (%s), resting", model, type(error).__name__)
-                    self._resting_until[model] = self._clock() + REST_SECONDS
+                        return answer
+                    if outcome == "too big":
+                        too_big = True
+                        break
+                if not too_big:
+                    break  # the models failed for their own reasons: shortening would not help
+                shorter = _shorten(text, int(len(text) * SHRINK_FACTOR))
+                if len(shorter) >= len(text):
+                    break
+                text, partial = shorter, True
         finally:
             if self._client is None:
                 await client.aclose()

@@ -261,3 +261,49 @@ def test_the_spare_engine_gets_the_time_the_caller_allowed():
 
     asyncio.run(llm.generate("a long catch-up prompt", GeneratedAnswer, timeout=30))
     assert seen["timeout"] == 30
+
+
+def test_a_source_too_big_is_shortened_until_it_fits_whatever_the_feature():
+    """Measured 23 Sep at 00:13: a session recap was 63,582 characters and the spare engine
+    refused it. A catch-up, a recap or a document must not each need their own patch."""
+    import json
+
+    seen = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.read())
+        said = body["messages"][1]["content"]
+        seen.append((len(said), body["messages"][0]["content"]))
+        if len(said) > 20_000:
+            return httpx.Response(413, json={"error": {"message": "Request too large for model"}})
+        return reply('{"answered": true, "answer": "ok"}')
+
+    made = engine(handler, models=("first",))
+    assert asyncio.run(made.generate("x" * 80_000, Shape)).answer == "ok"
+    assert [length for length, _ in seen] == [80_000, 40_000, 20_000]  # halved until accepted, exactly
+    # It was told it is reading only part, so its answer says so — whatever the caller asked for.
+    assert "only part" in seen[-1][1]
+    assert "only part" not in seen[0][1]  # nothing claimed while it had the whole thing
+
+
+def test_shortening_keeps_the_beginning_and_the_end():
+    from app.answer.groq import _shorten
+
+    text = "START" + ("m" * 1000) + "END"
+    short = _shorten(text, 200)
+    assert short.startswith("START") and short.endswith("END") and len(short) < len(text)
+    assert "are missing" in short  # the gap is marked where it happens
+    assert _shorten("short enough", 500) == "short enough"
+
+
+def test_a_model_failing_for_its_own_reasons_is_not_shortened_at():
+    calls = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(1)
+        return httpx.Response(500, json={"error": {"message": "internal"}})
+
+    made = engine(handler, models=("first",))
+    with pytest.raises(BackupUnavailable):
+        asyncio.run(made.generate("x" * 80_000, Shape))
+    assert len(calls) == 1  # tried once, rested — shortening would not have helped

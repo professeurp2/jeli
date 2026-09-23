@@ -51,6 +51,20 @@ create table if not exists jeli.chunks (
 
 create index if not exists chunks_embedding on jeli.chunks using hnsw (embedding extensions.vector_cosine_ops);
 create index if not exists chunks_embedding_backup on jeli.chunks using hnsw (embedding_backup extensions.vector_cosine_ops);
+
+-- Stickers members use in the groups, with the feeling the model read in each one. Jeli answers a
+-- sticker with a sticker, taken from the group's own collection: it never invents one, and it
+-- speaks the community's visual language rather than a generic pack (app/adapters/whatsapp_waha.py).
+create table if not exists jeli.stickers (
+    file_url   text primary key,
+    emotion    text not null,
+    chat_id    text not null default '',
+    seen_at    timestamptz not null default now(),
+    used_at    timestamptz,
+    times_used int not null default 0
+);
+create index if not exists stickers_emotion on jeli.stickers (emotion, used_at nulls first);
+
 create index if not exists chunks_search on jeli.chunks using gin (search);
 create index if not exists chunks_chat_started_at on jeli.chunks (chat_id, started_at);
 
