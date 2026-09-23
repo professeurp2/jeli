@@ -47,7 +47,14 @@ class Settings(BaseSettings):
     # reminders, deadline finding, documents…). Measured on AI Studio (22 Sep, free tier, per key and
     # day): gemini-3.6-flash allows 20 requests, the Flash-Lite models 500 — used first for every call,
     # the 20 were gone by the morning.
-    light_models: str = "gemini-3.1-flash-lite,gemini-3.5-flash-lite,gemini-flash-lite-latest,gemini-3-flash-preview"
+    # Measured 23 Sep at 17:30, on a key, one model at a time: gemini-3.1-flash-lite answered 503
+    # "this model is currently experiencing high demand", 3.5-flash-lite and flash-lite-latest did
+    # not answer at all within 20 s, and gemini-3.6-flash answered in 2.9 s. Every model of this
+    # tier was down, so the rotation was working perfectly — it was rotating between dead models,
+    # and every call fell through to the spare engine, which burned 197,831 of its 200,000 free
+    # tokens for the day by 17:16. The best model closes the list: 20 a day per key over 16 keys is
+    # a real reserve, and it is only reached when the cheap ones are genuinely unavailable.
+    light_models: str = "gemini-3.1-flash-lite,gemini-3.5-flash-lite,gemini-flash-lite-latest,gemini-3-flash-preview,gemini-3.6-flash"
     # Groq, the spare engine: a free key from console.groq.com, used only for text answers when
     # every Gemini model has refused (22 Sep: "high demand" on all of them at once). Empty: off.
     groq_api_key: str = ""

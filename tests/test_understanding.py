@@ -295,7 +295,10 @@ def test_settings_give_the_light_models_most_of_the_work():
 
     settings = Settings(_env_file=None)
     assert settings.answer_models[0] == "gemini-3.6-flash"  # the answers members read
-    assert "gemini-3.6-flash" not in settings.light_model_list  # 20 a day per key: kept for the answers
+    # The cheap models do the work: the best one is last, reached only when they are all down
+    # (23 Sep at 17:30, they were — and every call fell through to the spare engine instead).
+    assert settings.light_model_list[0] != "gemini-3.6-flash"
+    assert settings.light_model_list[-1] == "gemini-3.6-flash"
     assert settings.transcription_model_list[0] == "gemini-3.5-flash-lite"
 
 

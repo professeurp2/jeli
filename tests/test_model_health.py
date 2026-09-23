@@ -107,3 +107,18 @@ def test_a_word_in_the_groups_about_an_hour_before_a_session_once():
     assert asyncio.run(post_event_reminders(store, post, ["g@g.us"], "en", now)) == 1
     assert posted == [("g@g.us", "⏰ *Open Hour with Gift* starts in about an hour — at 15:00 CAT / 14:00 WAT / 16:00 EAT.")]
     assert asyncio.run(post_event_reminders(store, post, ["g@g.us"], "en", now + timedelta(minutes=10))) == 0  # said once
+
+
+def test_every_tier_keeps_a_model_that_can_still_answer():
+    """Measured 23 Sep at 17:30: every model of the light tier was down at once — 503 "high demand"
+    or no answer at all in 20 s — so the rotation rotated between dead models and every call fell
+    through to the spare engine, which burned 197,831 of its 200,000 free tokens for the day."""
+    from app.config import Settings
+
+    settings = Settings()
+    best = settings.answer_models[0]
+    assert best in settings.light_model_list, "the light tier must end on a model that works"
+    assert settings.light_model_list[-1] == best, "and only reach it when the cheap ones cannot"
+    assert settings.light_model_list[0] != best, "the cheap models still come first"
+    # The transcription tier has one too.
+    assert best in settings.transcription_model_list
