@@ -431,3 +431,19 @@ def test_chart_axis_and_columns():
     assert svg.count('class="s1"') == 2 and svg.count('class="s2"') == 1 and ">7</text>" in svg
     assert "Sat 19 Sep: 7 questions — 5 answered, 2 couldn&#x27;t answer" in svg
     assert "No questions yet" in questions_chart(days, {})
+
+
+def test_the_engine_choice_is_really_saved_and_applied(client):
+    """Seen on 23 Sep: the dashboard showed "Spare only" and the memory still held "auto"."""
+    sign_in(client)
+    token = csrf_of(client.get("/dashboard/settings").text)
+    form = {
+        "csrf": token, "care": "careful", "bot_name": "Jeli", "pointer_care": "balanced", "duplicate_replies_per_hour": "2",
+        "whatsapp_user_limit": "4", "whatsapp_hourly_limit": "60", "whatsapp_min_send_interval_seconds": "4",
+        "member_daily_limit": "40", "answer_engine": "backup_only",
+    }
+    client.post("/dashboard/settings", data=form)
+    assert app.state.runtime["answer_engine"] == "backup_only"
+    assert client.fake_store.settings.get("answer_engine") == "backup_only"  # written down, not only in memory
+    page = client.get("/dashboard/settings").text
+    assert 'value="backup_only" checked' in page  # and shown back as chosen
