@@ -367,3 +367,18 @@ def test_every_tier_switches_at_the_same_moment():
     light = llm.with_models(["lite"])
     llm.engine = "backup_only"
     assert light.engine == "backup_only"
+
+
+def test_a_short_prompt_refused_is_a_refusal_not_a_size():
+    """Measured 23 Sep at 09:09: a 40-character test question was shortened five times because a
+    model's refusal happened to contain the words "too long"."""
+    tried = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        tried.append(1)
+        return httpx.Response(400, json={"error": {"message": "prompt is too long for this model"}})
+
+    made = engine(handler, models=("first",))
+    with pytest.raises(BackupUnavailable):
+        asyncio.run(made.generate("Reply with ok.", Shape))
+    assert len(tried) == 1  # refused once and rested, not shortened over and over

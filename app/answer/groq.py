@@ -45,8 +45,12 @@ TIMEOUT_SECONDS = 8
 MAX_PROMPT_CHARS = 200_000
 SHRINK_ROUNDS = 4
 SHRINK_FACTOR = 0.5
-# How the server says "too big", whatever the wording it uses that day.
+# How the server says "too big", whatever the wording it uses that day. Only consulted for a prompt
+# that could plausibly be too big: measured 23 Sep at 09:09, a 40-character test question was
+# shortened five times because a model's refusal happened to contain one of these words. A short
+# prompt refused is a refusal, not a size.
 TOO_BIG_WORDS = ("too large", "too long", "context_length", "context length", "maximum context", "reduce the length")
+SHRINK_FLOOR = 4_000
 # The head holds the instructions and the oldest context; the tail holds what is most recent, which
 # is what members ask about. The middle is what goes.
 KEEP_HEAD = 0.3
@@ -257,7 +261,8 @@ class Groq:
             return "failed", None
         if response.status_code >= 400:
             said = response.text[:300]
-            if response.status_code == 413 or any(word in said.lower() for word in TOO_BIG_WORDS):
+            too_big = response.status_code == 413 or any(word in said.lower() for word in TOO_BIG_WORDS)
+            if too_big and len(text) > SHRINK_FLOOR:
                 log.info("Groq %s: this source is more than it takes, shortening", model)
                 return "too big", None  # the model is fine: the prompt was not
             log.warning("Groq %s refused (%d): %s", model, response.status_code, said)
