@@ -162,3 +162,48 @@ def test_documents_shared_in_a_group_are_recognised():
     assert shared["filename"] == "UniPods Video Demo Guide.pdf" and shared["author"] == "Diane" and shared["caption"] == "Guide for the demo videos"
     image = {**event, "payload": {**event["payload"], "media": {**event["payload"]["media"], "filename": "photo.jpg"}}}
     assert parse_shared_document(image) is None
+
+
+TEAMS_TRANSCRIPT = """WEBVTT
+
+1
+00:00:03.120 --> 00:00:06.480
+<v Diane Uwase>Bonjour à toutes et à tous, on commence.</v>
+
+2
+00:00:06.480 --> 00:00:11.200
+<v Diane Uwase>La soumission du hackathon, c'est jeudi 24 septembre.</v>
+
+3
+00:00:11.900 --> 00:00:15.640
+<v Romeo Tovonantenaina>Est-ce que les tests ferment vendredi ?</v>
+
+4
+00:00:15.640 --> 00:00:18.000
+<v Diane Uwase>Oui, vendredi 25, dernier délai.</v>
+"""
+
+
+def test_a_teams_meeting_transcript_reads_as_a_conversation():
+    """Teams and Meet export WebVTT: three quarters of it is timing and markup, and a model given
+    it raw reads the clock instead of the words."""
+    from app.answer.documents import extension, read_pages, read_vtt
+
+    text = read_vtt(TEAMS_TRANSCRIPT)
+    assert "Diane Uwase: Bonjour à toutes et à tous, on commence." in text
+    assert "Romeo Tovonantenaina: Est-ce que les tests ferment vendredi ?" in text
+    # The timing, the cue numbers and the markup are gone.
+    assert "-->" not in text and "WEBVTT" not in text and "<v " not in text and "</v>" not in text
+    # Someone speaking twice in a row is one turn, not two.
+    assert text.count("Diane Uwase:") == 2
+    # And it arrives as a document like any other.
+    assert extension("Meeting Transcript.vtt") == ".vtt"
+    assert extension("x", "text/vtt") == ".vtt"
+    pages = read_pages(".vtt", TEAMS_TRANSCRIPT.encode())
+    assert pages and "jeudi 24 septembre" in pages[0]
+
+
+def test_a_transcript_shared_in_a_group_is_kept_like_any_document():
+    from app.adapters.whatsapp_waha import DOCUMENT_TYPES
+
+    assert ".vtt" in DOCUMENT_TYPES

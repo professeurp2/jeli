@@ -70,7 +70,9 @@ _YES = re.compile(
 # Pending image offers expire after this many seconds (one follow-up window).
 _IMAGE_OFFER_TTL = 300
 # Documents Jeli keeps when a member shares them in a group.
-DOCUMENT_TYPES = (".pdf", ".docx", ".txt", ".md")
+# .vtt: the transcript Teams and Meet export from a meeting — shared in a group, Jeli reads it
+# like any other document, and the meeting joins the community's memory (app/answer/documents.py).
+DOCUMENT_TYPES = (".pdf", ".docx", ".txt", ".md", ".vtt")
 MAX_DOCUMENT_BYTES = 15 * 1024 * 1024
 # Shown as "recording audio…" for as long as a person would take to record the voice note, at most.
 VOICE_RECORDING_SECONDS = 12

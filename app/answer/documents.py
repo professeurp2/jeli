@@ -35,6 +35,7 @@ TRANSLATION_TIMEOUT = 120
 TYPES = {
     ".pdf": "application/pdf",
     ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    ".vtt": "text/vtt",
     ".txt": "text/plain",
     ".md": "text/markdown",
 }
@@ -87,8 +88,38 @@ def _split(text: str, size: int) -> list[str]:
     return parts
 
 
+def read_vtt(text: str) -> str:
+    """A meeting transcript as a conversation: who said what, in order.
+
+    Teams and Meet both export their transcripts as WebVTT — a header, then numbered cues with
+    "00:01:12.480 --> 00:01:15.120" and a line like "<v Diane>we close on Friday</v>". Read raw,
+    that is three quarters timing and markup, and the model reads the clock instead of the words.
+    Kept: the speaker and the sentence, which is what a transcript is.
+    """
+    said: list[str] = []
+    who = ""
+    for raw in text.splitlines():
+        line = raw.strip()
+        if not line or line.upper().startswith("WEBVTT") or line.isdigit() or "-->" in line:
+            continue
+        if line.startswith("NOTE") or line.startswith("STYLE"):
+            continue
+        speaker = VTT_SPEAKER.match(line)
+        if speaker:
+            name, words = speaker.group(1).strip(), speaker.group(2).strip()
+            if name != who:
+                who, said = name, [*said, f"\n{name}: {words}"]
+            else:
+                said.append(words)
+            continue
+        said.append(line)
+    return " ".join(" ".join(said).split()).replace(" \n", "\n").strip()
+
+
 def read_pages(ext: str, data: bytes) -> list[str]:
     """The text of each page (PDF), or of each part of about a page (Word, text)."""
+    if ext == ".vtt":
+        return _split(read_vtt(data.decode("utf-8-sig", errors="replace")), PAGE_CHARS)
     if ext == ".pdf":
         from pypdf import PdfReader
 
@@ -129,6 +160,8 @@ def page_messages(document: Document, pages: list[str]) -> list[StoredMessage]:
     return messages
 
 
+# A WebVTT cue line: "<v Diane Uwase>we close on Friday</v>", as Teams and Meet write them.
+VTT_SPEAKER = re.compile(r"^<v\s+([^>]+)>(.*?)(?:</v>)?$")
 FILE_NAME = re.compile(r"([\w\-. ()'’&,]+?\.(?:pdf|docx?|pptx?|xlsx?|txt))", re.IGNORECASE)
 MARKERS = re.compile(r"<document omis>|document omitted|<attached:[^>]*>|\(fichier joint\)|\(file attached\)|<pièce jointe[^>]*>|\[transféré\]|\[forwarded\]", re.IGNORECASE)
 
@@ -229,7 +262,7 @@ class Documents:
         ValueError, in words for the team, when it cannot be read."""
         ext = extension(filename, mimetype)
         if ext is None:
-            raise ValueError("Jeli reads PDF, Word (.docx) and text files")
+            raise ValueError("Jeli reads PDF, Word (.docx), text and meeting transcripts (.vtt)")
         if len(data) > MAX_BYTES:
             raise ValueError("this file is too big (15 MB at most)")
         try:
