@@ -480,7 +480,7 @@ def test_the_voice_notes_left_today_follow_the_keys_and_survive_a_restart():
     # A restart: the count comes back from the database.
     again = Voice(llm)
     again.store = store
-    assert asyncio.run(again.quota())["remaining"] == 60 - 10 - 2
+    assert asyncio.run(again.quota())["remaining"] == 3 * per_key - 10 - 2
     # A key Google refuses leaves the total.
     llm._disable_key(2)
     assert asyncio.run(again.quota())["total"] == 40
