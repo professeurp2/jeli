@@ -282,6 +282,7 @@ async def health() -> dict:
         "answers": enabled("answerer"),
         # The Gemini keys in rotation and each model's health: failures in a row, rest left, latency.
         "gemini_keys": getattr(getattr(app.state, "llm", None), "key_count", 0),
+        "engine": getattr(getattr(app.state, "llm", None), "engine", ""),
         "models": getattr(app.state, "llm", None).model_health() if getattr(app.state, "llm", None) else [],
         # The spare engine: on or off, and how many answers it has rescued since the start.
         "backup": _backup_health(getattr(app.state, "llm", None)),

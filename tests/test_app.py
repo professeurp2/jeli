@@ -18,6 +18,7 @@ def test_health_without_any_channel_configured():
         "daily_digest": False,
         "team_report": False,
         "gemini_keys": 0,
+        "engine": "",
         "models": [],
         "backup": {"enabled": False},
         "memory_backup": {"enabled": False},
