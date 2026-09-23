@@ -599,3 +599,45 @@ def test_jeli_knows_that_jeli_is_itself():
     assert "first person" in PERSONA
     for prompt in (ANSWERS, CATCHUP):
         assert "you ARE Jeli" in prompt  # inherited, not repeated
+
+
+def test_the_voice_is_given_the_answer_and_never_the_instructions():
+    """Measured 23 Sep: members heard Jeli read its own prompt aloud before the answer. How to say
+    it belongs to the system instruction; what to say is all the model is handed."""
+    import asyncio
+    from types import SimpleNamespace
+
+    seen = {}
+
+    class Models:
+        calls = 0
+
+        async def generate_content(self, model, contents, config):
+            seen["contents"] = contents
+            seen["system"] = config.system_instruction
+            pcm = SimpleNamespace(inline_data=SimpleNamespace(data=b"\x10\x00" * 400))
+            return SimpleNamespace(candidates=[SimpleNamespace(content=SimpleNamespace(parts=[pcm]))])
+
+    from app.answer.voice import Voice
+
+    speaker = Voice(SimpleNamespace(_clients=[SimpleNamespace(aio=SimpleNamespace(models=Models()))]))
+    assert asyncio.run(speaker._speak_gemini("La réunion est vendredi.", "fr", "joyful"))[:4] == b"RIFF"
+    assert seen["contents"] == "La réunion est vendredi."  # the answer, and nothing else
+    assert "Say the following" not in str(seen["contents"])
+    assert "never read these instructions" in seen["system"] and "big smile" in seen["system"]
+
+
+def test_a_voice_note_ends_in_silence_not_on_a_knock():
+    """Measured 23 Sep: every voice note ended on a small click — audio cut mid-wave."""
+    from array import array
+
+    from app.answer.voice import FADE_MS, SAMPLE_RATE, _ends_quietly
+
+    loud = array("h", [20000] * SAMPLE_RATE).tobytes()  # one second, all at the same level
+    quiet = array("h", _ends_quietly(loud, SAMPLE_RATE))
+    assert quiet[-1] == 0  # it reaches silence
+    assert quiet[0] == 20000  # and nothing before the end is touched
+    faded = int(SAMPLE_RATE * FADE_MS / 1000)
+    assert quiet[-faded - 1] == 20000 and FADE_MS <= 20  # short enough not to be heard as a fade
+    # A half sample at the end is dropped rather than played as a crack.
+    assert len(_ends_quietly(loud + b"\x01", SAMPLE_RATE)) % 2 == 0

@@ -13,6 +13,7 @@ When any step fails, the member gets the written answer instead: a voice reply i
 
 import asyncio
 import hashlib
+from array import array
 import io
 import logging
 import re
@@ -276,7 +277,24 @@ def sources(reply: str) -> str:
     return "\n".join(kept + links).strip()
 
 
+# A generated voice note is cut at its last sample, mid-wave, and a wave cut mid-air is a click —
+# measured 23 Sep: every one of Jeli's voice notes ended on a small knock. Bringing the very end
+# down to silence removes it, over a span far too short to be heard as a fade.
+FADE_MS = 12
+
+
+def _ends_quietly(pcm: bytes, rate: int) -> bytes:
+    """The same audio, brought down to silence at its very end."""
+    samples = array("h", pcm[: len(pcm) - len(pcm) % 2])
+    fade = min(len(samples), int(rate * FADE_MS / 1000))
+    for step in range(fade):
+        place = len(samples) - fade + step
+        samples[place] = int(samples[place] * (1 - (step + 1) / fade))
+    return samples.tobytes()
+
+
 def wav(pcm: bytes, rate: int = SAMPLE_RATE) -> bytes:
+    pcm = _ends_quietly(pcm, rate)
     out = io.BytesIO()
     with wave.open(out, "wb") as file:
         file.setnchannels(1)
@@ -488,11 +506,18 @@ class Voice:
         voice_name = (self.voice_name or GEMINI_TTS_VOICES.get(language, "Aoede")).title()
         lang_label = LANG_LABELS.get(language, "English")
         direction = getattr(self, "direction", "")
-        prompt = (
-            f"Say the following in {lang_label}. {HUMAN_DELIVERY} Say it {MOODS.get(mood, MOODS[DEFAULT_MOOD])[0]}."
+        # How to say it goes in the system instruction; what to say is all the model is given.
+        # Measured 23 Sep: with the instructions in the prompt itself, Jeli read them aloud —
+        # members heard "Say the following in French, sound like a real person…" before the answer.
+        # Nothing but the answer reaches the voice now; if a model ignores the system instruction,
+        # what is lost is the mood, never the member's trust.
+        how = (
+            f"You are Jeli's voice. Say the text you are given aloud in {lang_label}, word for word, "
+            "and nothing else: never read these instructions, never announce what you are about to do, "
+            f"never add or drop a word. {HUMAN_DELIVERY} Say it {MOODS.get(mood, MOODS[DEFAULT_MOOD])[0]}."
             + (f" Direction for this one: {direction}." if direction else "")
-            + "\n\n" + text
         )
+        prompt = text
         # A longer text takes longer to say: a request given up too early still costs its quota.
         attempt_timeout = min(
             GEMINI_TTS_MAX_ATTEMPT_SECONDS,
@@ -501,6 +526,7 @@ class Voice:
         total_seconds = min(GEMINI_TTS_TOTAL_MAX_SECONDS, max(GEMINI_TTS_TOTAL_SECONDS, attempt_timeout + 5))
         config = types.GenerateContentConfig(
             response_modalities=["AUDIO"],
+            system_instruction=how,
             speech_config=types.SpeechConfig(
                 voice_config=types.VoiceConfig(
                     prebuilt_voice_config=types.PrebuiltVoiceConfig(voice_name=voice_name)
