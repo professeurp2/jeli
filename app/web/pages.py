@@ -609,7 +609,8 @@ async def try_page(request: Request, member: Member) -> HTMLResponse:
         f"""<div class="wa">
           <div class="wa-head"><img src="/dashboard/avatar" class="wa-avatar" alt="">
             <div class="wa-who"><b>Jeli</b><span id="wa-status">online</span></div>
-            <label class="wa-where">Writing in<select id="chat">{options}</select></label></div>
+            <label class="wa-where">Writing in<select id="chat">{options}</select></label>
+            <a class="wa-call" href="/jeli/call" title="Call Jeli" aria-label="Call Jeli">{icon("call", 20)}</a></div>
           <div class="wa-chat" id="chat-log" aria-live="polite"></div>
           <form class="wa-compose" id="composer">
             <div class="chips">{chips}</div>

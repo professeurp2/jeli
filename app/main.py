@@ -41,7 +41,7 @@ from app.kb.local_embeddings import LocalEmbedder
 from app.kb.store import Store
 from app.models import IncomingMessage
 from app.system_certificates import use_system_certificates
-from app.web import pages, public, teams_setup
+from app.web import call, pages, public, teams_setup
 from app.web.auth import Auth
 
 
@@ -255,6 +255,7 @@ app.include_router(telegram.router)
 app.include_router(pages.router)
 app.include_router(public.router)
 app.include_router(teams_setup.router)
+app.include_router(call.router)
 app.add_exception_handler(pages.NoKnowledgeBase, pages.no_knowledge_base)
 
 
