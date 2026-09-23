@@ -447,3 +447,27 @@ def test_the_engine_choice_is_really_saved_and_applied(client):
     assert client.fake_store.settings.get("answer_engine") == "backup_only"  # written down, not only in memory
     page = client.get("/dashboard/settings").text
     assert 'value="backup_only" checked' in page  # and shown back as chosen
+
+
+def test_a_bot_muted_by_its_number_is_recognised_behind_its_account_id():
+    """WhatsApp gives groups an account id, not the number: without the pair, a bot the team muted
+    by number kept being quoted and answered (seen 23 Sep on the settings page)."""
+    from dataclasses import dataclass
+
+    from app.answer.citations import NUMBER_OF_LID, ignored_keys, is_ignored
+
+    @dataclass
+    class Message:
+        author: str
+        author_id: str
+
+    muted = ignored_keys(["+229 00 00 00 56", "Nexus Bot"])
+    bot = Message(author="Some Bot", author_id="123456789012345@lid")
+    assert not is_ignored(bot, muted)  # the number alone never matched the id
+    NUMBER_OF_LID["123456789012345"] = "22900000056"
+    try:
+        assert is_ignored(bot, muted)  # once WhatsApp has told us whose number it is
+    finally:
+        NUMBER_OF_LID.clear()
+    # A name still works on its own, as it always did.
+    assert is_ignored(Message(author="Nexus Bot", author_id="999@lid"), muted)

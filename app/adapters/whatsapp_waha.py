@@ -28,7 +28,7 @@ from fastapi import APIRouter, BackgroundTasks, Header, HTTPException, Request
 
 from app.adapters import Ingest, Respond
 from app.adapters.pacing import SendSpacer, SlidingWindowLimiter, reading_delay, typing_duration
-from app.answer.citations import is_ignored, poll_text
+from app.answer.citations import NUMBER_OF_LID, is_ignored, poll_text
 from app.answer.language import TEXTS, detect_language
 from app.answer.react import is_correction
 from app.answer import illustrator
@@ -427,8 +427,13 @@ class Waha:
         """True when the sender is one of the team members (admin_numbers list)."""
         if not self.admin_numbers:
             return False
-        jid_digits = re.sub(r"\D", "", message.author_id or message.author or "")
-        return any(jid_digits.endswith(num) for num in self.admin_numbers)
+        return any(is_super_admin(num, message.author_id, message.author) for num in self._known_numbers(message))
+
+    def _known_numbers(self, message: IncomingMessage) -> list[str]:
+        """The sender's id, and the phone number behind it when WhatsApp has told us (learn_numbers)."""
+        who = re.sub(r"\D", "", (message.author_id or message.author or "").split("@")[0].split(":")[0])
+        number = NUMBER_OF_LID.get(who)
+        return [message.author_id or message.author or "", number or ""]
 
     async def _auto_unsilence(self, chat_id: str, delay: float) -> None:
         await asyncio.sleep(delay)
@@ -1224,6 +1229,30 @@ class Waha:
             for chat in chats
             if isinstance(chat, dict) and str(chat.get("id", "")).endswith("@g.us")
         }
+
+    async def learn_numbers(self, limit: int = 1000) -> int:
+        """Learn which phone number each account id belongs to, from WhatsApp itself.
+
+        Without this, everyone named by number in the team's settings is invisible in the groups:
+        a muted bot keeps being quoted, an organiser's announcement is not one, a teammate's admin
+        command is not obeyed. Names still work; numbers did not (see app/answer/citations.py).
+        """
+        try:
+            response = await self._http.get(f"/api/{self.session}/lids", params={"limit": limit})
+            response.raise_for_status()
+            pairs = response.json() or []
+        except (httpx.HTTPError, ValueError):
+            log.warning("Could not learn which numbers the groups' ids belong to", exc_info=True)
+            return 0
+        learned = 0
+        for pair in pairs if isinstance(pairs, list) else []:
+            lid = re.sub(r"\D", "", str(pair.get("lid", "")).split("@")[0])
+            number = re.sub(r"\D", "", str(pair.get("pn") or pair.get("phoneNumber") or "").split("@")[0])
+            if lid and number:
+                NUMBER_OF_LID[lid] = number
+                learned += 1
+        log.info("Learned the number behind %d of the groups' ids", learned)
+        return learned
 
     async def ids_for_number(self, digits: str) -> list[str]:
         """Every id this phone number writes under, the number itself included.

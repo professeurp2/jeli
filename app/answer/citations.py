@@ -65,12 +65,24 @@ def display_person(entry: str) -> str:
     return f"{name} ({masked})" if name and masked else name or masked
 
 
+# WhatsApp no longer puts the phone number in group messages: each author arrives under a per-
+# account id ("LID") that contains nothing of their number. So a person named by number — a bot the
+# team muted, an organiser, a teammate — was never recognised there. The channel fills this in as
+# it learns the pairs from WhatsApp (app/adapters/whatsapp_waha.py); it stays empty elsewhere, and
+# everything then works on names alone, as before.
+NUMBER_OF_LID: dict[str, str] = {}
+
+
 def is_ignored(message, keys: set[str]) -> bool:
     """By display name or phone number, and by WhatsApp id: live messages carry a display name,
     not the phone number that exports show."""
     candidates = {author_key(message.author)}
     if message.author_id:
-        candidates.add(author_key(message.author_id.split("@")[0]))
+        who = author_key(message.author_id.split("@")[0])
+        candidates.add(who)
+        number = NUMBER_OF_LID.get(who)
+        if number:
+            candidates.add(number)
     return bool(candidates & keys)
 
 

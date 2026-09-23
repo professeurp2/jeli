@@ -196,6 +196,9 @@ async def lifespan(app: FastAPI):
             state.whatsapp.on_vote = store.save_poll_vote
             state.whatsapp.on_feedback = store.record_feedback
         await state.whatsapp.sync_status()
+        # Which phone number each account id belongs to: without it, everyone the team named by
+        # number — a muted bot, an organiser, a teammate — is invisible in the groups.
+        asyncio.create_task(state.whatsapp.learn_numbers())
     state.telegram = await telegram.start(settings, respond)
 
     # Background activities, then the team's settings applied to everything, now and after each change.
