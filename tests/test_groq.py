@@ -234,3 +234,30 @@ def test_the_spare_engine_is_reached_sooner_than_a_fourth_slow_failure():
     with pytest.raises(Exception):
         asyncio.run(fresh.generate([{"inline_data": b"audio"}], GeneratedAnswer))
     assert len(tried) > ATTEMPTS_BEFORE_BACKUP
+
+
+def test_the_spare_engine_gets_the_time_the_caller_allowed():
+    """Measured 22 Sep at 23:54: a catch-up over 735 messages is given 30 s, and the spare engine
+    was cut off at its own default of 8 s — no model writes that digest in 8 s."""
+    from types import SimpleNamespace
+
+    from google.genai import errors
+
+    from app.answer.llm import LLM
+
+    seen = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen["timeout"] = request.extensions.get("timeout", {}).get("read")
+        return reply('{"answered": true, "answer": "ok", "sources": []}')
+
+    class Models:
+        async def generate_content(self, model, contents, config):
+            raise errors.ServerError(503, {"error": {"code": 503, "message": "high demand"}})
+
+    made = engine(handler, models=("first",))
+    llm = LLM("unused", ["a"], client=SimpleNamespace(aio=SimpleNamespace(models=Models())), backup=made)
+    from app.answer.llm import GeneratedAnswer
+
+    asyncio.run(llm.generate("a long catch-up prompt", GeneratedAnswer, timeout=30))
+    assert seen["timeout"] == 30

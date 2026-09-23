@@ -17,6 +17,20 @@ from app.kb.store import Store
 log = logging.getLogger(__name__)
 
 MAX_MESSAGE_CHARS = 500
+# What a free spare engine can read in one go, with room for the instructions and the answer.
+SPARE_PROMPT_CHARS = 45_000
+
+
+def _recent_within(lines: list[str], budget: int) -> list[str]:
+    """The most recent lines that fit in `budget` characters, oldest first."""
+    kept: list[str] = []
+    total = 0
+    for line in reversed(lines):
+        total += len(line) + 1
+        if total > budget and kept:
+            break
+        kept.append(line)
+    return list(reversed(kept))
 MAX_ITEMS = 5
 TIMEOUT_SECONDS = 30  # a week of messages is a long read, even for a fast model
 CACHE_SECONDS = 600  # when the whole jury asks at once, one summary serves them all
@@ -150,18 +164,33 @@ class Catchup:
         ]
         sessions = [f"- «{r.title}» ({_day(r.recorded_at)})" for r in recordings]
         today = datetime.now(timezone.utc)
-        prompt = (
-            # The language first as well: the light models follow the start of the request best.
-            f"Write in {LANGUAGES[language]}. Today is {today:%A %d %B %Y} (UTC).\n\nMessages, oldest first:\n" + "\n".join(lines)
-            + ("\n\nCall recordings available:\n" + "\n".join(sessions) if sessions else "")
-            + (f"\n\nComing up (fold what matters into your items, without the sources in brackets):\n{coming_up}" if coming_up else "")
-            + f"\n\nWrite the intro and every item in {LANGUAGES[language]}."
-        )
+        def build(kept: list[str]) -> str:
+            return (
+                # The language first as well: the light models follow the start of the request best.
+                f"Write in {LANGUAGES[language]}. Today is {today:%A %d %B %Y} (UTC).\n\nMessages, oldest first:\n"
+                + "\n".join(kept)
+                + ("\n\nCall recordings available:\n" + "\n".join(sessions) if sessions else "")
+                + (f"\n\nComing up (fold what matters into your items, without the sources in brackets):\n{coming_up}" if coming_up else "")
+                + f"\n\nWrite the intro and every item in {LANGUAGES[language]}."
+            )
+
+        partial = 0
         try:
-            digest = await self.llm.generate(prompt, Digest, system=SYSTEM, timeout=TIMEOUT_SECONDS)
+            digest = await self.llm.generate(build(lines), Digest, system=SYSTEM, timeout=TIMEOUT_SECONDS)
         except LLMUnavailable:
-            log.error("No model available for the catch-up digest")
-            return texts["catchup_unavailable"].format(since=_day(since, language), messages=len(messages))
+            # Gemini reads everything; a free spare engine cannot take a whole busy day (measured
+            # 22 Sep: 742 messages, 142,000 characters). Rather than telling the member to come
+            # back later, the most recent part is summarised — and the digest says so.
+            recent = _recent_within(lines, SPARE_PROMPT_CHARS)
+            try:
+                if len(recent) == len(lines):
+                    raise LLMUnavailable
+                digest = await self.llm.generate(build(recent), Digest, system=SYSTEM, timeout=TIMEOUT_SECONDS)
+            except LLMUnavailable:
+                log.error("No model available for the catch-up digest")
+                return texts["catchup_unavailable"].format(since=_day(since, language), messages=len(messages))
+            partial = len(recent)
+            log.warning("Catch-up written from the last %d of %d messages", partial, len(lines))
 
         parts: list[str] = []
         if digest.items:
@@ -178,4 +207,7 @@ class Catchup:
         # The gist first, in Jeli's own words, as a person would tell it; then the details.
         intro = " ".join(digest.intro.split())
         lead = f"{intro}\n\n" if intro and len(intro) <= MAX_INTRO_CHARS else ""
+        if partial:
+            # Never pass off a part for the whole: the member is told what was actually read.
+            header += "\n" + texts["catchup_partial"].format(read=partial, total=len(lines))
         return lead + header + "\n\n" + "\n\n".join(parts)

@@ -39,6 +39,10 @@ MODELS_KEPT = 2
 REST_SECONDS = 120
 # The spare engine must not make the member wait longer than Gemini already has.
 TIMEOUT_SECONDS = 8
+# Gemini reads a million tokens; a free Groq model does not. Measured 22 Sep: a day in the groups
+# is 742 messages and about 142,000 characters, which Groq refuses outright. Past this, the call is
+# declined here rather than sent to be rejected — the caller can then ask for less (app/answer/catchup.py).
+MAX_PROMPT_CHARS = 60_000
 
 Schema = TypeVar("Schema", bound=BaseModel)
 
@@ -204,6 +208,8 @@ class Groq:
         if not isinstance(contents, str):
             # Recordings, pictures and stickers: Groq is not given them.
             raise BackupUnavailable("not a text prompt")
+        if len(contents) > MAX_PROMPT_CHARS:
+            raise BackupUnavailable(f"prompt too large for the spare engine ({len(contents):,} characters)")
         body = {
             "messages": [
                 {"role": "system", "content": self._instructions(schema, system)},
@@ -219,7 +225,9 @@ class Groq:
                 try:
                     response = await client.post(URL, json={**body, "model": model}, headers=headers, timeout=timeout)
                     if response.status_code >= 400:
-                        log.warning("Groq %s refused (%d), resting", model, response.status_code)
+                        log.warning(
+                            "Groq %s refused (%d): %s", model, response.status_code, response.text[:300]
+                        )
                         self._resting_until[model] = self._clock() + REST_SECONDS
                         continue
                     text = response.json()["choices"][0]["message"]["content"]

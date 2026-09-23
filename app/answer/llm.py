@@ -327,7 +327,9 @@ class LLM:
         # being told to come back later. Text only — a recording or a picture it cannot take.
         if self.backup is not None and self.backup.available:
             try:
-                return await self.backup.generate(contents, schema, system=system, temperature=temperature)
+                return await self.backup.generate(
+                    contents, schema, system=system, temperature=temperature, timeout=timeout
+                )
             except BackupUnavailable as error:
                 log.warning("Spare engine could not answer either (%s)", error)
         raise LLMUnavailable

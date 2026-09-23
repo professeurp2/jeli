@@ -134,3 +134,18 @@ def test_the_digest_opens_with_the_gist_in_jelis_own_words():
     # An intro too long to be one: the digest as before.
     long = Digest(items=said.items, intro="blah " * 200)
     assert asyncio.run(Catchup(FakeStore(), FakeLLM(long)).summarize(MONDAY, "en")).startswith("🗓️ Catch-up since")
+
+
+def test_a_busy_day_is_summarised_from_its_recent_part_when_the_engine_is_small():
+    """Measured 22 Sep at 23:54: 742 messages, 142,000 characters — more than a free spare engine
+    takes. Jeli summarises the recent part and says so, instead of refusing."""
+    from app.answer.catchup import SPARE_PROMPT_CHARS, _recent_within
+
+    lines = [f"[Tue 22 Sep 10:0{i % 10}] the group - Someone: " + "x" * 400 for i in range(600)]
+    kept = _recent_within(lines, SPARE_PROMPT_CHARS)
+    assert 0 < len(kept) < len(lines)
+    assert sum(len(line) + 1 for line in kept) <= SPARE_PROMPT_CHARS + len(kept[0]) + 1
+    assert kept[-1] == lines[-1]  # the most recent messages are the ones kept
+    assert kept == lines[len(lines) - len(kept):]  # in order, oldest of them first
+    # A day that already fits is never trimmed.
+    assert _recent_within(lines[:10], SPARE_PROMPT_CHARS) == lines[:10]
