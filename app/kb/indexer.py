@@ -62,6 +62,8 @@ async def index_pending(
     """
     created = 0
     labels = labels or {}
+    if hasattr(store, "refresh_names"):
+        await store.refresh_names()  # who each account id is, for the mentions inside messages
     await catch_up_gemini(store, embedder)
     for chat_id in await store.pending_chats():
         header = None

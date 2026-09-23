@@ -152,6 +152,28 @@ def poll_text(question: str, options: list[str]) -> str:
     return f"{POLL_MARK} {question}\nOptions: " + " · ".join(options)
 
 
+# A mention as WhatsApp stores it: "@216324735279308". On screen the app shows the person's name;
+# in the text Jeli reads, only the id is there.
+RAW_MENTION = re.compile(r"(?<!\w)@(\d{5,})\b")
+
+
+def named_mentions(text: str, names: dict[str, str]) -> str:
+    """Mentions written as people, not as numbers.
+
+    Seen 23 Sep in a catch-up: "*Presentation slides* @216324735279308 asked if the slides…". That
+    id is what WhatsApp puts in the message; the app replaces it with a name before anyone sees it,
+    and Jeli must do the same before the model reads it — or the model faithfully repeats a number
+    that means nothing and looks like a phone number. Someone Jeli cannot name is simply "someone",
+    which is true and readable.
+    """
+
+    def person(match: re.Match) -> str:
+        who = names.get(match.group(1))
+        return f"@{who}" if who else "someone"
+
+    return RAW_MENTION.sub(person, text)
+
+
 def with_tally(text: str, tally: dict[str, int] | None) -> str:
     """A poll's message, with its votes so far."""
     if not text.startswith(POLL_MARK):

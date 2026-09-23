@@ -2,6 +2,7 @@
 
 import re
 
+import httpx
 import pytest
 from fastapi.testclient import TestClient
 
@@ -103,3 +104,32 @@ def test_voice_is_capped_more_tightly_than_writing():
         visits.used("22399999999", spoken_reply=True)
     left, voice_left = visits.left("22399999999")
     assert voice_left == 0 and left == MESSAGES_ALLOWED - VOICE_ALLOWED
+
+
+def test_a_member_who_never_wrote_can_still_come_in(monkeypatch):
+    """Measured 23 Sep: of a 240-person cohort, 79 had ever written. Asking Jeli whether it had
+    read someone turned its own page away from two members out of three."""
+    import asyncio
+
+    from app.adapters.whatsapp_waha import Waha
+    from app.config import Settings
+
+    people = [
+        {"id": "111111111111111@lid", "name": "Awa Traoré"},
+        {"lid": "222222222222222@lid", "pn": "22389987255@c.us", "name": "Silent Member"},
+    ]
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/participants"):
+            return httpx.Response(200, json=people)
+        return httpx.Response(200, json={})  # WhatsApp knows no id for that number
+
+    async def respond(message):
+        return None
+
+    waha = Waha(Settings(waha_url="http://waha.test", waha_api_key="k"), respond)
+    waha._http = httpx.AsyncClient(base_url="http://waha.test", transport=httpx.MockTransport(handler))
+    found = asyncio.run(waha.group_member("+223 89 98 72 55", ["120363000000000000@g.us"]))
+    assert found == "Silent Member"
+    # Someone who is in no group is still turned away.
+    assert asyncio.run(waha.group_member("+1 555 000 111", ["120363000000000000@g.us"])) is None

@@ -134,3 +134,36 @@ def test_the_digest_opens_with_the_gist_in_jelis_own_words():
     # An intro too long to be one: the digest as before.
     long = Digest(items=said.items, intro="blah " * 200)
     assert asyncio.run(Catchup(FakeStore(), FakeLLM(long)).summarize(MONDAY, "en")).startswith("🗓️ Catch-up since")
+
+
+def test_a_mention_is_written_as_a_person_everywhere_at_once():
+    """Seen 23 Sep in a catch-up: "*Presentation slides* @216324735279308 asked if the slides…".
+    That id is what WhatsApp stores; the app shows a name, and so must Jeli."""
+    from app.answer.citations import named_mentions
+
+    names = {"216324735279308": "Diane"}
+    said = "@216324735279308 asked if the slides will be shared"
+    assert named_mentions(said, names) == "@Diane asked if the slides will be shared"
+    # Someone Jeli cannot name is "someone" — true, and readable.
+    assert named_mentions(said, {}) == "someone asked if the slides will be shared"
+    # An email address or a price is not a mention.
+    assert named_mentions("write to a@b.com about the 12345 francs", names) == "write to a@b.com about the 12345 francs"
+
+
+def test_the_repair_happens_where_every_message_leaves_the_memory():
+    """Not in the catch-up: in the one place they all pass through, so the recaps, the answers,
+    the deadline finder and the indexed passages are mended by the same line."""
+    from datetime import datetime, timezone
+
+    from app.kb.store import Store
+
+    store = object.__new__(Store)
+    store._names = {"216324735279308": "Diane"}
+    row = {
+        "id": "m1", "chat_id": "c", "source": "whatsapp_live", "author": "Awa", "author_id": "1@lid",
+        "sent_at": datetime.now(timezone.utc), "text": "@216324735279308 will share the slides",
+    }
+    assert store._readable(row).text == "@Diane will share the slides"
+    # A message without a mention is returned untouched, and costs nothing.
+    plain = {**row, "text": "see you tomorrow"}
+    assert store._readable(plain).text == "see you tomorrow"

@@ -391,6 +391,8 @@ class Waha:
         self._admins: dict[str, tuple[float, set[str]]] = {}
         # Phone number -> the ids it writes under in the groups (see ids_for_number), cached 1 h.
         self._lids: dict[str, tuple[float, list[str]]] = {}
+        # Group id -> everyone in it, as WAHA lists them (see _participants), cached 1 h.
+        self._people: dict[str, tuple[float, list[dict]]] = {}
 
     def accepts(self, message: IncomingMessage) -> bool:
         """Direct messages are always accepted; groups only if listed in WHATSAPP_GROUP_IDS (when set)."""
@@ -1318,6 +1320,43 @@ class Waha:
         found = [item for item in dict.fromkeys(found) if item]
         self._lids[digits] = (time.monotonic(), found)
         return found
+
+    async def group_member(self, number: str, chat_ids: list[str]) -> str | None:
+        """The name this number is in the groups, or None when it is in none of them.
+
+        Being in the group is what makes someone a member — not having spoken in it. Measured
+        23 Sep: of a 240-person cohort, 79 had ever written, so asking Jeli whether it had read
+        them turned its own page away from two members out of three (app/web/public.py).
+        """
+        wanted = set(await self.ids_for_number(number))
+        if not wanted:
+            return None
+        for chat_id in chat_ids:
+            for person in await self._participants(chat_id):
+                ids = {
+                    re.sub(r"\D", "", user_part(str(person[key])))
+                    for key in ("id", "pn", "phoneNumber", "lid")
+                    if person.get(key)
+                }
+                if ids & wanted:
+                    return str(person.get("name") or person.get("pushName") or "").strip() or "Un membre"
+        return None
+
+    async def _participants(self, chat_id: str) -> list[dict]:
+        """Everyone in a group, as WAHA lists them; cached for an hour, [] when it cannot say."""
+        cached = self._people.get(chat_id)
+        if cached and time.monotonic() - cached[0] < 3600:
+            return cached[1]
+        try:
+            response = await self._http.get(f"/api/{self.session}/groups/{chat_id}/participants")
+            response.raise_for_status()
+            people = response.json()
+        except (httpx.HTTPError, ValueError):
+            log.warning("Could not read who is in %s", chat_id, exc_info=True)
+            return []
+        people = [p for p in people if isinstance(p, dict)] if isinstance(people, list) else []
+        self._people[chat_id] = (time.monotonic(), people)
+        return people
 
     async def group_admins(self, chat_id: str) -> set[str] | None:
         """The admins of a group (number or id digits), cached for an hour; None if unknown."""

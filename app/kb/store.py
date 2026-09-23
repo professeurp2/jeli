@@ -1,5 +1,6 @@
 """Knowledge base storage: Supabase Postgres + pgvector (schema in db/schema.sql)."""
 
+import dataclasses
 import logging
 from collections.abc import Sequence
 from dataclasses import dataclass
@@ -9,6 +10,7 @@ from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
 from psycopg_pool import AsyncConnectionPool, PoolTimeout
 
+from app.answer.citations import RAW_MENTION, named_mentions
 from app.ingest.chunker import Chunk
 from app.models import Deadline, Document, Recording, StoredMessage, UsageEvent
 
@@ -92,6 +94,10 @@ class Store:
             # the connection unexpectedly".
             check=AsyncConnectionPool.check_connection,
         )
+        # Account id -> the name it writes under, for the mentions inside messages (_readable),
+        # with when it was last read: a name changes rarely, a message is read constantly.
+        self._names: dict[str, str] = {}
+        self._names_at = 0.0
 
     async def open(self) -> None:
         try:
@@ -102,6 +108,44 @@ class Store:
 
     async def close(self) -> None:
         await self._pool.close()
+
+    def _readable(self, row: dict) -> StoredMessage:
+        """A stored message as a person would read it.
+
+        Every message leaves the memory through here, so what is fixed is fixed everywhere at
+        once: the catch-up, the recaps, the deadline finder, the answers and the passages that go
+        into the memory itself. WhatsApp writes a mention as an account id — "@216324735279308",
+        seen in a catch-up on 23 September — where the app shows a name; that is the one thing
+        this repairs today, and the place to repair the next one.
+        """
+        message = StoredMessage(**row)
+        if RAW_MENTION.search(message.text):
+            return dataclasses.replace(message, text=named_mentions(message.text, self._names))
+        return message
+
+    async def refresh_names(self, every: float = 600.0) -> int:
+        """Learn who each account id is, for the mentions inside messages. Called by the memory's
+        own task, and does the work at most every `every` seconds: a name that changes is not
+        worth a query per message."""
+        import time
+
+        if self._names and time.monotonic() - self._names_at < every:
+            return len(self._names)
+        self._names_at = time.monotonic()
+        async with self._pool.connection() as conn:
+            rows = await (
+                await conn.execute(
+                    r"select regexp_replace(split_part(split_part(author_id, '@', 1), ':', 1), '\D', '', 'g') as who, "
+                    "author, count(*) as n from jeli.messages where author_id <> '' "
+                    "group by who, author order by who, n desc"
+                )
+            ).fetchall()
+        names: dict[str, str] = {}
+        for row in rows:  # most frequent name first: the one people know them by
+            if row["who"] and row["author"]:
+                names.setdefault(row["who"], row["author"])
+        self._names = names
+        return len(names)
 
     async def add_messages(self, messages: Sequence[StoredMessage]) -> int:
         """Store messages not known yet; returns how many were new."""
@@ -296,7 +340,7 @@ class Store:
                     (chat_id,),
                 )
             ).fetchall()
-        return [StoredMessage(**row) for row in rows]
+        return [self._readable(row) for row in rows]
 
     async def messages_since(
         self, since: datetime, chat_ids: Sequence[str] | None = None, limit: int = 1500
@@ -312,7 +356,7 @@ class Store:
                     params,
                 )
             ).fetchall()
-        return [StoredMessage(**row) for row in reversed(rows)]
+        return [self._readable(row) for row in reversed(rows)]
 
     async def unchecked_messages(self, limit: int = 150) -> list[StoredMessage]:
         """Messages and transcript segments not yet scanned for deadlines, oldest first."""
@@ -324,7 +368,7 @@ class Store:
                     (limit,),
                 )
             ).fetchall()
-        return [StoredMessage(**row) for row in rows]
+        return [self._readable(row) for row in rows]
 
     async def mark_deadlines_checked(self, ids: Sequence[str]) -> None:
         async with self._pool.connection() as conn:
@@ -829,7 +873,7 @@ class Store:
                     (chat_id,),
                 )
             ).fetchall()
-        return [StoredMessage(**row) for row in rows]
+        return [self._readable(row) for row in rows]
 
     async def messages_by_ids(self, ids: Sequence[str]) -> list[StoredMessage]:
         """The messages behind retrieved chunks, in time order: who said what, and when."""
@@ -841,7 +885,7 @@ class Store:
                     (list(ids),),
                 )
             ).fetchall()
-        return [StoredMessage(**row) for row in rows]
+        return [self._readable(row) for row in rows]
 
     async def save_chunk(
         self, chunk: Chunk, embedding: Sequence[float] | None, model: str, backup: Sequence[float] | None = None
