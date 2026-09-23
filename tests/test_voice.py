@@ -483,7 +483,7 @@ def test_the_voice_notes_left_today_follow_the_keys_and_survive_a_restart():
     assert asyncio.run(again.quota())["remaining"] == 3 * per_key - 10 - 2
     # A key Google refuses leaves the total.
     llm._disable_key(2)
-    assert asyncio.run(again.quota())["total"] == 40
+    assert asyncio.run(again.quota())["total"] == 2 * per_key  # two keys left
 
 
 def test_the_team_chooses_which_voice_speaks_and_the_backup_always_takes_over(monkeypatch):
