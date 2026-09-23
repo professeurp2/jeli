@@ -492,3 +492,17 @@ def test_without_a_limit_nothing_changes(waha_env, calls, monkeypatch):
             asked = message_event(f"@{BOT_PHONE} yet another question {i}?", message_id=f"z{i}")
             assert post_event(client, asked).status_code == 200
     assert [p["text"] for path, p in calls if path == "/api/sendText"] == ["Friday at 10."] * 5
+
+
+def test_the_account_id_is_read_whatever_shape_whatsapp_answers_with():
+    """Measured 23 Sep: WAHA answered 200 to /lids/pn/… and the id was not where we looked."""
+    from app.adapters.whatsapp_waha import _lid_in
+
+    assert _lid_in({"lid": "123456789012345@lid"}) == "123456789012345@lid"
+    assert _lid_in({"id": {"_serialized": "123@lid"}}) == "123@lid"
+    assert _lid_in([{"lid": "987@lid"}]) == "987@lid"
+    assert _lid_in("123456789012345@lid") == "123456789012345@lid"
+    assert _lid_in("123456789012345") == "123456789012345"
+    # Nothing found is nothing claimed: a 200 with an empty body is not an id.
+    assert _lid_in({}) == "" and _lid_in(None) == "" and _lid_in({"lid": None}) == ""
+    assert _lid_in({"pn": "22300000000@c.us"}) == ""  # the number it was asked about, not an id

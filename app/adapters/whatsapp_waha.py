@@ -137,6 +137,21 @@ def _mentioned_ids(data: Any) -> set[str]:
     return found
 
 
+def _lid_in(body: Any) -> str:
+    """The account id in whatever shape WAHA answers with: a string, a list, or an object whose
+    key is `lid`, `_serialized` or `id`. Its wording has changed before; its meaning has not."""
+    if isinstance(body, str):
+        return body if "@lid" in body or body.isdigit() else ""
+    if isinstance(body, list):
+        return next((found for item in body if (found := _lid_in(item))), "")
+    if isinstance(body, dict):
+        for key in ("lid", "_serialized", "id"):
+            found = _lid_in(body.get(key))
+            if found:
+                return found
+    return ""
+
+
 def _author(payload: dict) -> str:
     data = payload.get("_data") or {}
     info = data.get("Info") or {}
@@ -1238,6 +1253,12 @@ class Waha:
         command is not obeyed. Names still work; numbers did not (see app/answer/citations.py).
         """
         try:
+            # WAHA's own note: reading the groups is what fills the id-to-number mapping. Without
+            # this first call, the list below is empty on a fresh session.
+            await self._http.get(f"/api/{self.session}/groups", params={"limit": 50})
+        except httpx.HTTPError:
+            log.info("Could not read the groups before learning their ids", exc_info=True)
+        try:
             response = await self._http.get(f"/api/{self.session}/lids", params={"limit": limit})
             response.raise_for_status()
             pairs = response.json() or []
@@ -1269,11 +1290,17 @@ class Waha:
         if cached and time.monotonic() - cached[0] < 3600:
             return cached[1]
         found = [digits]
+        # What WhatsApp has already told us about the groups' ids (learn_numbers), read backwards.
+        found += [lid for lid, number in NUMBER_OF_LID.items() if number == digits]
         try:
             response = await self._http.get(f"/api/{self.session}/lids/pn/{digits}")
             if response.is_success:
                 body = response.json()
-                lid = body.get("lid") if isinstance(body, dict) else body
+                lid = _lid_in(body)
+                if not lid:
+                    # A 200 does not mean an id was found: WAHA answers with what it knows, and it
+                    # knows nothing of a number whose groups it has not read (measured 23 Sep).
+                    log.info("WhatsApp knows no account id for this number yet")
                 if lid:
                     found.append(re.sub(r"\D", "", str(lid).split("@")[0]))
         except (httpx.HTTPError, ValueError):
