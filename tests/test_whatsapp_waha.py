@@ -537,3 +537,34 @@ def test_every_page_of_numbers_is_learned_not_just_the_first():
         assert NUMBER_OF_LID["9999"] == "22399999999"  # the one on the second page
     finally:
         NUMBER_OF_LID.clear()
+
+
+def test_what_a_voice_note_cannot_carry_follows_it_in_writing(waha_env, calls, monkeypatch):
+    """Measured 23 Sep at 21:34: a member asked Jeli for its call link and got a 44-second voice
+    note with no link in it. The spoken version strips links by design, and nothing sent them
+    after — so the answer's whole point was lost."""
+    monkeypatch.setenv("WHATSAPP_USER_LIMIT", "20")
+    get_settings.cache_clear()
+    answer = "Bien sûr, appelle-moi ici : https://jeli.example.org/jeli/call\n> *Diane* · mar. 22 sept."
+
+    async def respond(message):
+        return answer
+
+    spoken_texts = []
+
+    class Speaks:
+        async def speak(self, text, language=""):
+            spoken_texts.append(text)
+            return b"audio"
+
+    with TestClient(app) as client:
+        app.state.whatsapp.respond = respond
+        app.state.whatsapp.voice = Speaks()
+        app.state.whatsapp.voice_rate = app.state.whatsapp.voice_intro_rate = 1.0
+        assert post_event(client, message_event(f"@{BOT_PHONE} send me your call link")).status_code == 200
+
+    paths = [path for path, _ in calls]
+    assert "/api/sendVoice" in paths and "/api/sendText" in paths
+    assert "https://" not in spoken_texts[0]  # the voice never reads a link out
+    written = next(p["text"] for path, p in calls if path == "/api/sendText")
+    assert "https://jeli.example.org/jeli/call" in written and "Diane" in written

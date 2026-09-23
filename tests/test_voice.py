@@ -96,9 +96,13 @@ def test_asked_by_voice_jeli_answers_by_voice(waha):
     assert waha.asked == ["When is the hackathon deadline?"]
     assert waha.voice.said == ["The hackathon closes on Thursday 24 September."]
     paths = [path for path, _ in waha.sent]
-    assert paths == ["/api/sendSeen", "/api/startTyping", "/api/default/presence", "/api/stopTyping", "/api/sendVoice"]
+    # The voice note, then what it could not carry: the source. Until 23 Sep a spoken answer went
+    # out with no attribution at all — the one thing Jeli promises never to drop.
+    assert paths == ["/api/sendSeen", "/api/startTyping", "/api/default/presence", "/api/stopTyping",
+                     "/api/sendVoice", "/api/sendText"]
     voice = waha.sent[4][1]
     assert voice["convert"] is True and voice["reply_to"] == "voice-1" and voice["file"]["mimetype"] == "audio/wav"
+    assert "Diane" in waha.sent[5][1]["text"]
 
 
 def test_when_the_voice_note_cannot_be_sent_the_answer_is_written(waha):

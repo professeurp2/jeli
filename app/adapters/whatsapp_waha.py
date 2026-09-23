@@ -1083,6 +1083,16 @@ class Waha:
                 clean_reply = Reply(clean_text, reply_to=getattr(reply, "reply_to", None), mentions=getattr(reply, "mentions", ()))
                 await self.spacer.wait_turn()
                 await self.send_reply(message, clean_reply)
+            elif written := sources(reply):
+                # A link cannot be spoken, and a source cannot be heard. Measured 23 Sep at 21:34:
+                # a member asked Jeli for its call link and got a 44-second voice note without one
+                # in it — the spoken version strips links by design, and nothing sent them after.
+                # Whatever a voice note cannot carry now follows it in writing, for every answer.
+                await self.spacer.wait_turn()
+                await self.send_reply(
+                    message,
+                    Reply(written, reply_to=getattr(reply, "reply_to", None), mentions=getattr(reply, "mentions", ())),
+                )
             await self.deliver_files(message, reply)
             if self.voice:
                 llm = getattr(self.voice, "llm", None)
