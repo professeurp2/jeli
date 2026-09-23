@@ -96,6 +96,8 @@ GROUP_IMAGES_PER_DAY = 60
 # What a member says of an answer with a reaction on Jeli's message.
 FEEDBACK_REACTIONS = {"👍": "good", "❤️": "good", "🙏": "good", "💯": "good", "👎": "bad", "❌": "bad", "😕": "bad"}
 SENT_KEPT = 300
+# At most this many id-to-number pairs learned from WhatsApp, paged (see Waha.learn_numbers).
+MAX_LIDS = 10_000
 
 router = APIRouter()
 
@@ -1258,20 +1260,28 @@ class Waha:
             await self._http.get(f"/api/{self.session}/groups", params={"limit": 50})
         except httpx.HTTPError:
             log.info("Could not read the groups before learning their ids", exc_info=True)
-        try:
-            response = await self._http.get(f"/api/{self.session}/lids", params={"limit": limit})
-            response.raise_for_status()
-            pairs = response.json() or []
-        except (httpx.HTTPError, ValueError):
-            log.warning("Could not learn which numbers the groups' ids belong to", exc_info=True)
-            return 0
         learned = 0
-        for pair in pairs if isinstance(pairs, list) else []:
-            lid = re.sub(r"\D", "", str(pair.get("lid", "")).split("@")[0])
-            number = re.sub(r"\D", "", str(pair.get("pn") or pair.get("phoneNumber") or "").split("@")[0])
-            if lid and number:
-                NUMBER_OF_LID[lid] = number
-                learned += 1
+        # Page through: measured 23 Sep, the first page came back exactly full, which means there
+        # were more — and the member missing from it is the one who cannot sign in.
+        for offset in range(0, MAX_LIDS, limit):
+            try:
+                response = await self._http.get(
+                    f"/api/{self.session}/lids", params={"limit": limit, "offset": offset}
+                )
+                response.raise_for_status()
+                pairs = response.json() or []
+            except (httpx.HTTPError, ValueError):
+                log.warning("Could not learn which numbers the groups' ids belong to", exc_info=True)
+                break
+            pairs = pairs if isinstance(pairs, list) else []
+            for pair in pairs:
+                lid = re.sub(r"\D", "", str(pair.get("lid", "")).split("@")[0])
+                number = re.sub(r"\D", "", str(pair.get("pn") or pair.get("phoneNumber") or "").split("@")[0])
+                if lid and number:
+                    NUMBER_OF_LID[lid] = number
+                    learned += 1
+            if len(pairs) < limit:
+                break
         log.info("Learned the number behind %d of the groups' ids", learned)
         return learned
 

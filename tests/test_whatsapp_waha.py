@@ -506,3 +506,34 @@ def test_the_account_id_is_read_whatever_shape_whatsapp_answers_with():
     # Nothing found is nothing claimed: a 200 with an empty body is not an id.
     assert _lid_in({}) == "" and _lid_in(None) == "" and _lid_in({"lid": None}) == ""
     assert _lid_in({"pn": "22300000000@c.us"}) == ""  # the number it was asked about, not an id
+
+
+def test_every_page_of_numbers_is_learned_not_just_the_first():
+    """Measured 23 Sep: the first page came back exactly full — there were more, and the member
+    missing from it is the one who cannot sign in."""
+    import asyncio
+
+    from app.answer.citations import NUMBER_OF_LID
+    from app.config import Settings
+    from app.adapters.whatsapp_waha import Waha
+
+    pages = {0: [{"lid": f"{n}@lid", "pn": f"2239{n:07d}@c.us"} for n in range(100)],
+             100: [{"lid": "9999@lid", "pn": "22399999999@c.us"}]}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/groups"):
+            return httpx.Response(200, json=[])
+        offset = int(request.url.params.get("offset", 0))
+        return httpx.Response(200, json=pages.get(offset, []))
+
+    async def respond(message):
+        return None
+
+    waha = Waha(Settings(waha_url="http://waha.test", waha_api_key="k"), respond)
+    waha._http = httpx.AsyncClient(base_url="http://waha.test", transport=httpx.MockTransport(handler))
+    NUMBER_OF_LID.clear()
+    try:
+        assert asyncio.run(waha.learn_numbers(limit=100)) == 101
+        assert NUMBER_OF_LID["9999"] == "22399999999"  # the one on the second page
+    finally:
+        NUMBER_OF_LID.clear()
