@@ -148,10 +148,12 @@ def test_a_slow_gemini_voice_is_given_up_quickly_and_then_skipped(monkeypatch):
     monkeypatch.setattr(voice_module, "GEMINI_TTS_TIMEOUT", 0.05)
     speaker, models = _tts_voice([hang] * 14)
     assert asyncio.run(speaker._speak_gemini("hello", "en")) is None
-    # Two slow failures rest each model: 2 keys on each of the 2 models, not 14 keys.
-    assert sum(m.calls for m in models) == 4
+    # A timeout belongs to the model, not to the key it happened on: one slow failure is enough to
+    # leave that model. One call on each of the 2 models, not 14 keys (measured 23 Sep: two keys
+    # timing out in turn made a member wait 100 s for a voice note).
+    assert sum(m.calls for m in models) == 2
     assert asyncio.run(speaker._speak_gemini("hello", "en")) is None
-    assert sum(m.calls for m in models) == 4  # both models resting: no call at all
+    assert sum(m.calls for m in models) == 2  # both models resting: no call at all
 
 
 def test_a_key_over_quota_rests_alone_and_the_next_key_speaks(monkeypatch):
@@ -537,3 +539,30 @@ def test_bonsoir_is_french():
 
     assert detect_language("Bonsoir jeli") == "fr" and detect_language("Salut jeli") == "fr"
     assert detect_language("hello Jeli") == "en" and detect_language("what did I miss?") == "en"
+
+
+def test_a_long_answer_never_makes_a_member_wait_more_than_the_budget():
+    """Measured 23 Sep at 09:13: a 525-character recap cost 40 s on one key, then 40 s on the
+    next — 100 seconds before the free voice spoke. The whole attempt is now capped."""
+    from app.answer.voice import (
+        CHARS_PER_SECOND,
+        GEMINI_TTS_MAX_ATTEMPT_SECONDS,
+        GEMINI_TTS_SECONDS_PER_SPOKEN_SECOND,
+        GEMINI_TTS_TIMEOUT,
+        GEMINI_TTS_TOTAL_MAX_SECONDS,
+        GEMINI_TTS_TOTAL_SECONDS,
+    )
+
+    def budget(chars: int) -> tuple[float, float]:
+        attempt = min(
+            GEMINI_TTS_MAX_ATTEMPT_SECONDS,
+            GEMINI_TTS_TIMEOUT + chars / CHARS_PER_SECOND * GEMINI_TTS_SECONDS_PER_SPOKEN_SECOND,
+        )
+        return attempt, min(GEMINI_TTS_TOTAL_MAX_SECONDS, max(GEMINI_TTS_TOTAL_SECONDS, attempt + 5))
+
+    attempt, total = budget(525)  # the recap of that morning
+    assert 35 <= attempt <= 45 and total <= GEMINI_TTS_TOTAL_MAX_SECONDS
+    # Even the longest voice note Jeli will ever send stays within the budget.
+    assert budget(MAX_SPOKEN_CHARS)[1] <= GEMINI_TTS_TOTAL_MAX_SECONDS
+    # A short answer is still given a sensible minimum.
+    assert budget(80)[1] == GEMINI_TTS_TOTAL_SECONDS

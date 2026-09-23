@@ -80,9 +80,17 @@ GEMINI_TTS_TIMEOUT = 12.0  # per attempt, plus the time to say the text (a longe
 GEMINI_TTS_SECONDS_PER_SPOKEN_SECOND = 0.8  # measured: 8.3 s of speech in 6.2 s, 34 s in 20 s
 GEMINI_TTS_MAX_ATTEMPT_SECONDS = 60.0
 # Measured 21 Sep: the 3.1 preview timed out on every key in turn (20 s each, before the fallback
-# voice). Bounded: 30 s in all; two slow failures rest the model; a key over quota (429) rests alone.
+# voice). Bounded: a key over quota (429) rests alone and the next key is tried, because a daily
+# quota belongs to the key — but a timeout belongs to the MODEL, not to the key it happened on, so
+# trying the same model on another key only makes the member wait twice.
+#
+# Measured 23 Sep at 09:13: a 525-character recap timed out on key 0 after 40 s, then on key 1
+# after another 40 s, and the member waited 100 seconds before the backup voice spoke. One slow
+# failure is now enough to leave that model, and the whole attempt is capped: past this, the free
+# voice speaks, which takes about a second.
 GEMINI_TTS_TOTAL_SECONDS = 30.0
-GEMINI_TTS_SLOW_FAILURES = 2
+GEMINI_TTS_TOTAL_MAX_SECONDS = 45.0
+GEMINI_TTS_SLOW_FAILURES = 1
 GEMINI_TTS_REST_SECONDS = 300
 GEMINI_TTS_KEY_REST_SECONDS = 3600
 # The free tier's daily quota, per project (key) and speech model (Google's 429 says "limit: 10"),
@@ -475,7 +483,7 @@ class Voice:
             GEMINI_TTS_MAX_ATTEMPT_SECONDS,
             GEMINI_TTS_TIMEOUT + len(text) / CHARS_PER_SECOND * GEMINI_TTS_SECONDS_PER_SPOKEN_SECOND,
         )
-        total_seconds = max(GEMINI_TTS_TOTAL_SECONDS, 1.5 * attempt_timeout + 10)
+        total_seconds = min(GEMINI_TTS_TOTAL_MAX_SECONDS, max(GEMINI_TTS_TOTAL_SECONDS, attempt_timeout + 5))
         config = types.GenerateContentConfig(
             response_modalities=["AUDIO"],
             speech_config=types.SpeechConfig(
