@@ -307,3 +307,63 @@ def test_a_model_failing_for_its_own_reasons_is_not_shortened_at():
     with pytest.raises(BackupUnavailable):
         asyncio.run(made.generate("x" * 80_000, Shape))
     assert len(calls) == 1  # tried once, rested — shortening would not have helped
+
+
+def _both(handler=None):
+    """Gemini that answers, and a spare engine that answers: to see which one is asked."""
+    from types import SimpleNamespace
+
+    from app.answer.llm import GeneratedAnswer, LLM
+
+    gemini = GeneratedAnswer(answered=True, answer="from Gemini", sources=[])
+    asked = []
+
+    class Models:
+        async def generate_content(self, model, contents, config):
+            asked.append("gemini")
+            return SimpleNamespace(parsed=gemini, text=gemini.model_dump_json())
+
+    def groq_handler(request):
+        asked.append("spare")
+        return reply('{"answered": true, "answer": "from the spare engine", "sources": []}')
+
+    made = engine(handler or groq_handler, models=("first",))
+    llm = LLM("unused", ["a"], client=SimpleNamespace(aio=SimpleNamespace(models=Models())), backup=made)
+    return llm, asked
+
+
+def test_the_team_chooses_which_engine_answers():
+    llm, asked = _both()
+    # Auto: Gemini first, the spare engine only when it has nothing left.
+    assert asyncio.run(llm.answer("s", "q")).answer == "from Gemini"
+    assert asked == ["gemini"]
+    # The spare engine first, to try it or to spare the day's Gemini quota.
+    asked.clear()
+    llm.engine = "backup"
+    assert asyncio.run(llm.answer("s", "q")).answer == "from the spare engine"
+    assert asked == ["spare"]
+    # Gemini only: the spare engine is never asked, even when Gemini fails.
+    asked.clear()
+    llm.engine = "gemini_only"
+    assert asyncio.run(llm.answer("s", "q")).answer == "from Gemini"
+    assert asked == ["gemini"]
+
+
+def test_a_choice_that_leaves_no_way_out_is_honoured():
+    from app.answer.llm import LLMUnavailable
+
+    llm, asked = _both(lambda request: httpx.Response(500))
+    llm.engine = "backup_only"
+    with pytest.raises(LLMUnavailable):
+        asyncio.run(llm.answer("s", "q"))
+    assert "gemini" not in asked  # Gemini was switched off: it is not used behind the team's back
+    # With "backup", the same failure falls back to Gemini instead.
+    llm.engine = "backup"
+    assert asyncio.run(llm.answer("s", "q")).answer == "from Gemini"
+
+
+def test_every_tier_switches_at_the_same_moment():
+    llm, _ = _both()
+    light = llm.with_models(["lite"])
+    llm.engine = "backup_only"
+    assert light.engine == "backup_only"

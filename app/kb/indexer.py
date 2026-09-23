@@ -27,6 +27,25 @@ def document_page(message_sent_at: datetime, shared_at: datetime) -> int:
     return max(1, int((message_sent_at - shared_at).total_seconds()))
 
 
+async def catch_up_gemini(store: Store, embedder: Embedder, limit: int = 100) -> int:
+    """Give Gemini's vector to the passages kept while Google was unreachable, so both memories
+    hold the same thing again. Returns how many were filled in; silent when there are none."""
+    if not hasattr(store, "chunks_missing_gemini"):
+        return 0
+    waiting = await store.chunks_missing_gemini(limit)
+    if not waiting:
+        return 0
+    try:
+        vectors = await embedder.embed_documents([row["content"] for row in waiting])
+    except Exception as error:
+        log.warning("Google still unreachable: %d passages still waiting (%s)", len(waiting), error)
+        return 0
+    for row, vector in zip(waiting, vectors):
+        await store.fill_gemini_embedding(row["id"], vector)
+    log.info("Caught up %d passages kept while Google was unreachable", len(waiting))
+    return len(waiting)
+
+
 async def index_pending(
     store: Store,
     embedder: Embedder,
@@ -43,6 +62,7 @@ async def index_pending(
     """
     created = 0
     labels = labels or {}
+    await catch_up_gemini(store, embedder)
     for chat_id in await store.pending_chats():
         header = None
         if chat_id.startswith(RECORDING_PREFIX):
@@ -64,11 +84,20 @@ async def index_pending(
                 await embedder.embed_both(texts) if hasattr(embedder, "embed_both")
                 else (await embedder.embed_documents(texts), None)
             )
-            if vectors is None:
-                log.error("Chat %s: no Gemini embedding for this batch, kept for the next run", chat_id)
+            if vectors is None and not spares:
+                log.error("Chat %s: neither memory could embed this batch, kept for the next run", chat_id)
                 break
-            for position, (chunk, vector) in enumerate(zip(batch, vectors)):
-                await store.save_chunk(chunk, vector, MODEL, backup=spares[position] if spares else None)
+            if vectors is None:
+                # Google is unreachable: the passage is kept with the local vector alone, so the
+                # memory keeps growing and stays searchable. Gemini's is filled in when it returns.
+                log.warning("Chat %s: kept in the spare memory only, waiting for Google", chat_id)
+            for position, chunk in enumerate(batch):
+                await store.save_chunk(
+                    chunk,
+                    vectors[position] if vectors else None,
+                    MODEL,
+                    backup=spares[position] if spares else None,
+                )
             created += len(batch)
             log.info("Indexed %d chunks of chat %s", created, chat_id)
     return created

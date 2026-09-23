@@ -38,7 +38,9 @@ create table if not exists jeli.chunks (
     authors         text[] not null,
     message_ids     text[] not null,
     content         text not null,
-    embedding       extensions.vector(768) not null,
+    -- Nullable: while Google is unreachable a passage is kept with the local vector alone, and
+    -- Gemini's is filled in when it comes back (app/kb/indexer.py).
+    embedding       extensions.vector(768),
     embedding_model text not null,
     -- The same passage in the local model's own space (app/kb/local_embeddings.py), so the memory
     -- can still be searched when Google is unreachable. Vectors from two models are not

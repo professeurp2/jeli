@@ -101,6 +101,8 @@ FIELDS = {
         # Which voice speaks: the best available in turn (auto), or one of them first; the backup
         # voice (edge-tts: free, no quota) always takes over when the chosen one cannot speak.
         Field("voice_engine", "choice", lambda s: "auto", choices=("auto", "natural", "live", "backup")),
+        # Which engine writes the answers: Gemini, the spare engine, or one then the other.
+        Field("answer_engine", "choice", lambda s: "auto", choices=("auto", "gemini", "backup", "gemini_only", "backup_only")),
     )
 }
 

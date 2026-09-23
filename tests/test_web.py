@@ -194,8 +194,13 @@ def test_every_page_opens_and_shows_nothing_technical(client):
         page = client.get(path)
         assert page.status_code == 200, path
         shown = " ".join(re.findall(r"\w[\w@.]*", re.sub(r"<[^>]+>", " ", page.text.split("<script>")[0]).lower()))
-        for jargon in ("gemini", "chunk", "similarity", "embedding", "@g.us", "utc", "2348185546555"):
-            assert jargon not in shown.split(), (path, jargon)
+        # The engine names appear on the settings page only: the team asked to choose there which
+        # one answers, and they need to recognise them. Nowhere else, and never to a member.
+        jargon = ("chunk", "similarity", "embedding", "@g.us", "utc", "2348185546555")
+        if path != "/dashboard/settings":
+            jargon += ("gemini", "groq")
+        for word in jargon:
+            assert word not in shown.split(), (path, word)
     questions = client.get("/dashboard/questions").text
     assert "=cmd|" in questions  # shown, escaped
     home = client.get("/dashboard").text

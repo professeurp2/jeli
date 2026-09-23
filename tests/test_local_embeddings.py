@@ -115,3 +115,31 @@ def test_the_threshold_follows_the_memory_that_answered():
     assert floor_for([], 0.60) == 0.60
     # A question about the group scored 0.53 at worst in the spare space, one about nothing 0.28.
     assert 0.28 < floor_for([hit("backup")], 0.60) < 0.53
+
+
+class WaitingStore:
+    """A memory where some passages were kept while Google was unreachable."""
+
+    def __init__(self, waiting):
+        self.waiting = list(waiting)
+        self.filled = {}
+
+    async def chunks_missing_gemini(self, limit=100):
+        return self.waiting[:limit]
+
+    async def fill_gemini_embedding(self, chunk_id, embedding):
+        self.filled[chunk_id] = list(embedding)
+        self.waiting = [row for row in self.waiting if row["id"] != chunk_id]
+
+
+def test_what_was_remembered_without_google_is_caught_up_when_it_returns():
+    """The memory keeps growing during an outage, and both spaces hold the same thing after it."""
+    from app.kb.indexer import catch_up_gemini
+
+    store = WaitingStore([{"id": 1, "content": "what was said last night"}])
+    assert asyncio.run(catch_up_gemini(store, embedder(True, FakeLocal()))) == 1
+    assert len(store.filled[1]) == 768 and store.waiting == []
+    # While Google is still down, nothing is lost and nothing is claimed.
+    store = WaitingStore([{"id": 2, "content": "and this one"}])
+    assert asyncio.run(catch_up_gemini(store, embedder(False, FakeLocal()))) == 0
+    assert store.waiting and not store.filled

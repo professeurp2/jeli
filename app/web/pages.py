@@ -431,6 +431,13 @@ async def overview(request: Request, member: Member) -> Response:
     return _page(request, member, title="Overview", subtitle="How Jeli is doing, at a glance", active="home", body=body, live=True)
 
 
+ANSWER_ENGINE_CHOICES = [
+    ("auto", "Automatic"),
+    ("gemini", "Gemini first"),
+    ("backup", "Spare first"),
+    ("gemini_only", "Gemini only"),
+    ("backup_only", "Spare only"),
+]
 VOICE_ENGINE_CHOICES = [
     ("auto", "Automatic"),
     ("natural", "Natural voice"),
@@ -1596,6 +1603,14 @@ async def settings_page(request: Request, member: Member) -> HTMLResponse:
     def number(name: str, low: int, high: int, step: str = "1") -> str:
         return f'<input type="number" name="{name}" value="{runtime[name]:g}" min="{low}" max="{high}" step="{step}" style="width:96px">'
 
+    engine = _row(
+        "Which engine writes the answers",
+        "Automatic: Gemini first, and the spare engine (Groq) when Google has nothing left — the "
+        "normal way. Spare first spares the day's Gemini quota, and is how to try the spare engine "
+        "on real questions. The two “only” choices leave no way out, for a real test of one of them: "
+        "with them, a failure is a failure. Voice notes, pictures and stickers always need Gemini.",
+        _segmented("answer_engine", runtime["answer_engine"], ANSWER_ENGINE_CHOICES),
+    )
     answers = (
         _row("How sure must Jeli be before answering?", "Careful: it says “I don't know” more often. Relaxed: it answers more, with a higher risk of a weak answer.",
              _segmented("care", care, [("careful", "Careful"), ("balanced", "Balanced"), ("relaxed", "Relaxed")]))
@@ -1671,7 +1686,7 @@ async def settings_page(request: Request, member: Member) -> HTMLResponse:
     body = ui.form(
         "/dashboard/settings",
         csrf,
-        ui.card("Answers", f'<div class="rows">{answers}</div>', icon_name="chat")
+        ui.card("Answers", f'<div class="rows">{engine}{answers}</div>', icon_name="chat")
         + '<div style="height:20px"></div>'
         + ui.card("Earlier answers", f'<div class="rows">{pointers}</div>', icon_name="sparkle")
         + '<div style="height:20px"></div>'
@@ -1704,6 +1719,7 @@ SETTING_WORDS = {
     "voice_intro_rate": "voice reply rate for first contact",
     "voice_name": "voice personality",
     "voice_engine": "which voice speaks",
+    "answer_engine": "which engine writes the answers",
     "whatsapp_user_limit": "answers per member",
     "whatsapp_hourly_limit": "answers per hour",
     "member_daily_limit": "a member's share of answers per day",
@@ -1737,6 +1753,7 @@ async def settings_change(request: Request, member: Change) -> RedirectResponse:
         "voice_intro_rate": str(int(str(form.get("voice_intro_rate", "80"))) / 100),
         "voice_name": form.get("voice_name", "Aoede"),
         "voice_engine": form.get("voice_engine", "auto"),
+        "answer_engine": form.get("answer_engine", "auto"),
     }
     runtime = _state(request).runtime
     for key, value in changes.items():

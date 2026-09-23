@@ -15,7 +15,7 @@ from google import genai
 from google.genai import errors, types
 from pydantic import BaseModel, ValidationError
 
-from app.answer.groq import BackupUnavailable, Groq
+from app.answer.groq import BackupUnavailable, Groq, _as_text as as_text
 
 log = logging.getLogger(__name__)
 
@@ -104,6 +104,15 @@ class LLM:
         self.models = models
         # The spare engine, another company: tried for text answers when Gemini has nothing left.
         self.backup = backup
+        # Which engine answers, set from the dashboard (app/control/apply.py):
+        #   "auto"   Gemini first, the spare engine when it has nothing left — the normal way;
+        #   "gemini" Gemini only, even when it fails: the spare engine is never asked;
+        #   "backup" the spare engine first, Gemini only if it cannot — to try it, or to spare
+        #            the day's Gemini quota;
+        #   "gemini_only" / "backup_only" leave no way out, for a real test of one of them.
+        # Kept in a dict the views of this client share (with_models copies the reference), so the
+        # dashboard changes it once for every tier at the same moment.
+        self._shared = {"engine": "auto"}
         if client:
             self._clients = [client]
             self._api_keys: list[str] = []
@@ -129,6 +138,14 @@ class LLM:
     @property
     def key_count(self) -> int:
         return len(self._clients)
+
+    @property
+    def engine(self) -> str:
+        return self._shared["engine"]
+
+    @engine.setter
+    def engine(self, value: str) -> None:
+        self._shared["engine"] = value
 
     def _model_failed(self, model: str) -> None:
         streak = self._model_streak.get(model, 0) + 1
@@ -251,7 +268,26 @@ class LLM:
         for optional steps so that a busy model never doubles the wait."""
         if attempts is None:
             attempts = MAX_ATTEMPTS
-        spare = self.backup is not None and self.backup.available and isinstance(contents, str)
+        engine = self.engine
+        # Only when the spare engine could really take this call: a recording or a picture is
+        # Gemini's alone, and must keep its full run of models.
+        ready = self.backup is not None and self.backup.available and as_text(contents) is not None
+        spare = ready and engine != "gemini_only"
+        # The team asked for the spare engine first (to try it, or to spare the day's Gemini quota).
+        if ready and engine in ("backup", "backup_only"):
+            try:
+                return await self.backup.generate(
+                    contents, schema, system=system, temperature=temperature, timeout=timeout
+                )
+            except BackupUnavailable as error:
+                if engine == "backup_only":
+                    log.warning("Spare engine could not answer and Gemini is switched off (%s)", error)
+                    raise LLMUnavailable from error
+                log.info("Spare engine could not answer (%s): Gemini takes over", error)
+        elif engine == "backup_only":
+            raise LLMUnavailable  # the team switched Gemini off and there is no spare engine
+        if engine in ("backup", "backup_only"):
+            spare = False  # it has already had its turn
         if spare:
             attempts = min(attempts, ATTEMPTS_BEFORE_BACKUP)
         def config_for(model: str) -> types.GenerateContentConfig:
@@ -325,7 +361,7 @@ class LLM:
                 pairs[position:] = [pair for pair in pairs[position:] if pair[1] != model]
         # Gemini has nothing left for this call: the spare engine answers rather than the member
         # being told to come back later. Text only — a recording or a picture it cannot take.
-        if self.backup is not None and self.backup.available:
+        if spare:
             try:
                 return await self.backup.generate(
                     contents, schema, system=system, temperature=temperature, timeout=timeout

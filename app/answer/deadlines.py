@@ -173,10 +173,33 @@ true for today's date.
 INTRO_TIMEOUT = 6
 INTRO_CACHE_SECONDS = 600
 MAX_INTRO_CHARS = 350
+# A digest must be readable on a phone: a few lines, not every date Jeli knows.
+MOST_COMING_UP = 5
 
 
 class Intro(BaseModel):
     text: str
+
+
+# The same dates, told rather than listed. Measured 23 Sep at 00:43: a quiet night's catch-up
+# ended with fifteen raw lines, each carrying who announced it and where, several of them the same
+# hackathon deadline said by different people — and all in English under a French answer.
+COMING_UP_SYSTEM = PERSONA + """
+Your task now: the few things a member must not miss in the coming days, from the list below.
+
+- Write EVERY word in the language asked for, including what the source says in another language.
+- At most {most} items, most pressing first. Merge everything that is really the same thing into
+  one item, whoever announced it: three people saying testing closes on Friday is one deadline.
+- One line each, under 14 words, leading with the day (and the time when there is one), in bold
+  WhatsApp syntax: "*ven. 25 sept.* — les tests ferment".
+- Never who announced it, never where it was said, never a link.
+- intro: one short sentence in your own voice about how the days ahead look. No greeting.
+"""
+
+
+class ComingUp(BaseModel):
+    intro: str = ""
+    items: list[str] = []
 
 
 class Deadlines:
@@ -232,9 +255,40 @@ class Deadlines:
         return (f"{intro}\n\n" if intro else "") + texts["deadlines_header"].format(days=days) + "\n" + "\n".join(lines)
 
     async def coming_up_section(self, language: str, days: int = 3, today: date | None = None) -> str | None:
-        """For digests: what is due in the next few days, or None."""
+        """For digests: the few things not to miss in the coming days, told in the member's own
+        language and merged where several people announced the same thing. None when there is
+        nothing. Falls back to the plain list when no model can write it."""
         today = today or datetime.now(timezone.utc).date()
         deadlines = await self.store.deadlines_between(today, today + timedelta(days=days))
         if not deadlines:
             return None
-        return TEXTS[language]["deadlines_coming_up"] + "\n" + "\n".join(self._line(d, language) for d in deadlines)
+        lines = [self._line(d, language) for d in deadlines]
+        header = TEXTS[language]["deadlines_coming_up"]
+        if self.llm is None:
+            return header + "\n" + "\n".join(lines)
+        key = ("coming-up", language, today, tuple(lines))
+        cached = self._intros.get(key)
+        if cached and time.monotonic() - cached[0] < INTRO_CACHE_SECONDS:
+            return cached[1] or None
+        label = LANGUAGES.get(language, "English")
+        prompt = (
+            f"Write in {label}. Today is {today:%A %d %B %Y}.\n\nComing up:\n" + "\n".join(lines)
+            + f"\n\nWrite the intro and every item in {label}."
+        )
+        try:
+            said = await self.llm.generate(
+                prompt, ComingUp, system=COMING_UP_SYSTEM.format(most=MOST_COMING_UP),
+                timeout=INTRO_TIMEOUT, temperature=0.5, attempts=2,
+            )
+        except Exception:
+            log.warning("Could not write the coming-up section: showing the plain list", exc_info=True)
+            return header + "\n" + "\n".join(lines)
+        items = [" ".join(item.split()) for item in said.items[:MOST_COMING_UP] if item.strip()]
+        if not items:
+            return header + "\n" + "\n".join(lines)
+        intro = " ".join(said.intro.split())
+        section = (f"{intro}\n\n" if intro and len(intro) <= MAX_INTRO_CHARS else "") + header + "\n" + "\n".join(
+            f"• {item}" for item in items
+        )
+        self._intros[key] = (time.monotonic(), section)
+        return section

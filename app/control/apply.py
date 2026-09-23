@@ -68,6 +68,10 @@ def apply(state, runtime) -> None:
         whatsapp.voice_intro_rate = runtime["voice_intro_rate"]
         if getattr(whatsapp, "voice", None) is not None:
             whatsapp.voice.voice_name = runtime["voice_name"]
+    llm = getattr(state, "llm", None)
+    if llm is not None:
+        llm.engine = runtime["answer_engine"]  # shared by every tier: the views copy this object
+
     voice = getattr(state, "voice", None) or getattr(whatsapp, "voice", None)
     if voice is not None:
         voice.engine = runtime["voice_engine"]

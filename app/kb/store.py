@@ -516,6 +516,22 @@ class Store:
             "group_questions": [(row["at"], row["outcome"], row["question"]) for row in questions],
         }
 
+    async def chunks_missing_gemini(self, limit: int = 100) -> list[dict]:
+        """Passages kept while Google was unreachable: they have the local vector, not Gemini's."""
+        async with self._pool.connection() as conn:
+            rows = await (
+                await conn.execute(
+                    "select id, content from jeli.chunks where embedding is null order by id limit %s", (limit,)
+                )
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    async def fill_gemini_embedding(self, chunk_id: int, embedding: Sequence[float]) -> None:
+        async with self._pool.connection() as conn:
+            await conn.execute(
+                "update jeli.chunks set embedding = %s::vector where id = %s", (list(embedding), chunk_id)
+            )
+
     # --- Stickers the groups use -------------------------------------------------------------------
 
     async def remember_sticker(self, file_url: str, emotion: str, chat_id: str = "") -> None:
@@ -782,7 +798,7 @@ class Store:
         return [StoredMessage(**row) for row in rows]
 
     async def save_chunk(
-        self, chunk: Chunk, embedding: Sequence[float], model: str, backup: Sequence[float] | None = None
+        self, chunk: Chunk, embedding: Sequence[float] | None, model: str, backup: Sequence[float] | None = None
     ) -> int:
         """`backup`: the same passage in the local model's space, so the memory stays searchable
         when Google is unreachable (app/kb/local_embeddings.py)."""
@@ -800,7 +816,7 @@ class Store:
                         list(chunk.authors),
                         list(chunk.message_ids),
                         chunk.content,
-                        list(embedding),
+                        list(embedding) if embedding else None,
                         model,
                         list(backup) if backup else None,
                     ),
