@@ -14,8 +14,8 @@ class Store:
     def __init__(self, known=None):
         self.known = dict(known or {"22370000000": "Awa Traoré"})
 
-    async def member_by_number(self, digits):
-        return self.known.get(digits)
+    async def member_by_ids(self, ids):
+        return next((self.known[i] for i in ids if i in self.known), None)
 
     async def knowledge_overview(self):
         return {"chats": [{"messages": 911}], "recordings": [1, 2], "totals": {"deadlines": 7}}

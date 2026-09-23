@@ -104,3 +104,42 @@ def test_the_app_starts_with_whatsapp_configured(monkeypatch):
     with TestClient(app) as client:
         assert client.get("/health").json()["whatsapp"] is True
         assert app.state.whatsapp is not None
+
+
+def test_the_super_admin_can_ask_for_the_two_group_messages_out_loud():
+    """Said by voice: the note is listened to first, so it reaches this as plain words."""
+    posted = []
+
+    async def greet(which):
+        posted.append(which)
+        return "sent"
+
+    admin = Admin(runtime(), Model({"action": "hello", "reply": "Je me présente au groupe."}), greet=greet)
+    said = asyncio.run(admin.handle("Bienvenue Jeli sur le groupe cohorte, présente-toi"))
+    assert said == "Je me présente au groupe." and posted == ["hello"]
+
+    admin = Admin(runtime(), Model({"action": "goodbye", "reply": ""}), greet=greet)
+    assert "adieux" in asyncio.run(admin.handle("Jeli, ta période de test est terminée"))
+    assert posted == ["hello", "goodbye"]
+
+
+def test_a_greeting_already_posted_is_never_repeated_on_a_second_command():
+    async def greet(which):
+        return "already sent"
+
+    admin = Admin(runtime(), Model({"action": "hello", "reply": "ok"}), greet=greet)
+    assert "déjà fait" in asyncio.run(admin.handle("présente-toi au groupe"))
+
+
+def test_only_the_super_admin_is_obeyed_in_a_group():
+    """In a group the command must be addressed to Jeli, and come from that one number."""
+    from app.adapters.whatsapp_waha import Waha
+    from app.config import Settings
+
+    async def respond(message):
+        return None
+
+    waha = Waha(Settings(waha_url="http://waha.test", waha_api_key="k", super_admin_number="22393056936"), respond)
+    assert waha.super_admin_number == "22393056936"
+    assert is_super_admin(waha.super_admin_number, "22393056936@lid") is True
+    assert is_super_admin(waha.super_admin_number, "22370000000@c.us") is False

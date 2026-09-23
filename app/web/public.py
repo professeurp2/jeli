@@ -252,7 +252,11 @@ async def enter(request: Request):
     store = getattr(request.app.state, "store", None)
     if len(number) < 8 or store is None:
         return HTMLResponse(_shell("Entrer", _sign_in_form("Entrez le numéro complet, avec l'indicatif du pays.")))
-    name = await store.member_by_number(number)
+    # WhatsApp gives groups a per-account id, not the phone number: ask the channel to translate,
+    # then look the member up under either (app/adapters/whatsapp_waha.py).
+    channel = getattr(request.app.state, "whatsapp", None)
+    ids = await channel.ids_for_number(number) if channel is not None else [number]
+    name = await store.member_by_ids(ids)
     if not name:
         return HTMLResponse(
             _shell("Entrer", _sign_in_form("Jeli ne reconnaît pas ce numéro : il ne vous a pas encore lu dans le groupe."))

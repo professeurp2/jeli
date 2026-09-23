@@ -33,6 +33,7 @@ from app.control.guard import Guard
 from app.control.runtime import Runtime
 from app.control.setup import build_activities
 from app.ingest.history import catch_up
+from app.jobs.greetings import GOODBYE, HELLO, send_greeting
 from app.ingest.live import LiveIngestor
 from app.ingest.sessions import Sessions
 from app.kb.embeddings import Embedder
@@ -203,7 +204,16 @@ async def lifespan(app: FastAPI):
     # The super admin steers Jeli in plain words from WhatsApp (app/control/admin.py). Wired here,
     # after the activities exist: it can ask for one of them to run now.
     if state.whatsapp is not None and state.light_llm is not None:
-        state.whatsapp.admin = Admin(runtime, state.light_llm, state.activities)
+
+        async def greet(which: str) -> str:
+            """Jeli's hello or its goodbye in the cohort group — the same two the team can send."""
+            groups = runtime["groups"] or sorted(settings.whatsapp_groups)
+            return await send_greeting(
+                state.whatsapp, store, HELLO if which == "hello" else GOODBYE,
+                groups[0] if groups else "", actor="super admin",
+            )
+
+        state.whatsapp.admin = Admin(runtime, state.light_llm, state.activities, greet=greet)
     apply(state, runtime)
     runtime.listeners.append(lambda changed: apply(state, runtime))
     for activity in state.activities.values():

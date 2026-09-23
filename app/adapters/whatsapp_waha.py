@@ -372,6 +372,8 @@ class Waha:
         self.image_limiter = SlidingWindowLimiter(GROUP_IMAGES_PER_DAY, 86400)
         self._later: set[asyncio.Task] = set()
         self._admins: dict[str, tuple[float, set[str]]] = {}
+        # Phone number -> the ids it writes under in the groups (see ids_for_number), cached 1 h.
+        self._lids: dict[str, tuple[float, list[str]]] = {}
 
     def accepts(self, message: IncomingMessage) -> bool:
         """Direct messages are always accepted; groups only if listed in WHATSAPP_GROUP_IDS (when set)."""
@@ -931,9 +933,14 @@ class Waha:
         # Admin commands bypass all rate limits, silence and suspension.
         if self._is_admin(message) and await self._try_admin_command(message):
             return
-        # The super admin steers Jeli in plain words, in private (app/control/admin.py).
-        if self.admin is not None and message.is_private and is_super_admin(
-            self.super_admin_number, message.author_id, message.author
+        # The super admin steers Jeli in plain words (app/control/admin.py) — in private, or in a
+        # group when speaking to Jeli. In a group it must be addressed to Jeli: otherwise every
+        # sentence the super admin says to the cohort would be read as an order. By voice too: the
+        # note has already been listened to by the time it gets here.
+        if (
+            self.admin is not None
+            and (message.is_private or message.addressed_to_bot)
+            and is_super_admin(self.super_admin_number, message.author_id, message.author)
         ):
             done = await self.admin.handle(message.text or "", actor="super admin")
             if done:
@@ -1217,6 +1224,34 @@ class Waha:
             for chat in chats
             if isinstance(chat, dict) and str(chat.get("id", "")).endswith("@g.us")
         }
+
+    async def ids_for_number(self, digits: str) -> list[str]:
+        """Every id this phone number writes under, the number itself included.
+
+        WhatsApp no longer puts phone numbers in group messages: participants arrive as a "LID"
+        (`…@lid`), a per-account id with nothing of the number in it — measured 23 Sep, every
+        author Jeli holds in the groups is one. So a member typing their own number on Jeli's page
+        cannot be found by it; WAHA is asked to translate, and the answer is kept for an hour.
+        """
+        digits = re.sub(r"\D", "", digits or "")
+        if not digits:
+            return []
+        cached = self._lids.get(digits)
+        if cached and time.monotonic() - cached[0] < 3600:
+            return cached[1]
+        found = [digits]
+        try:
+            response = await self._http.get(f"/api/{self.session}/lids/pn/{digits}")
+            if response.is_success:
+                body = response.json()
+                lid = body.get("lid") if isinstance(body, dict) else body
+                if lid:
+                    found.append(re.sub(r"\D", "", str(lid).split("@")[0]))
+        except (httpx.HTTPError, ValueError):
+            log.warning("Could not ask WAHA which id belongs to a number", exc_info=True)
+        found = [item for item in dict.fromkeys(found) if item]
+        self._lids[digits] = (time.monotonic(), found)
+        return found
 
     async def group_admins(self, chat_id: str) -> set[str] | None:
         """The admins of a group (number or id digits), cached for an hour; None if unknown."""
