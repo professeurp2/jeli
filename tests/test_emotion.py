@@ -243,3 +243,40 @@ def test_stickers_stay_rare_and_can_be_switched_off():
     waha.enabled_stickers = False
     asyncio.run(waha._answer_with_a_sticker(message, _feeling("humor", 4)))
     assert sent == []
+
+
+def test_jelis_stickers_move_and_fit_what_whatsapp_accepts():
+    """A sticker that moves says more than a still one — and WhatsApp refuses one over 500 KB."""
+    import io as _io
+    from pathlib import Path
+
+    from PIL import Image
+
+    from app.answer.emotion import REACTIONS
+    from app.answer.stickers import for_reaction
+
+    for emoji in REACTIONS:
+        data = for_reaction(emoji)
+        assert data, emoji
+        assert len(data) <= 500_000, (emoji, len(data))
+        image = Image.open(_io.BytesIO(data))
+        assert image.size == (512, 512), (emoji, image.size)
+        assert getattr(image, "n_frames", 1) > 1, f"{emoji} is still"
+    assert Path("assets/stickers").is_dir()
+
+
+def test_jelis_own_sticker_is_sent_as_it_is_and_a_borrowed_one_is_converted():
+    """WAHA converting an animated WebP would flatten it into a picture."""
+    import asyncio
+
+    sent = []
+    waha = _channel(Stickers())
+    async def remember(path, payload):
+        sent.append((path, payload))
+        return {}
+
+    waha._post = remember
+    asyncio.run(waha.send_sticker("c@g.us", data=b"RIFF-animated"))
+    asyncio.run(waha.send_sticker("c@g.us", "http://waha.test/api/files/theirs.webp"))
+    assert sent[0][1]["convert"] is False and "data" in sent[0][1]["file"]
+    assert sent[1][1]["convert"] is True and "url" in sent[1][1]["file"]

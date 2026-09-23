@@ -826,7 +826,10 @@ class Waha:
                     "data": base64.b64encode(data).decode()}
         else:
             file = {"url": file_url}
-        payload: dict[str, Any] = {"chatId": chat_id, "file": file, "convert": True}
+        # Jeli's own stickers are already what WhatsApp wants — 512×512 WebP, animated. Asking WAHA
+        # to convert them would re-encode the animation into a still picture; a sticker borrowed
+        # from a group is whatever the member sent, so that one is converted.
+        payload: dict[str, Any] = {"chatId": chat_id, "file": file, "convert": not data}
         if reply_to:
             payload["reply_to"] = reply_to
         await self._post("/api/sendSticker", payload)
