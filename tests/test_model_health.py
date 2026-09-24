@@ -172,3 +172,58 @@ def test_the_rotation_says_how_many_keys_are_left():
     assert "error.code in (401, 403)" in handling
     # And the dead key's other models are dropped from what is still to try.
     assert "pair[0] != key_idx" in handling
+
+
+def test_a_limit_still_there_after_a_full_rest_is_the_days_quota():
+    """Measured 24 September: Google's 429 often says only "Resource has been exhausted", with no
+    word about the day. Treated as a five-minute burst, all thirty-three keys were retried every
+    five minutes for the whole day — thirty-three warnings a time, and every member's question
+    walked the dead rotation first."""
+    from app.answer.llm import LLM, STRIKES_BEFORE_TOMORROW
+
+    llm = LLM(api_keys=["a", "b"], models=["m1"])
+    # The first 429 on a pair is a burst: it rests, briefly.
+    assert llm._spent_for_the_day(0, "m1") is (STRIKES_BEFORE_TOMORROW <= 1)
+    # The next one, after that rest, is the day's quota.
+    assert llm._spent_for_the_day(0, "m1") is True
+    # And it is counted per pair: another key is judged on its own answers.
+    assert llm._spent_for_the_day(1, "m1") is (STRIKES_BEFORE_TOMORROW <= 1)
+
+
+def test_a_key_that_answers_again_is_not_held_against_it():
+    import inspect
+
+    from app.answer.llm import LLM
+
+    generating = inspect.getsource(LLM)
+    assert 'self._quota_strikes.pop((key_idx, model), None)' in generating
+    assert "STRIKES_BEFORE_TOMORROW" in generating
+
+
+def test_a_model_running_out_everywhere_is_said_once_not_once_per_key():
+    """Thirty-three keys is thirty-three warnings for one fact, and the fact drowns in them."""
+    import logging
+
+    from app.answer.llm import LLM
+
+    llm = LLM(api_keys=["a", "b", "c"], models=["m1"])
+    said = []
+    llm_log = logging.getLogger("app.answer.llm")
+
+    class Catch(logging.Handler):
+        def emit(self, record):
+            if record.levelno >= logging.WARNING:
+                said.append(record.getMessage())
+
+    handler = Catch()
+    llm_log.addHandler(handler)
+    try:
+        for key in range(3):
+            llm._rest(key, "m1", "quota")
+        # Resting the same pairs again says nothing new.
+        for key in range(3):
+            llm._rest(key, "m1", "quota")
+    finally:
+        llm_log.removeHandler(handler)
+    out = [line for line in said if "out of quota on all" in line]
+    assert len(out) == 1, said

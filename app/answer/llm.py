@@ -31,6 +31,9 @@ COOLDOWN_SECONDS = {"quota": 300, "unavailable": 60, "invalid": 86_400}
 # many pairs: the best model on two keys, then the next models. With 15+ keys the round-robin
 # cursor spreads the load; a key that failed rests, so the next call starts elsewhere.
 MAX_ATTEMPTS = 4
+# A pair that answers 429 again after a full rest was never a per-minute limit: it is the day's
+# quota, and nothing will change before it renews.
+STRIKES_BEFORE_TOMORROW = 2
 KEYS_PER_MODEL_FIRST = 2
 # When a spare engine is ready and the prompt is plain text, Gemini gets fewer slow failures before
 # handing over: measured in the audit of 22 Sep, four overloaded models cost the member about 24 s
@@ -127,6 +130,10 @@ class LLM:
         self._resting_until: dict[tuple[int, str], float] = {}
         # Keys Google refused (401): left out of every count until the 24 h are over.
         self._invalid_until: dict[int, float] = {}
+        # 429s in a row per (key, model), to tell the day's quota from a burst, and the
+        # models whose exhaustion has already been said out loud.
+        self._quota_strikes: dict[tuple[int, str], int] = {}
+        self._announced_out: set[str] = set()
         # Health per model, whatever the key: when it may be tried again, and its failures in a row.
         self._model_until: dict[str, float] = {}
         self._model_streak: dict[str, int] = {}
@@ -188,7 +195,36 @@ class LLM:
     def _rest(self, key: int, model: str, reason: str, seconds: float | None = None) -> None:
         seconds = COOLDOWN_SECONDS[reason] if seconds is None else seconds
         self._resting_until[(key, model)] = self._clock() + seconds
-        log.warning("Key %d model %s %s, skipped for %d s", key, model, reason, seconds)
+        # One line per pair is 33 keys × 5 models of noise when a model runs out everywhere, and
+        # the one line that matters — that the model is gone — drowns in it. The details go to
+        # debug; what is said out loud is a model leaving, once.
+        log.debug("Key %d model %s %s, skipped for %d s", key, model, reason, seconds)
+        if reason == "quota" and not self._any_key_left(model):
+            if model not in self._announced_out:
+                self._announced_out.add(model)
+                log.warning(
+                    "Model %s is out of quota on all %d keys — the next model takes over, then Groq",
+                    model, len(self.valid_keys()),
+                )
+        else:
+            self._announced_out.discard(model)
+
+    def _any_key_left(self, model: str) -> bool:
+        now = self._clock()
+        return any(self._resting_until.get((k, model), 0) <= now for k in self.valid_keys())
+
+    def _spent_for_the_day(self, key: int, model: str) -> bool:
+        """Whether this pair's 429 is the day's quota rather than a burst of the minute.
+
+        Google does not always say which: with an API key the message is often just "Resource has
+        been exhausted". So it is counted instead — a limit still there after a full rest was never
+        a per-minute one. Measured 24 September: without this, every key was retried every five
+        minutes for the whole day, thirty-three warnings at a time, and each member's question
+        walked the dead rotation before being answered.
+        """
+        strikes = self._quota_strikes.get((key, model), 0) + 1
+        self._quota_strikes[(key, model)] = strikes
+        return strikes >= STRIKES_BEFORE_TOMORROW
 
     def _disable_key(self, key: int, why: str = "refused") -> None:
         """Mark all models on a key as invalid for 24 h: the key is refused, or its project is."""
@@ -329,6 +365,9 @@ class LLM:
                 self._next_key = (key_idx + 1) % len(self._clients)  # advance round-robin
                 parsed = response.parsed
                 result = parsed if isinstance(parsed, schema) else schema.model_validate_json(response.text)
+                # It answered: whatever 429s this pair had were a busy minute, not the day's end.
+                self._quota_strikes.pop((key_idx, model), None)
+                self._announced_out.discard(model)
                 self._model_succeeded(model, self._clock() - started)
                 return result
             except errors.ClientError as error:
@@ -342,7 +381,7 @@ class LLM:
                     # next key — or the spare engine — could have given.
                     self._disable_key(key_idx, "refused" if error.code == 401 else "its project was denied access")
                     pairs[position:] = [pair for pair in pairs[position:] if pair[0] != key_idx]
-                elif error.code == 429 and "PerDay" in str(error):
+                elif error.code == 429 and ("PerDay" in str(error) or self._spent_for_the_day(key_idx, model)):
                     # The day's quota is spent: nothing to try again before it renews.
                     self._rest(key_idx, model, "quota", seconds=seconds_until_quota_renewal(self._wall_clock()))
                 elif error.code in (404, 429):
