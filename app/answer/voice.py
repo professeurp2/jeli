@@ -108,16 +108,51 @@ GEMINI_TTS_KEY_REST_SECONDS = 3600
 # renewed at midnight Pacific time. Jeli counts what it used, so the team sees what is left.
 TTS_REQUESTS_PER_DAY = 10
 
-# edge-tts — fallback when Gemini TTS quota is exhausted or unavailable.
+# The languages Gemini's speech models can actually say (both the TTS models and the Live voice
+# publish the same 24). Measured 24 Sep: no African language is among them except Arabic — so for
+# a member writing in Swahili, Amharic or Zulu, the free voice is not a fallback, it is the only
+# one that can. Asking Gemini anyway spends a scarce daily quota to get an American accent.
+GEMINI_SPOKEN = frozenset(
+    "ar de en es fr hi id it ja ko nl pl pt ro ru th tr uk vi bn mr ta te".split()
+)
+
+# edge-tts — free, no quota, and the only voice for most of the community's languages.
 # edge-tts (7.x) escapes what it is given and builds its own SSML: it must receive plain text,
 # never SSML, or it reads the tags aloud ("Speak version 1.0 xmlns…").
-# The "Multilingual" neural voices are the most natural ones edge-tts offers (checked 22 Sep
-# with list_voices); Swahili and Amharic get their own voice instead of an English one.
+# The "Multilingual" neural voices are the most natural ones it offers; the African languages it
+# does have get their own speaker instead (read from list_voices() on 24 Sep — these all exist).
 EDGE_VOICES = {
     "fr": "fr-FR-VivienneMultilingualNeural",
     "en": "en-US-AvaMultilingualNeural",
     "sw": "sw-KE-ZuriNeural",
     "am": "am-ET-MekdesNeural",
+    "so": "so-SO-UbaxNeural",
+    "zu": "zu-ZA-ThandoNeural",
+    "af": "af-ZA-AdriNeural",
+    "ar": "ar-EG-SalmaNeural",
+    # Lusophone Africa — Mozambique, Angola, Cape Verde, Guinea-Bissau: European Portuguese is the
+    # one those countries read and hear, not the Brazilian voice.
+    "pt": "pt-PT-RaquelNeural",
+    "es": "es-ES-ElviraNeural",
+}
+# Languages no speech model anywhere can say yet — most of the ones this community speaks.
+# Rather than an American voice stumbling through Wolof, the nearest voice of the same region
+# reads it: built for neighbouring sounds, and for the ear that will hear it. It is an accent, not
+# a native speaker, and that is still far closer than the alternative.
+NEAREST_VOICE = {
+    # Bantu languages, to the Swahili and Zulu speakers.
+    "rw": "sw-KE-ZuriNeural", "rn": "sw-KE-ZuriNeural", "lg": "sw-KE-ZuriNeural",
+    "sn": "zu-ZA-ThandoNeural", "ny": "zu-ZA-ThandoNeural", "xh": "zu-ZA-ThandoNeural",
+    "st": "zu-ZA-ThandoNeural", "tn": "zu-ZA-ThandoNeural",
+    # Written with French spelling conventions, so the French voice pronounces them closest.
+    "ln": "fr-FR-VivienneMultilingualNeural", "wo": "fr-FR-VivienneMultilingualNeural",
+    "bm": "fr-FR-VivienneMultilingualNeural", "ff": "fr-FR-VivienneMultilingualNeural",
+    "mg": "fr-FR-VivienneMultilingualNeural", "kg": "fr-FR-VivienneMultilingualNeural",
+    # West Africa, to the Nigerian English speaker.
+    "ha": "en-NG-EzinneNeural", "yo": "en-NG-EzinneNeural", "ig": "en-NG-EzinneNeural",
+    "pcm": "en-NG-EzinneNeural", "tw": "en-NG-EzinneNeural", "ee": "en-NG-EzinneNeural",
+    # Horn of Africa, to the Amharic speaker (Tigrinya shares its script).
+    "ti": "am-ET-MekdesNeural", "om": "am-ET-MekdesNeural",
 }
 AUDIO_MIMETYPE = "audio/mpeg"  # edge-tts output
 AUDIO_BYTES_PER_SECOND = 16_000  # edge-tts MP3 at ~128 kbps (used for recording-delay timing)
@@ -198,9 +233,16 @@ class Script(BaseModel):
     direction: str = ""
 
 
+# Every language Jeli will speak aloud. A language missing here is thrown away before it reaches
+# a voice (see speak), so this list is what decides whether a member is heard in their own words.
 LANG_LABELS = {
-    "fr": "French", "en": "English", "sw": "Swahili",
-    "rw": "Kinyarwanda", "ln": "Lingala", "wo": "Wolof", "am": "Amharic",
+    "fr": "French", "en": "English", "ar": "Arabic", "pt": "Portuguese", "es": "Spanish",
+    "sw": "Swahili", "am": "Amharic", "so": "Somali", "zu": "Zulu", "af": "Afrikaans",
+    "rw": "Kinyarwanda", "rn": "Kirundi", "lg": "Luganda", "sn": "Shona", "ny": "Chichewa",
+    "xh": "Xhosa", "st": "Sesotho", "tn": "Setswana", "ln": "Lingala", "kg": "Kikongo",
+    "wo": "Wolof", "bm": "Bambara", "ff": "Fulfulde", "mg": "Malagasy",
+    "ha": "Hausa", "yo": "Yoruba", "ig": "Igbo", "pcm": "Nigerian Pidgin", "tw": "Twi",
+    "ee": "Ewe", "ti": "Tigrinya", "om": "Oromo",
 }
 # A written answer read as it is sounds read, not spoken. Short answers are said again in spoken
 # language, with the feeling of the content; long ones (digests, lists) are read as they are.
@@ -580,8 +622,9 @@ class Voice:
         return None
 
     async def _speak_edge(self, text: str, language: str, mood: str = DEFAULT_MOOD) -> bytes | None:
-        """edge-tts fallback: free, no quota. Plain text only (see EDGE_VOICES)."""
-        voice = EDGE_VOICES.get(language, EDGE_VOICES["en"])
+        """edge-tts: free, no quota, and for most of the community's languages the only voice
+        there is. Plain text only (see EDGE_VOICES)."""
+        voice = EDGE_VOICES.get(language) or NEAREST_VOICE.get(language) or EDGE_VOICES["en"]
         _, rate, pitch = MOODS.get(mood, MOODS[DEFAULT_MOOD])
         try:
             communicate = edge_tts.Communicate(text, voice, rate=rate, pitch=pitch)
@@ -679,10 +722,23 @@ class Voice:
             "natural": lambda: self._speak_gemini(speech, spoken_language, mood),
             "live": lambda: self._speak_live(speech, mood, spoken_language),
         }
-        for name in VOICE_ENGINES.get(self.engine, VOICE_ENGINES["auto"]):
+        order = self.voices_for(spoken_language)
+        for name in order:
             audio = await voices[name]()
             if audio:
                 return audio
-        if self.engine != "backup":
-            log.warning("No Gemini voice answered: the fallback voice speaks")
+        if order:
+            log.warning("No Gemini voice answered: the free voice speaks")
         return await self._speak_edge(speech, spoken_language, mood)
+
+    def voices_for(self, language: str) -> tuple[str, ...]:
+        """Which of Gemini's voices to try for this language, in order, before the free one.
+
+        Gemini's speech models know 24 languages, and no African one but Arabic. Trying them on
+        Swahili or Hausa spends a quota of ten notes a day per key to obtain an American accent
+        reading words it does not know — while edge-tts has a Kenyan speaker for it, free and
+        unlimited. So for those languages there is nothing to try first: the voice that can say it
+        is the one that speaks. This is the whole rule; no language is a special case of it.
+        """
+        wanted = VOICE_ENGINES.get(self.engine, VOICE_ENGINES["auto"])
+        return wanted if language in GEMINI_SPOKEN else ()

@@ -645,3 +645,63 @@ def test_a_voice_note_ends_in_silence_not_on_a_knock():
     assert quiet[-faded - 1] == 20000 and FADE_MS <= 20  # short enough not to be heard as a fade
     # A half sample at the end is dropped rather than played as a crack.
     assert len(_ends_quietly(loud + b"\x01", SAMPLE_RATE)) % 2 == 0
+
+
+# --- The community's own languages --------------------------------------------------------------
+
+
+def test_the_voice_that_can_say_it_is_the_one_that_speaks():
+    """Google's speech models know 24 languages and no African one but Arabic. Asking them anyway
+    spends a quota of ten notes a day per key to get an American accent reading Swahili."""
+    from app.answer.voice import GEMINI_SPOKEN, Voice
+
+    voice = Voice(None)
+    voice.engine = "auto"
+    assert voice.voices_for("fr") == ("natural", "live")
+    assert voice.voices_for("ar") == ("natural", "live")  # the one African language they do know
+    for language in ("sw", "am", "so", "zu", "ha", "yo", "rw", "wo", "bm", "ln", "ig"):
+        assert voice.voices_for(language) == (), language
+        assert language not in GEMINI_SPOKEN
+    # Even when the team asks for a Gemini voice: it cannot say these words, so it is not asked.
+    voice.engine = "natural"
+    assert voice.voices_for("sw") == () and voice.voices_for("en") == ("natural",)
+
+
+def test_every_language_jeli_speaks_has_a_voice_that_exists():
+    """The tables are not a wish list: each name was read from edge-tts's own list of voices."""
+    from app.answer.voice import EDGE_VOICES, LANG_LABELS, NEAREST_VOICE
+
+    for language in LANG_LABELS:
+        voice = EDGE_VOICES.get(language) or NEAREST_VOICE.get(language)
+        assert voice, f"{language} would be read by an American voice"
+        assert voice.count("-") >= 2 and voice.endswith("Neural"), voice
+    # The ones with a speaker of their own are not also listed as nearest: one answer per language.
+    assert not set(EDGE_VOICES) & set(NEAREST_VOICE)
+
+
+def test_a_language_with_no_speaker_gets_its_region_not_an_american_accent():
+    from app.answer.voice import NEAREST_VOICE
+
+    assert NEAREST_VOICE["rw"].startswith("sw-")  # Kinyarwanda is Bantu, like Swahili
+    assert NEAREST_VOICE["ha"].startswith("en-NG")  # Hausa, to the Nigerian speaker
+    assert NEAREST_VOICE["wo"].startswith("fr-")  # Wolof is written with French conventions
+    assert NEAREST_VOICE["ti"].startswith("am-")  # Tigrinya shares Amharic's script
+    assert not any(name.startswith("en-US") for name in NEAREST_VOICE.values())
+
+
+def test_a_reply_in_an_african_language_keeps_it_instead_of_falling_back_to_english():
+    """`speak` throws away a language it does not list, and then speaks English at the member."""
+    from app.answer.voice import LANG_LABELS
+
+    for language in ("sw", "am", "so", "zu", "af", "ha", "yo", "ig", "rw", "rn", "lg", "sn",
+                     "ny", "xh", "st", "tn", "ln", "kg", "wo", "bm", "ff", "mg", "tw", "ee",
+                     "ti", "om", "pcm"):
+        assert language in LANG_LABELS, language
+
+
+def test_jeli_knows_it_speaks_them_and_does_not_oversell_it():
+    from app.answer.persona import CAPABILITIES
+
+    assert "including African ones" in CAPABILITIES and "Swahili" in CAPABILITIES
+    # An accent is not a native speaker, and Jeli says so rather than pretending.
+    assert "an accent, not a native" in CAPABILITIES

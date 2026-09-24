@@ -1684,9 +1684,11 @@ async def settings_page(request: Request, member: Member) -> HTMLResponse:
                f'<output>{round(runtime["voice_intro_rate"] * 100)}%</output>')
         + _row("Voice personality", "The character of Jeli's voice. Warm is expressive and conversational; Clear is more neutral and professional.",
                _segmented("voice_name", runtime["voice_name"], _VOICE_PERSONALITIES))
-        + _row("Which voice speaks", "Automatic: the natural voice while today's quota lasts, then the live voice, then the backup voice. "
-               "Choose one to use it first. The backup voice is free and unlimited, less lively: it spares the natural voices' quota. "
-               "Whatever the choice, the backup voice takes over when the chosen one cannot speak.",
+        + _row("Which voice speaks", "Automatic: the natural voice while today's quota lasts, then the live voice, then the free voice. "
+               "Choose one to use it first. The free voice is unlimited and less lively: it spares the natural voices' quota. "
+               "Whatever the choice, the free voice takes over when the chosen one cannot speak — and it speaks first, always, "
+               "for the African languages Google's voices do not know (Swahili, Amharic, Hausa, Kinyarwanda and the rest): "
+               "there it is the only one with a real speaker.",
                _segmented("voice_engine", runtime["voice_engine"], VOICE_ENGINE_CHOICES))
     )
     voice_settings = await _voice_quota_line(_state(request)) + voice_settings
