@@ -19,42 +19,42 @@ HELLO = "greeting.hello"
 GOODBYE = "greeting.goodbye"
 
 HELLO_TEXT = """\
-Bonsoir à toutes et à tous 👋
+Hello everyone 👋
 
-Je suis *Jeli*, le griot de ce groupe. Comme les griots d'autrefois gardaient la mémoire de leur \
-communauté, je garde la vôtre : les annonces, les décisions, les sessions enregistrées, les \
-échéances. Rien ne se perd.
+I'm *Jeli*, the griot of this group. Just as the griots of old kept their community's memory, I \
+keep yours: the announcements, the decisions, the recorded sessions, the deadlines. Nothing gets \
+lost.
 
-*Ce que vous pouvez me demander*
-• _« C'est quand la prochaine session ? »_ — je réponds, et je dis qui l'a annoncé
-• _« Qu'est-ce que j'ai manqué depuis lundi ? »_ — je vous fais le résumé
-• _« Résume-moi la session d'hier »_ — j'écoute les enregistrements
-• _« Rappelle-moi avant la réunion »_ — je vous préviens à temps
-• _/deadlines_ — tout ce qui arrive dans les deux semaines
+*What you can ask me*
+• _"When is the next session?"_ — I answer, and I say who announced it
+• _"What did I miss since Monday?"_ — I'll catch you up
+• _"Summarise yesterday's session"_ — I listen to the recordings
+• _"Send me the Information Pack"_ — I'll send the document, translated if you ask
+• _"Remind me before the meeting"_ — I'll tell you in time, here or privately
+• _/deadlines_ — everything due in the next two weeks
 
-Écrivez-moi en français, in English, kwa Kiswahili — je réponds dans votre langue. Par écrit ou en \
-vocal, comme vous préférez. Vous pouvez même *m'appeler et me parler de vive voix* : demandez-moi « le lien de l'appel » et je vous l'envoie 📞
+Write to me in English, en français, kwa Kiswahili, በአማርኛ — I answer in your language. In writing \
+or by voice, whichever suits you: I can listen to a voice note and reply with one, in Swahili, \
+Amharic, Hausa, Yoruba, Kinyarwanda and others. You can even *call me and talk to me out loud* — \
+ask me for "the call link" and I'll send it 📞
 
-*Deux choses importantes.* Je ne parle que si on m'adresse la parole : écrivez « Jeli » au début \
-de votre message, ou répondez à l'un des miens. Et je ne dis jamais rien que quelqu'un n'ait dit \
-ici — quand je ne sais pas, je le dis.
+*Two things that matter.* I only speak when spoken to: start your message with "Jeli", or reply to \
+one of mine. And I never say anything nobody said here — when I don't know, I say so.
 
-Bonne chance à toutes les équipes 🙏
+Good luck to every team 🙏
 """
 
 GOODBYE_TEXT = """\
-Un dernier mot, et je vous laisse 🙏
+One last word, and I'll leave you to it 🙏
 
-Les tests sont terminés. Merci à chacun de vous : vous m'avez posé des questions auxquelles je ne \
-savais pas répondre, et c'est comme ça que j'ai appris. Chaque « tu t'es trompé » de ces derniers \
-jours a corrigé quelque chose.
+The testing is over. Thank you, each of you: you asked me questions I couldn't answer, and that is \
+how I learned. Every "you got that wrong" of these past days corrected something.
 
-Ce que vous avez construit ensemble reste : les sessions, les décisions, les échéances — tout est \
-gardé.
+What you built together stays: the sessions, the decisions, the deadlines — all of it is kept.
 
-Je me mets en veille maintenant. Si l'équipe me rallume un jour, je me souviendrai de tout.
+I'm going quiet now. If the team ever wakes me up again, I'll remember everything.
 
-Bon vent à toutes les équipes. Ce fut un honneur de garder votre mémoire ✨
+Safe travels to every team. It has been an honour to keep your memory ✨
 """
 
 

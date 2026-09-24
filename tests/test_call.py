@@ -162,7 +162,7 @@ def test_jeli_says_it_can_be_called():
 
     assert "Be called and talked to out loud" in CAPABILITIES
     assert "never invent one" in CAPABILITIES  # the address comes from its state, not from guessing
-    assert "m'appeler et me parler de vive voix" in HELLO_TEXT
+    assert "call me and talk to me out loud" in HELLO_TEXT
 
 
 # --- What the team controls, and what the page shows ------------------------------------------

@@ -54,9 +54,15 @@ def test_without_a_group_nothing_is_posted():
 
 
 def test_both_messages_say_what_jeli_is_and_what_it_will_not_do():
+    """In English: it is the programme's common language, and what the team greets Jeli in."""
     # The hello must set expectations: Jeli speaks when spoken to, and says when it does not know.
-    assert "Jeli" in HELLO_TEXT and "vocal" in HELLO_TEXT
-    assert "je ne sais pas" in HELLO_TEXT and "adresse la parole" in HELLO_TEXT
+    assert "Jeli" in HELLO_TEXT and "voice note" in HELLO_TEXT
+    assert "when I don't know, I say so" in HELLO_TEXT
+    assert "I only speak when spoken to" in HELLO_TEXT
     assert "/deadlines" in HELLO_TEXT
+    # And it says, in their own languages, that it answers in them.
+    for language in ("en français", "kwa Kiswahili", "Amharic", "Hausa"):
+        assert language in HELLO_TEXT, language
     # The goodbye must not promise a service that is stopping.
-    assert "veille" in GOODBYE_TEXT and "Merci" in GOODBYE_TEXT
+    assert "going quiet" in GOODBYE_TEXT and "Thank you" in GOODBYE_TEXT
+    assert "all of it is kept" in GOODBYE_TEXT
