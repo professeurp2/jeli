@@ -73,6 +73,23 @@ def display_person(entry: str) -> str:
 NUMBER_OF_LID: dict[str, str] = {}
 
 
+def private_chat_of(author_id: str) -> str:
+    """The one-to-one chat with whoever wrote under this id, or "" when WhatsApp has not said.
+
+    A group message carries a LID, and a LID is not a chat anyone can open — the number behind it
+    is. So asking Jeli in a group for something to arrive in private only works once WhatsApp has
+    told us which number that member is (learn_numbers). When it has not, the caller decides what
+    to do about it; guessing a chat id would write to a stranger.
+    """
+    who = re.sub(r"\D", "", (author_id or "").split("@")[0].split(":")[0])
+    if not who:
+        return ""
+    if author_id.endswith("@c.us"):
+        return f"{who}@c.us"
+    number = NUMBER_OF_LID.get(who)
+    return f"{number}@c.us" if number else ""
+
+
 def is_ignored(message, keys: set[str]) -> bool:
     """By display name or phone number, and by WhatsApp id: live messages carry a display name,
     not the phone number that exports show."""

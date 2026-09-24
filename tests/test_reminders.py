@@ -24,7 +24,11 @@ class Store:
         return [r for r in self.rows if r["member_key"] == member_key and r["sent_at"] is None and not r["cancelled"]]
 
     async def cancel_reminders(self, member_key, chat_id):
-        found = [r for r in await self.active_reminders(member_key) if r["chat_id"] == chat_id]
+        found = [
+            r
+            for r in await self.active_reminders(member_key)
+            if chat_id in (r["chat_id"], r.get("asked_in") or r["chat_id"])
+        ]
         for r in found:
             r["cancelled"] = True
         return len(found)
@@ -123,3 +127,86 @@ def test_the_understanding_step_knows_a_reminder_request():
     from app.answer.understand import KINDS, SYSTEM
 
     assert "reminder" in KINDS and '"reminder": asks Jeli to remind them' in SYSTEM
+
+
+PRIVATELY = SET.model_copy(update={
+    "where": "private",
+    "reply": "C'est noté ⏰ Je te préviens en privé mercredi à 09:30 CAT.",
+})
+GROUP = "120363429618850959@g.us"
+
+
+def test_a_reminder_asked_for_in_private_arrives_in_private():
+    """Asked in the group, delivered to the member alone — not to 240 people."""
+    store = Store()
+    reminders = Reminders(store, Plans(PRIVATELY), clock=lambda: NOW)
+    reply = asyncio.run(reminders.handle(ask("rappelle-moi en privé avant la réunion"), "…", "fr", TURNS))
+    assert reply == PRIVATELY.reply
+    [kept] = store.rows
+    assert kept["chat_id"] == "22370000000@c.us"  # the member's own chat, not the group
+    assert kept["asked_in"] == GROUP  # but Jeli remembers where it was asked for
+    # A message in one chat cannot be replied to from another, and nobody is mentioned in private.
+    assert kept["message_id"] == ""
+    sent = []
+
+    async def send(chat_id, text, reply_to, mentions):
+        sent.append((chat_id, text, reply_to, mentions))
+        return True
+
+    on_time = Reminders(store, None, clock=lambda: datetime(2026, 9, 23, 7, 30, 20, tzinfo=timezone.utc))
+    assert asyncio.run(on_time.send_due(send)) == (1, 0)
+    [(chat, text, reply_to, mentions)] = sent
+    assert chat == "22370000000@c.us" and reply_to is None and mentions == []
+    assert text == PRIVATELY.message and not text.startswith("@")
+
+
+def test_a_private_reminder_is_cancelled_from_where_it_was_asked_for():
+    store = Store()
+    asyncio.run(Reminders(store, Plans(PRIVATELY), clock=lambda: NOW).handle(ask("rappelle-moi en privé"), "…", "fr", TURNS))
+    cancel = ReminderPlan(action="cancel", reply="C'est fait 👍")
+    asyncio.run(Reminders(store, Plans(cancel), clock=lambda: NOW).handle(ask("annule mon rappel"), "annule", "fr"))
+    assert store.rows[0]["cancelled"] is True
+
+
+def test_a_group_member_is_reached_by_the_number_behind_their_group_id():
+    """In a group everyone arrives as a LID, which is not a chat anyone can open."""
+    from app.answer.citations import NUMBER_OF_LID, private_chat_of
+
+    assert private_chat_of("216324735279308@lid") == ""  # not known yet: no guessing
+    NUMBER_OF_LID["216324735279308"] = "22370000000"
+    try:
+        assert private_chat_of("216324735279308@lid") == "22370000000@c.us"
+        store = Store()
+        message = ask("rappelle-moi en privé")
+        message = message.__class__(**{**message.__dict__, "author_id": "216324735279308@lid"})
+        asyncio.run(Reminders(store, Plans(PRIVATELY), clock=lambda: NOW).handle(message, "…", "fr", TURNS))
+        assert store.rows[0]["chat_id"] == "22370000000@c.us"
+    finally:
+        NUMBER_OF_LID.pop("216324735279308", None)
+
+
+def test_when_the_private_chat_is_unknown_jeli_says_so_instead_of_telling_the_group():
+    """The reminder a member wanted kept quiet must never fall back to the group."""
+    store = Store()
+    message = ask("rappelle-moi en privé")
+    message = message.__class__(**{**message.__dict__, "author_id": "999888777666@lid"})
+    reply = asyncio.run(Reminders(store, Plans(PRIVATELY), clock=lambda: NOW).handle(message, "…", "fr", TURNS))
+    assert "en privé" in reply and store.rows == []
+
+
+def test_asking_in_private_changes_nothing_and_the_normal_case_is_unchanged():
+    store = Store()
+    asyncio.run(Reminders(store, Plans(PRIVATELY), clock=lambda: NOW).handle(
+        ask("rappelle-moi", chat_id="22370000000@c.us"), "…", "fr", TURNS))
+    assert store.rows[0]["chat_id"] == "22370000000@c.us" and store.rows[0]["message_id"] == "req-1"
+    store = Store()
+    asyncio.run(Reminders(store, Plans(SET), clock=lambda: NOW).handle(ask("rappelle-moi"), "…", "fr", TURNS))
+    assert store.rows[0]["chat_id"] == GROUP and store.rows[0]["asked_in"] == GROUP
+
+
+def test_jeli_knows_it_can_remind_privately():
+    from app.answer.persona import CAPABILITIES
+    from app.answer.reminders import PLAN_SYSTEM
+
+    assert "or privately, just to them, when they ask for that" in CAPABILITIES
+    assert '"private" when the member asks' in PLAN_SYSTEM and "any words and any language" in PLAN_SYSTEM

@@ -55,7 +55,8 @@ What Jeli can do — say it in your own words, only the parts that answer the me
   was said in one session.
 - Upcoming deadlines (/deadlines) and where a topic was discussed (/search).
 - Remind a member before a meeting, a session or a deadline when they ask ("remind me before the
-  meeting"), in the chat where they asked; and cancel it when they ask.
+  meeting"), in the chat where they asked — or privately, just to them, when they ask for that
+  ("en privé", "not in the group"); and cancel it when they ask, from wherever they asked.
 - Send a document a member asks for, translated into another language if asked.
 - Listen to voice notes and answer by voice (useful for members who cannot read easily); describe an
   image sent with a question; illustrate statistics with an image when asked.

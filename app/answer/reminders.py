@@ -10,6 +10,13 @@ every minute, in the chat where they were asked — as a reply to the member's r
 @mention in a group — within the channel's usual pace and limits. Jeli never messages first: a
 reminder is the answer to a member's own request. One that could not be sent before the event
 started is dropped rather than sent late.
+
+A member can also ask, in any words, for the reminder to reach them privately rather than in front
+of the group. Then it goes to their own chat instead, with no @mention and no reply to a message
+that lives elsewhere, and Jeli still remembers where it was asked for so they can cancel it there.
+Reaching them needs the phone number behind their group id, which WhatsApp does not put in group
+messages (app/answer/citations.py); when that is not known, Jeli says so — a reminder someone
+wanted kept quiet must never fall back to the group.
 """
 
 import logging
@@ -17,7 +24,7 @@ from datetime import date, datetime, timedelta, timezone
 
 from pydantic import BaseModel
 
-from app.answer.citations import mention_tag
+from app.answer.citations import mention_tag, private_chat_of
 from app.answer.conversation import Turn, member_of
 from app.answer.llm import LLM, LLMUnavailable
 from app.answer.persona import PERSONA
@@ -50,6 +57,10 @@ conversation so far, the dated events Jeli knows (below) and the member's messag
 - reply: what Jeli says now, in the member's language, one or two warm sentences: for "set", when
   you will remind them (day and time as the member reads them, e.g. "mercredi 23 septembre à 09:30
   CAT"); for "clarify", the question; for "cancel", that it is done.
+- where: "private" when the member asks for the reminder to reach them privately rather than in
+  this conversation — in any words and any language ("en privé", "en DM", "écris-moi directement",
+  "just to me", "not in the group"); "here" otherwise, which is the normal case. A member writing
+  to Jeli privately is already private: answer "here".
 - message: for "set", the reminder Jeli will send at remind_at, in the member's language: short and
   warm — the event, its time, how long until it starts. "" otherwise.
 Use only the conversation and the events given: never invent an event, a date or a time.
@@ -61,6 +72,7 @@ class ReminderPlan(BaseModel):
     what: str = ""
     event_at: str = ""
     remind_at: str = ""
+    where: str = ""
     reply: str = ""
     message: str = ""
 
@@ -119,12 +131,21 @@ class Reminders:
             return Reply(texts["reminder_when"])
         if len(await self.store.active_reminders(member)) >= MAX_ACTIVE_PER_MEMBER:
             return Reply(texts["reminder_too_many"].format(limit=MAX_ACTIVE_PER_MEMBER))
+        send_to, reply_to = message.chat_id, message.message_id
+        if plan.where.strip().lower() == "private" and message.chat_id.endswith("@g.us"):
+            # Asked for in private, so delivered in private: not as a reply to a message in another
+            # chat, and with nobody mentioned in front of 240 people.
+            send_to = private_chat_of(message.author_id or "")
+            if not send_to:
+                return Reply(texts["reminder_not_private"])
+            reply_to = ""
         await self.store.add_reminder(
-            platform=message.platform, chat_id=message.chat_id, message_id=message.message_id, member_key=member,
+            platform=message.platform, chat_id=send_to, message_id=reply_to, member_key=member,
             member_id=message.author_id or "", what=plan.what.strip()[:200] or text[:200], event_at=_moment(plan.event_at),
             remind_at=remind_at, language=language, message=plan.message.strip()[:1000],
+            asked_in=message.chat_id,
         )
-        log.info("Reminder set for %s in %s at %s: %s", member, message.chat_id, remind_at.isoformat(), plan.what)
+        log.info("Reminder set for %s in %s at %s: %s", member, send_to, remind_at.isoformat(), plan.what)
         return Reply(plan.reply.strip() or texts["reminder_set"])
 
     async def send_due(self, send) -> tuple[int, int]:

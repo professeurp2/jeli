@@ -286,6 +286,9 @@ create table if not exists jeli.reminders (
     cancelled_at timestamptz
 );
 create index if not exists reminders_due on jeli.reminders (remind_at) where sent_at is null and cancelled_at is null;
+-- Where the reminder was asked for, when that is not where it will arrive: a member can ask in
+-- the group for a reminder that reaches them privately, and still cancel it from the group.
+alter table jeli.reminders add column if not exists asked_in text not null default '';
 
 -- Natural voice notes made today, per key (its fingerprint, never the key) and speech model: the
 -- free tier allows 10 a day each, renewed at midnight Pacific time (the dashboard shows what is left).

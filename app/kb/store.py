@@ -640,13 +640,17 @@ class Store:
     # --- Reminders members asked for ---------------------------------------------------------------
 
     async def add_reminder(self, *, platform: str, chat_id: str, message_id: str, member_key: str, member_id: str,
-                           what: str, event_at: datetime | None, remind_at: datetime, language: str, message: str) -> int:
+                           what: str, event_at: datetime | None, remind_at: datetime, language: str, message: str,
+                           asked_in: str = "") -> int:
+        """`chat_id` is where the reminder will arrive; `asked_in` where it was asked for. They are
+        the same unless the member asked for it in private, and cancelling looks at both."""
         async with self._pool.connection() as conn:
             row = await (
                 await conn.execute(
                     "insert into jeli.reminders (platform, chat_id, message_id, member_key, member_id, what, event_at, remind_at, "
-                    "language, message) values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s) returning id",
-                    (platform, chat_id, message_id, member_key, member_id, what, event_at, remind_at, language, message),
+                    "language, message, asked_in) values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s) returning id",
+                    (platform, chat_id, message_id, member_key, member_id, what, event_at, remind_at, language, message,
+                     asked_in or chat_id),
                 )
             ).fetchone()
         return row["id"]
@@ -664,9 +668,11 @@ class Store:
     async def cancel_reminders(self, member_key: str, chat_id: str) -> int:
         async with self._pool.connection() as conn:
             cursor = await conn.execute(
-                "update jeli.reminders set cancelled_at = now() where member_key = %s and chat_id = %s "
-                "and sent_at is null and cancelled_at is null",
-                (member_key, chat_id),
+                # Where it will arrive, or where it was asked for: a member who asked in the group
+                # for a private reminder cancels it in the same breath, from the same place.
+                "update jeli.reminders set cancelled_at = now() where member_key = %s "
+                "and (chat_id = %s or asked_in = %s) and sent_at is null and cancelled_at is null",
+                (member_key, chat_id, chat_id),
             )
         return cursor.rowcount
 
