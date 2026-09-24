@@ -1694,8 +1694,9 @@ async def settings_page(request: Request, member: Member) -> HTMLResponse:
         _row("Take calls", "Jeli's page where anyone can talk to it out loud, in any browser. Off closes "
              "the page and stops Jeli offering the link when someone asks to speak to it.",
              f'<label class="check"><input type="checkbox" name="enabled_calls"{" checked" if runtime["enabled.calls"] else ""}> On</label>')
-        + _row("The voice on the call", "The character callers hear. This is not the voice of Jeli's voice notes: "
-               "a call can carry a different one.", _segmented("call_voice", runtime["call_voice"], _VOICE_PERSONALITIES))
+        + _row("The voice on the call", "By default the same voice as Jeli's voice notes, so it sounds like "
+               "itself everywhere. Choose another only to give the call its own character.",
+               _segmented("call_voice", runtime["call_voice"], [("same", "Same as voice notes"), *_VOICE_PERSONALITIES]))
         + _row("Hang up after silence", "A call ends when nobody has spoken for this long — never mid-conversation. "
                "Shorter on a busy day; longer for a demo where people think between questions.",
                number("call_quiet_minutes", 1, 30) + '<span class="muted small">minutes</span>')
@@ -1801,7 +1802,7 @@ async def settings_change(request: Request, member: Change) -> RedirectResponse:
         "voice_engine": form.get("voice_engine", "auto"),
         "answer_engine": form.get("answer_engine", "auto"),
         "enabled.calls": bool(form.get("enabled_calls")),
-        "call_voice": form.get("call_voice", "aoede"),
+        "call_voice": form.get("call_voice", "same"),
         "call_quiet_minutes": form.get("call_quiet_minutes", "5"),
         "call_transcript": bool(form.get("call_transcript")),
         # Split here, not in coerce: a question may contain a comma, and splitting on one
@@ -1819,6 +1820,171 @@ async def settings_change(request: Request, member: Change) -> RedirectResponse:
         return _done(request, "/dashboard/settings", "Nothing changed.", "info")
     await runtime.update(changes, member, "Changed " + ", ".join(SETTING_WORDS[key] for key in changed))
     return _done(request, "/dashboard/settings", "Settings saved.")
+
+
+# --- Calls happening right now --------------------------------------------------------------------
+
+
+@router.get("/dashboard/calls.json")
+async def calls_now(request: Request, member: Member) -> JSONResponse:
+    from app.web.call import calls_in_progress
+
+    return JSONResponse({"calls": calls_in_progress()})
+
+
+@router.get("/dashboard/calls", response_class=HTMLResponse)
+async def calls_page(request: Request, member: Member) -> HTMLResponse:
+    """The calls in progress, and one the team can follow while it happens.
+
+    Nothing here is stored: it is what is being said this second. The caller's page says so — that
+    the team may follow a call — because listening to people who were promised privacy is not a
+    feature, it is a betrayal.
+    """
+    from app.web.call import call_settings
+
+    chosen = call_settings(_state(request))
+    body = (
+        ui.notice(
+            "info",
+            "Live only: nothing on this page is recorded or kept. Callers are told on Jeli's page "
+            "that the team may follow a call.",
+        )
+        + '<div style="height:16px"></div>'
+        + ui.card(
+            "On the line now",
+            '<div id="calls" class="rows"><p class="muted">Looking…</p></div>',
+            icon_name="call",
+            description="Refreshed every few seconds. Follow one to hear it and read what is being said.",
+            actions=f'<a class="btn ghost" href="/jeli/call" target="_blank" rel="noopener">{ui.icon("call")} The call page</a>',
+        )
+        + '<div style="height:20px"></div>'
+        + ui.card(
+            "Following",
+            '<div class="listen"><p id="who" class="muted">Choose a call above.</p>'
+            '<div id="heard" class="rows"></div></div>',
+            icon_name="mic",
+            description="What is being said, as it is said.",
+        )
+        + (
+            ""
+            if chosen["on"]
+            else ui.notice("warn", "Calls are switched off in the settings, so there will never be one here.")
+        )
+        + CALLS_SCRIPT
+    )
+    return _page(request, member, title="Live calls", subtitle="Who is talking to Jeli right now.",
+                 active="calls", body=body)
+
+
+CALLS_SCRIPT = """<script>
+const list = document.getElementById('calls'), who = document.getElementById('who');
+const heard = document.getElementById('heard');
+let socket, out, playAt = 0, following = '';
+
+function howLong(seconds) {
+  const minutes = Math.floor(seconds / 60);
+  return minutes ? minutes + ' min ' + (seconds % 60) + ' s' : seconds + ' s';
+}
+function esc(text) {
+  return String(text).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+async function refresh() {
+  let calls = [];
+  try {
+    calls = (await (await fetch('/dashboard/calls.json')).json()).calls || [];
+  } catch (error) { return; }
+  if (!calls.length) {
+    list.innerHTML = '<p class="muted">Nobody is on the line.</p>';
+    return;
+  }
+  list.innerHTML = calls.map(function (call) {
+    const asked = call.asked ? '<span>asked: ' + esc(call.asked) + '</span>' : '<span>no question yet</span>';
+    return '<div class="row"><div class="row-text"><b>' + howLong(call.seconds) + ' on ' + esc(call.model) +
+      '</b>' + asked + '</div><div class="row-side">' +
+      '<span class="muted small">' + call.searches + ' searches</span>' +
+      '<button class="btn ghost" data-follow="' + call.id + '">' +
+      (following === call.id ? 'Stop' : 'Follow') + '</button></div></div>';
+  }).join('');
+}
+
+function play(bytes) {
+  if (!out) return;
+  const rate = bytes[0] === 1 ? 24000 : 16000;   /* 1: Jeli's voice, 0: the caller's */
+  const pcm = new Int16Array(bytes.buffer, bytes.byteOffset + 1, (bytes.byteLength - 1) >> 1);
+  if (!pcm.length) return;
+  const buffer = out.createBuffer(1, pcm.length, rate);
+  const channel = buffer.getChannelData(0);
+  for (let i = 0; i < pcm.length; i++) channel[i] = pcm[i] / 32768;
+  const source = out.createBufferSource();
+  source.buffer = buffer;
+  source.connect(out.destination);
+  playAt = Math.max(playAt, out.currentTime);
+  source.start(playAt);
+  playAt += buffer.duration;
+}
+
+let open = {};
+function line(kind, text) {
+  const row = open[kind] || (open[kind] = (function () {
+    const made = document.createElement('div');
+    made.className = 'row';
+    made.innerHTML = '<div class="row-text"><b>' + (kind === 'said' ? 'Caller' : 'Jeli') + '</b><span></span></div>';
+    heard.appendChild(made);
+    return made;
+  })());
+  const span = row.querySelector('span');
+  span.textContent = (span.textContent + ' ' + text).replace(/\\s+/g, ' ').trim();
+  heard.scrollTop = heard.scrollHeight;
+}
+function doing(text) {
+  const row = document.createElement('div');
+  row.className = 'row';
+  row.innerHTML = '<div class="row-text"><span class="muted"></span></div>';
+  row.querySelector('span').textContent = text;
+  heard.appendChild(row);
+}
+
+function unfollow() {
+  if (socket) { socket.close(); socket = null; }
+  if (out) { out.close(); out = null; }
+  following = ''; open = {}; playAt = 0;
+  who.textContent = 'Choose a call above.';
+  refresh();
+}
+
+function follow(id) {
+  unfollow();
+  following = id;
+  heard.innerHTML = '';
+  who.textContent = 'Listening. Nothing is being recorded.';
+  out = new AudioContext({ sampleRate: 24000 });
+  socket = new WebSocket((location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host +
+                         '/dashboard/calls/' + id + '/listen');
+  socket.binaryType = 'arraybuffer';
+  socket.onmessage = function (event) {
+    if (typeof event.data !== 'string') return play(new Uint8Array(event.data));
+    const message = JSON.parse(event.data);
+    if (message.said) line('said', message.said);
+    if (message.jeli) line('jeli', message.jeli);
+    if (message.turn) open = {};
+    if (message.searching) { doing('Jeli is searching the memory: ' + message.searching); open = {}; }
+    if (message.over) { doing('The call ended.'); unfollow(); }
+  };
+  socket.onclose = function () { if (following === id) unfollow(); };
+  refresh();
+}
+
+list.addEventListener('click', function (event) {
+  const button = event.target.closest('[data-follow]');
+  if (!button) return;
+  const id = button.dataset.follow;
+  if (following === id) return unfollow();
+  follow(id);
+});
+refresh();
+setInterval(refresh, 4000);
+</script>"""
 
 
 # --- WhatsApp -------------------------------------------------------------------------------------

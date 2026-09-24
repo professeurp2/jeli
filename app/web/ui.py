@@ -68,6 +68,7 @@ LEMUR = """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" aria-hidd
 NAV = [
     ("home", "Overview", "/dashboard", "home"),
     ("try", "Try Jeli", "/dashboard/try", "chat"),
+    ("calls", "Live calls", "/dashboard/calls", "call"),
     ("questions", "Questions", "/dashboard/questions", "question"),
     ("deadlines", "Deadlines", "/dashboard/deadlines", "calendar"),
     ("knowledge", "Knowledge", "/dashboard/knowledge", "book"),

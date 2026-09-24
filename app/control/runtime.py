@@ -116,7 +116,10 @@ FIELDS = {
         # Calling Jeli from a browser and talking to it out loud (app/web/call.py). Off closes the
         # page and stops Jeli offering the link: the team decides when its voice is open to everyone.
         Field("enabled.calls", "bool", lambda s: True),
-        Field("call_voice", "choice", lambda s: "aoede", choices=("aoede", "puck", "charon", "kore", "fenrir")),
+        # "same": the voice of the voice notes, so Jeli sounds like itself everywhere. A call can
+        # still be given its own character when the team wants one.
+        Field("call_voice", "choice", lambda s: "same",
+              choices=("same", "aoede", "puck", "charon", "kore", "fenrir")),
         # A call ends after this long without anyone speaking — never on a stopwatch mid-conversation.
         Field("call_quiet_minutes", "int", lambda s: 5, 1, 30),
         # The live transcript under the orb: useful in a noisy room, distracting on a stage.

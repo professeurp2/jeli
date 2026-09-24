@@ -18,6 +18,7 @@ import asyncio
 import contextlib
 import json
 import logging
+import secrets
 import time
 
 from fastapi import APIRouter, Request, WebSocket, WebSocketDisconnect
@@ -126,9 +127,13 @@ def call_settings(app_state) -> dict:
             return fallback
         return fallback if value is None else value
 
+    # "same": Jeli sounds like itself everywhere — the voice of its voice notes, on the call too.
+    voice = str(chosen("call_voice", "same"))
+    if voice == "same":
+        voice = str(chosen("voice_name", "aoede"))
     return {
         "on": bool(chosen("enabled.calls", True)),
-        "voice": str(chosen("call_voice", "aoede")).title(),
+        "voice": voice.title(),
         "quiet": int(chosen("call_quiet_minutes", 5)),
         "transcript": bool(chosen("call_transcript", True)),
         "questions": [q for q in chosen("call_questions", list(DEFAULT_CALL_QUESTIONS)) if str(q).strip()][:6],
@@ -187,7 +192,10 @@ async def call_page(request: Request) -> HTMLResponse:
         + (f'<div class="chips" id="chips"><p class="chips-lead">Ou touchez une question — il l\'entendra :</p>{chips}</div>' if chips else "")
         + ('<section class="said" id="said" hidden></section>' if chosen["transcript"] else "")
         + (f'<div class="figs">{figures}</div>' if figures else "")
-        + '<p class="call-foot">Rien n\'est enregistré : ce que vous dites sert à répondre, puis disparaît.</p>'
+        # A page that promises privacy and is listened to anyway is a page that lies, and these are
+        # the community's own members. So the sentence says both things, plainly.
+        + '<p class="call-foot">Rien n\'est enregistré : ce que vous dites sert à répondre, puis disparaît.'
+        + "<br>L'équipe de Jeli peut suivre un appel en direct, pour vérifier qu'il répond bien.</p>"
         + _script(chosen)
     )
     return HTMLResponse(_shell(f'<main class="call-page">{body}</main>'))
@@ -199,9 +207,11 @@ async def call_page(request: Request) -> HTMLResponse:
 # last one is the point: a caller watching the face is watching Jeli speak, not a loading spinner.
 JELI_FACE = """<svg id="face" viewBox="0 0 64 64" aria-hidden="true">
 <g id="head">
-<circle cx="32" cy="34" r="27" fill="#2a2c32"/>
+<circle cx="32" cy="34" r="26" fill="#2a2c32" stroke="#ffffff" stroke-width="2.4"/>
 <g id="earL"><path d="M12 21 17 8l9 11z" fill="#cfcbc1"/></g>
 <g id="earR"><path d="M52 21 47 8l-9 11z" fill="#cfcbc1"/></g>
+<g id="crown"><path d="M25.5 19.5 25.5 13.5l3.2 2.6L32 9.8l3.3 6.3 3.2-2.6v6z" fill="#f0b429"/>
+  <circle cx="32" cy="17.2" r="1.3" fill="#2ea44f"/></g>
 <ellipse cx="32" cy="35" rx="19" ry="17" fill="#f1eee7"/>
 <path d="M32 18c-3 0-4 4-4 8h8c0-4-1-8-4-8z" fill="#2a2c32"/>
 <g id="eyeL"><ellipse cx="23.5" cy="32" rx="7.4" ry="7.8" fill="#2a2c32"/>
@@ -228,7 +238,7 @@ def _shell(body: str) -> str:
         """<!doctype html>
 <html lang="fr"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<meta name="robots" content="noindex"><meta name="theme-color" content="#0d0e12"><title>Appeler Jeli</title>
+<meta name="robots" content="noindex"><meta name="theme-color" content="#0b2b25"><title>Appeler Jeli</title>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
 <style>"""
         + ui.CSS
@@ -242,46 +252,59 @@ def _shell(body: str) -> str:
 # The call has its own screen. Everything else Jeli shows is a document to read; this one is a
 # device to use, so it is dark, centred and alive whatever the rest of the site is doing.
 CALL_CSS = """
-.call-body { margin: 0; min-height: 100vh; background:
-  radial-gradient(900px 600px at 50% -20%, #1d2030, #0d0e12 60%), #0d0e12; color: #edeef2; }
+/* The call has its own screen, and it wears Jeli's own colours — the ones on the profile picture
+   members already see on WhatsApp: a deep jungle green, a white ring around its face, and the
+   tropical accents of the crown and the flowers. Everything else Jeli shows is a document to read;
+   this one is a device to use. */
+.call-body { --jungle: #123c34; --jungle-deep: #0b2b25; --leaf: #1d5b4e; --ring: #ffffff;
+  --gold: #f0b429; --hibiscus: #ff5f9e; --sky: #3fb9e8; --lime: #6fc96b; --sand: #f3efe4;
+  --ink: #f3efe4; --ink-soft: #a9c4bb; --ink-faint: #7ea79b;
+  margin: 0; min-height: 100vh; color: var(--ink); background:
+  radial-gradient(1000px 640px at 50% -18%, #1b5348, var(--jungle) 55%, var(--jungle-deep) 100%),
+  var(--jungle-deep); }
 .call-page { max-width: 560px; margin: 0 auto; padding: max(24px, env(safe-area-inset-top)) 16px
   calc(40px + env(safe-area-inset-bottom)); display: grid; gap: 22px; }
-.call-top { text-align: center; display: grid; justify-items: center; gap: 6px; }
-.call-mark svg { width: 62px; height: 62px; }
-.call-top h1 { font-size: clamp(22px, 6vw, 28px); font-weight: 700; color: #fff; }
-.call-top p { margin: 0; color: #9c9fab; max-width: 34ch; font-size: 14.5px; }
+.call-top { text-align: center; display: grid; justify-items: center; gap: 8px; }
+/* The white circle of the profile picture, around the same face. */
+.call-mark { width: 74px; height: 74px; border-radius: 50%; background: var(--leaf);
+  box-shadow: 0 0 0 3px var(--ring), 0 8px 24px rgba(0,0,0,.35); display: grid; place-items: center;
+  overflow: hidden; }
+.call-mark svg { width: 74px; height: 74px; }
+.call-top h1 { font-size: clamp(23px, 6.4vw, 30px); font-weight: 700; color: #fff;
+  letter-spacing: 0.01em; }
+.call-top p { margin: 0; color: var(--ink-soft); max-width: 34ch; font-size: 14.5px; }
 
 .stage { position: relative; display: grid; justify-items: center; gap: 14px;
-  padding: clamp(18px, 5vw, 28px) 16px 24px; border-radius: 26px;
-  background: linear-gradient(180deg, rgba(255,255,255,.045), rgba(255,255,255,.015));
-  border: 1px solid rgba(255,255,255,.08); }
+  padding: clamp(18px, 5vw, 28px) 16px 24px; border-radius: 28px;
+  background: linear-gradient(180deg, rgba(255,255,255,.07), rgba(255,255,255,.02));
+  border: 1px solid rgba(255,255,255,.12); }
 .orb-wrap { position: relative; display: grid; place-items: center; }
 #orb { width: clamp(180px, 54vw, 260px); height: clamp(180px, 54vw, 260px); display: block; margin: -6px 0 -4px; }
 /* Jeli sits inside its own aura: the canvas is the halo, this is the face in the middle of it. */
 #face { position: absolute; width: 46%; height: 46%; pointer-events: none; }
-.status { margin: 0; min-height: 22px; font-size: 15px; font-weight: 600; color: #cfd2db;
+.status { margin: 0; min-height: 22px; font-size: 15.5px; font-weight: 600; color: #fff;
   letter-spacing: -0.01em; text-align: center; }
-.stage-note { margin: 0; font-size: 12.5px; color: #7e8290; text-align: center; max-width: 32ch; }
+.stage-note { margin: 0; font-size: 12.5px; color: var(--ink-faint); text-align: center; max-width: 32ch; }
 
 .dial { width: 76px; height: 76px; border-radius: 50%; border: none; cursor: pointer;
   display: grid; place-items: center; color: #fff; background: #1f9d55;
-  box-shadow: 0 10px 30px rgba(31,157,85,.38); transition: transform .15s ease, background .2s ease,
-  box-shadow .2s ease; }
+  box-shadow: 0 0 0 3px rgba(255,255,255,.9), 0 10px 30px rgba(31,157,85,.45);
+  transition: transform .15s ease, background .2s ease, box-shadow .2s ease; }
 .dial:hover { transform: translateY(-2px); }
 .dial:active { transform: scale(.95); }
-.dial:focus-visible { outline: 3px solid #f5b301; outline-offset: 4px; }
-.stage[data-state="dialing"] .dial { background: #6b6f7d; box-shadow: none; }
-.stage:not([data-state="idle"]):not([data-state="ended"]) .dial { background: #c4362e;
-  box-shadow: 0 10px 30px rgba(196,54,46,.38); }
+.dial:focus-visible { outline: 3px solid var(--gold); outline-offset: 5px; }
+.stage[data-state="dialing"] .dial { background: #6b8a82; box-shadow: 0 0 0 3px rgba(255,255,255,.7); }
+.stage:not([data-state="idle"]):not([data-state="ended"]) .dial { background: #d6402f;
+  box-shadow: 0 0 0 3px rgba(255,255,255,.9), 0 10px 30px rgba(214,64,47,.45); }
 .stage:not([data-state="idle"]):not([data-state="ended"]) .dial-icon { transform: rotate(135deg); }
 .dial-icon { display: grid; transition: transform .25s ease; }
 
 .chips { display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; }
-.chips-lead { width: 100%; margin: 0 0 2px; text-align: center; color: #8d909c; font-size: 13px; }
-.chip { border: 1px solid rgba(255,255,255,.14); background: rgba(255,255,255,.05); color: #dfe1e8;
+.chips-lead { width: 100%; margin: 0 0 2px; text-align: center; color: var(--ink-soft); font-size: 13px; }
+.chip { border: 1px solid rgba(255,255,255,.2); background: rgba(255,255,255,.07); color: #eef5f2;
   border-radius: 999px; padding: 9px 14px; font: inherit; font-size: 13.5px; cursor: pointer;
   transition: background .18s ease, border-color .18s ease, transform .12s ease; }
-.chip:hover { background: rgba(245,179,1,.14); border-color: rgba(245,179,1,.45); color: #fff; }
+.chip:hover { background: rgba(255,95,158,.18); border-color: var(--hibiscus); color: #fff; }
 .chip:active { transform: scale(.97); }
 .chip[disabled] { opacity: .45; cursor: default; }
 
@@ -292,20 +315,20 @@ CALL_CSS = """
 .bubble { max-width: 86%; padding: 10px 13px; border-radius: 16px; font-size: 14.5px;
   line-height: 1.45; white-space: pre-wrap; overflow-wrap: anywhere;
   animation: rise .28s ease both; }
-.bubble.you { justify-self: end; background: #2b6fd6; color: #fff; border-bottom-right-radius: 5px; }
-.bubble.jeli { justify-self: start; background: rgba(255,255,255,.08); color: #e9eaef;
+.bubble.you { justify-self: end; background: #1f7f6d; color: #fff; border-bottom-right-radius: 5px; }
+.bubble.jeli { justify-self: start; background: rgba(255,255,255,.1); color: #eef5f2;
   border-bottom-left-radius: 5px; }
 .bubble.doing { justify-self: center; max-width: 100%; text-align: center; background: none;
-  color: #8d909c; font-size: 12.5px; padding: 2px 8px; }
-.bubble.doing b { color: #f5b301; font-weight: 600; }
+  color: var(--ink-faint); font-size: 12.5px; padding: 2px 8px; }
+.bubble.doing b { color: var(--hibiscus); font-weight: 600; }
 @keyframes rise { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
 
 .figs { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px;
-  padding-top: 14px; border-top: 1px solid rgba(255,255,255,.07); }
+  padding-top: 14px; border-top: 1px solid rgba(255,255,255,.12); }
 .fig { text-align: center; }
-.fig b { display: block; font-size: 19px; color: #f5b301; font-weight: 700; letter-spacing: -0.02em; }
-.fig span { font-size: 11.5px; color: #82858f; line-height: 1.3; display: block; }
-.call-foot { margin: 0; text-align: center; color: #6d707b; font-size: 12px; }
+.fig b { display: block; font-size: 19px; color: var(--gold); font-weight: 700; letter-spacing: -0.02em; }
+.fig span { font-size: 11.5px; color: var(--ink-faint); line-height: 1.3; display: block; }
+.call-foot { margin: 0; text-align: center; color: var(--ink-faint); font-size: 12px; }
 
 @media (max-width: 380px) {
   .call-page { padding-left: 12px; padding-right: 12px; gap: 18px; }
@@ -343,8 +366,8 @@ let socket, mic, context, out, playAt = 0, speakingUntil = 0, pending = null;
 
 /* --- the orb ------------------------------------------------------------------------------- */
 const ctx = canvas.getContext('2d');
-const TONE = { idle: '#c8a24a', dialing: '#9aa0ae', listening: '#3b9dff',
-               searching: '#a970ff', speaking: '#f5b301', ended: '#7c8190' };
+const TONE = { idle: '#f0b429', dialing: '#8fb3aa', listening: '#3fb9e8',
+               searching: '#ff5f9e', speaking: '#ffc247', ended: '#6f9a90' };
 const STILL = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 let level = 0, want = 0, phase = 0;
 
@@ -638,6 +661,8 @@ async def call_socket(socket: WebSocket) -> None:
     quiet = chosen["quiet"] * 60
     watchers = [asyncio.create_task(line.listen()), asyncio.create_task(_hang_up_on_silence(line, quiet))]
     handle, model, failures = None, CALL_MODELS[0], 0
+    line.air = OnAir(secrets.token_hex(4), model)
+    ON_AIR[line.air.id] = line.air
     try:
         while not line.gone.is_set():
             opened = time.monotonic()
@@ -674,10 +699,47 @@ async def call_socket(socket: WebSocket) -> None:
                 await asyncio.sleep(RECONNECT_PAUSE)
         await _say(socket, {"state": GONE_QUIET if line.quiet else "Appel terminé.", "end": True})
     finally:
+        ON_AIR.pop(line.air.id, None)
+        await line.air.share(json.dumps({"over": True}))
         for watcher in watchers:
             watcher.cancel()
         with contextlib.suppress(Exception):
             await socket.close()
+
+
+@router.websocket("/dashboard/calls/{call_id}/listen")
+async def follow_socket(socket: WebSocket, call_id: str) -> None:
+    """A member of the team following a call as it happens.
+
+    Read-only in both directions that matter: nothing sent from here reaches the caller, and nothing
+    heard here is written down. The caller is told on the page that the team may follow a call.
+    """
+    from app.web.auth import SESSION_COOKIE
+
+    auth = getattr(socket.app.state, "auth", None)
+    member = auth.member(socket.cookies.get(SESSION_COOKIE)) if auth is not None and auth.enabled else ""
+    if not member:
+        await socket.close(code=1008)
+        return
+    await socket.accept()
+    call = ON_AIR.get(call_id)
+    if call is None:
+        await socket.send_text(json.dumps({"over": True}))
+        await socket.close()
+        return
+    call.followers.add(socket)
+    log.info("%s is following a call (%s)", member, call_id)
+    try:
+        for line in list(call.words):  # what was said before they joined
+            await socket.send_text(json.dumps(line))
+        while True:
+            packet = await socket.receive()
+            if packet.get("type") == "websocket.disconnect":
+                break
+    except Exception:
+        pass
+    finally:
+        call.followers.discard(socket)
 
 
 def _config(instructions: str, handle: str | None, voice: str = VOICE) -> types.LiveConnectConfig:
@@ -709,6 +771,68 @@ async def _say(socket: WebSocket, note: dict) -> None:
         await socket.send_text(json.dumps(note))
 
 
+# --- Calls happening right now --------------------------------------------------------------------
+#
+# The team can see the calls in progress and follow one live, from the dashboard. Nothing is written
+# down: this is what is happening this second, and it disappears when the caller hangs up.
+#
+# The caller is told. The page says the team may follow a call, because a page that promises privacy
+# and is listened to anyway is a page that lies — and these are the community's own members.
+
+ON_AIR: dict[str, "OnAir"] = {}
+KEPT_WORDS = 60
+
+
+class OnAir:
+    """One call in progress, and whoever on the team is following it."""
+
+    def __init__(self, call_id: str, model: str):
+        self.id = call_id
+        self.model = model
+        self.began = time.time()
+        self.searches: list[str] = []
+        self.words: list[dict] = []
+        self.followers: set[WebSocket] = set()
+
+    @property
+    def seconds(self) -> float:
+        return time.time() - self.began
+
+    async def note(self, line: dict) -> None:
+        """A line of the call: kept for whoever joins late, and passed on to those already here."""
+        self.words.append(line)
+        del self.words[:-KEPT_WORDS]
+        await self.share(json.dumps(line))
+
+    async def share(self, payload) -> None:
+        for follower in list(self.followers):
+            try:
+                if isinstance(payload, bytes):
+                    await follower.send_bytes(payload)
+                else:
+                    await follower.send_text(payload)
+            except Exception:
+                self.followers.discard(follower)
+
+
+def calls_in_progress() -> list[dict]:
+    """What the dashboard shows: the calls happening this second, longest first."""
+    return sorted(
+        (
+            {
+                "id": call.id,
+                "model": call.model,
+                "seconds": round(call.seconds),
+                "searches": len(call.searches),
+                "asked": call.searches[-1] if call.searches else "",
+                "followers": len(call.followers),
+            }
+            for call in ON_AIR.values()
+        ),
+        key=lambda call: -call["seconds"],
+    )
+
+
 class Line:
     """The caller's side of the call: their microphone, and whether they are still on it.
 
@@ -725,6 +849,7 @@ class Line:
         self.gone = asyncio.Event()
         self.quiet = False
         self.spoke_at = time.monotonic()
+        self.air: OnAir | None = None  # this call, as the team sees it while it lasts
 
     async def listen(self) -> None:
         try:
@@ -738,6 +863,8 @@ class Line:
                         with contextlib.suppress(asyncio.QueueEmpty):
                             self.audio.get_nowait()
                     await self.audio.put(chunk)
+                    if self.air is not None and self.air.followers:
+                        await self.air.share(b"\x00" + chunk)  # the caller's own voice, 16 kHz
                     continue
                 # A question tapped on the page instead of spoken: somebody who does not know the
                 # programme has nothing to say to it, and a silent room is where a demo dies.
@@ -792,20 +919,31 @@ async def _talk(socket: WebSocket, session, state, line: Line) -> str | None:
                     data = getattr(getattr(part, "inline_data", None), "data", None)
                     if data:
                         await socket.send_bytes(data)
+                        if line.air is not None and line.air.followers:
+                            await line.air.share(b"" + data)  # Jeli's voice, 24 kHz
                 heard = getattr(getattr(content, "input_transcription", None), "text", "")
                 spoken = getattr(getattr(content, "output_transcription", None), "text", "")
                 if heard:
                     line.heard()  # somebody is talking: the silence watchdog starts over
                     await _say(socket, {"said": heard})
+                    if line.air is not None:
+                        await line.air.note({"said": heard})
                 if spoken:
                     await _say(socket, {"jeli": spoken})
+                    if line.air is not None:
+                        await line.air.note({"jeli": spoken})
                 if getattr(content, "turn_complete", False):
-                    await _say(socket, {"turn": True})  # the sentence is finished: close the line
+                    await _say(socket, {"turn": True})
+                    if line.air is not None:
+                        await line.air.note({"turn": True})  # the sentence is finished: close the line
             calls = getattr(getattr(message, "tool_call", None), "function_calls", None) or []
             for call in calls:
                 question = (call.args or {}).get("question", "")
                 log.info("A caller asked the memory: %s", question[:120])
                 await _say(socket, {"searching": question})
+                if line.air is not None:
+                    line.air.searches.append(question)
+                    await line.air.note({"searching": question})
                 found = await _search(state, question)
                 await session.send_tool_response(
                     function_responses=[

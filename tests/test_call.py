@@ -319,7 +319,9 @@ def test_jeli_has_a_face_on_the_call_and_it_is_its_own():
     for piece in ('d="M12 21 17 8l9 11z"', 'fill="#f5b301"', 'd="M29 42.5q3 3.2 6 0z"'):
         assert piece in JELI_FACE and piece in ui.LEMUR
     # The ears are drawn after the head, or the head hides them.
-    assert JELI_FACE.index('r="27"') < JELI_FACE.index('id="earL"')
+    assert JELI_FACE.index('id="head"') < JELI_FACE.index('id="earL"')
+    assert 'stroke="#ffffff"' in JELI_FACE  # the white ring of the profile picture
+    assert 'id="crown"' in JELI_FACE  # and the crown it wears there
     # The mouth is the voice: it opens on the measured loudness, and only while Jeli is speaking.
     assert "const gap = speaking ? level * 5.2 : 0;" in CALL_SCRIPT
     assert "mouth.setAttribute('ry', gap.toFixed(2));" in CALL_SCRIPT
@@ -336,3 +338,103 @@ def test_the_face_has_a_mood_for_everything_the_call_can_be_doing():
     moods = CALL_SCRIPT.split("const MOOD")[1].split("};")[0]
     assert "listening: { ears: 13" in moods and "searching: { ears: -6" in moods
     assert "blinkUntil = at + 110" in CALL_SCRIPT  # and it blinks, because things that live do
+
+
+# --- Calls happening right now ----------------------------------------------------------------
+
+
+def test_the_team_sees_the_calls_in_progress_and_nothing_is_kept():
+    import asyncio
+
+    from app.web import call
+
+    call.ON_AIR.clear()
+    air = call.OnAir("abc123", "gemini-2.5-flash-native-audio-latest")
+    call.ON_AIR[air.id] = air
+    asyncio.run(air.note({"said": "C'est quand la prochaine session ?"}))
+    air.searches.append("la prochaine session")
+    [row] = call.calls_in_progress()
+    assert row["id"] == "abc123" and row["searches"] == 1
+    assert row["asked"] == "la prochaine session" and row["followers"] == 0
+    # What was said is held only while the call lasts, and only the last words of it.
+    assert len(air.words) == 1 and call.KEPT_WORDS <= 200
+    call.ON_AIR.clear()
+    assert call.calls_in_progress() == []
+
+
+def test_following_a_call_needs_to_be_signed_in():
+    """The calls are the community's own members talking. Not a page anyone can open."""
+    from starlette.websockets import WebSocketDisconnect as Refused
+
+    from app.web import call
+
+    call.ON_AIR.clear()
+    call.ON_AIR["open1"] = call.OnAir("open1", "m")
+    try:
+        with TestClient(app) as client:
+            try:
+                with client.websocket_connect("/dashboard/calls/open1/listen"):
+                    assert False, "a stranger was let in"
+            except Refused as refused:
+                assert refused.code == 1008
+            # And the page itself is never served to someone who is not on the team.
+            assert client.get("/dashboard/calls").status_code != 200
+    finally:
+        call.ON_AIR.clear()
+
+
+def test_a_follower_hears_both_voices_and_reads_what_was_already_said():
+    import asyncio
+
+    from app.web import call
+
+    class Follower:
+        def __init__(self):
+            self.text, self.sound = [], []
+
+        async def send_text(self, payload):
+            self.text.append(json.loads(payload))
+
+        async def send_bytes(self, payload):
+            self.sound.append(payload)
+
+    async def run():
+        air = call.OnAir("x", "m")
+        follower = Follower()
+        air.followers.add(follower)
+        await air.note({"jeli": "Diane l'a annoncé mardi."})
+        await air.share(b"\x00" + b"ab")  # the caller, 16 kHz
+        await air.share(b"\x01" + b"cd")  # Jeli, 24 kHz
+        return follower
+
+    follower = asyncio.run(run())
+    assert follower.text == [{"jeli": "Diane l'a annoncé mardi."}]
+    # One byte says whose voice it is, because the two are not sampled at the same rate.
+    assert follower.sound == [b"\x00ab", b"\x01cd"]
+    from app.web.pages import CALLS_SCRIPT
+
+    assert "bytes[0] === 1 ? 24000 : 16000" in CALLS_SCRIPT
+
+
+def test_the_caller_is_told_the_team_may_listen():
+    """A page that promises privacy and is listened to anyway is a page that lies."""
+    with TestClient(app) as client:
+        page = client.get("/jeli/call").text
+    assert "Rien n'est enregistré" in page
+    assert "L'équipe de Jeli peut suivre un appel en direct" in page
+
+
+def test_the_call_sounds_like_jeli_everywhere_unless_told_otherwise():
+    from app.control.runtime import FIELDS
+    from app.web.call import call_settings
+
+    assert FIELDS["call_voice"].default(None) == "same"
+
+    class Following:
+        runtime = Chosen({"call_voice": "same", "voice_name": "puck"})
+
+    class OwnCharacter:
+        runtime = Chosen({"call_voice": "charon", "voice_name": "puck"})
+
+    assert call_settings(Following())["voice"] == "Puck"  # the voice of the voice notes
+    assert call_settings(OwnCharacter())["voice"] == "Charon"  # unless the team asked for another
