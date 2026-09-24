@@ -7,9 +7,15 @@
 -- Everything lives in the "jeli" schema, which Supabase's Data API does not expose:
 -- only the jeli_app role can read or write it.
 
+-- >>> owner only: creating an extension or a role needs rights on the database itself, which the
+-- application's own role does not have. A human with them runs this once, at setup; Jeli skips
+-- everything between these markers when it replays the file at startup (app/kb/store.py). Measured
+-- 24 September: without the split, one refused statement rolled back the whole file, and a column
+-- added that morning never reached the database.
 create extension if not exists vector with schema extensions;
 
 create schema if not exists jeli;
+-- <<< owner only
 
 -- Every chat message Jeli knows about, from a WhatsApp export or received live, and every
 -- transcript segment of a call recording (then chat_id is the recording's id).
@@ -312,6 +318,7 @@ create table if not exists jeli.voice_quota (
     primary key (day, key_id, model)
 );
 
+-- >>> owner only
 -- Least-privilege application role: data access to the jeli schema only.
 do $$
 begin
@@ -327,3 +334,4 @@ grant usage, select on all sequences in schema jeli to jeli_app;
 alter default privileges in schema jeli grant select, insert, update, delete on tables to jeli_app;
 alter default privileges in schema jeli grant usage, select on sequences to jeli_app;
 alter role jeli_app set search_path = jeli, extensions, public;
+-- <<< owner only

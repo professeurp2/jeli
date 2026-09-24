@@ -2,6 +2,7 @@
 
 import dataclasses
 import logging
+import re
 from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
@@ -19,6 +20,19 @@ log = logging.getLogger(__name__)
 
 # The schema this code expects, applied at every start (see Store.apply_schema).
 SCHEMA_FILE = Path(__file__).resolve().parents[2] / "db" / "schema.sql"
+# Creating the extension, the schema and the application's own role needs rights on the database
+# itself, which that role does not have — a human with them runs those once, at setup. They are
+# fenced off in the file, because one refused statement rolls back every other one with it:
+# measured 24 September, "permission denied for database postgres" meant a column added that
+# morning never reached the database, and nothing but a member's crash said so.
+OWNER_ONLY = re.compile(r"^--\s*>>>\s*owner only.*?^--\s*<<<\s*owner only\s*$", re.DOTALL | re.MULTILINE)
+
+
+def the_app_can_run(schema: str) -> str:
+    """The part of db/schema.sql the application's own role is allowed to apply."""
+    return OWNER_ONLY.sub("", schema)
+
+
 INSERT_BATCH = 1000
 # Jeli is in the groups when it received group messages live within this window.
 LIVE_WINDOW = timedelta(days=3)
@@ -124,7 +138,7 @@ class Store:
         must not do is stay quiet about it, so a failure is logged loudly and named.
         """
         try:
-            sql = SCHEMA_FILE.read_text(encoding="utf-8")
+            sql = the_app_can_run(SCHEMA_FILE.read_text(encoding="utf-8"))
         except OSError as error:
             problem = f"could not read {SCHEMA_FILE}: {error}"
         else:

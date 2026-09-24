@@ -68,3 +68,30 @@ def test_the_schema_file_travels_with_the_code():
     assert SCHEMA_FILE.exists() and SCHEMA_FILE.name == "schema.sql"
     assert SCHEMA_FILE.parent.name == "db"
     assert (SCHEMA_FILE.parent.parent / "app" / "kb" / "store.py").exists()
+
+
+def test_the_app_only_replays_what_its_own_role_may_run():
+    """Measured 24 September in production: "permission denied for database postgres". Creating the
+    extension and the application's role needs rights on the database itself, which that role does
+    not have — and one refused statement rolls back every other one with it, so the whole file did
+    nothing. Those statements are fenced off; a human with the rights runs them once, at setup."""
+    from app.kb.store import the_app_can_run
+
+    mine = the_app_can_run(SQL)
+    runnable = [l for l in mine.split("\n") if l.strip() and not l.strip().startswith("--")]
+    for line in runnable:
+        low = line.lower()
+        for privileged in ("create extension", "create role", "grant ", "alter role", "create schema"):
+            assert privileged not in low, f"{privileged} is not the app's to run: {line}"
+    # And what is left is still the schema: the tables and the columns the code expects.
+    assert mine.lower().count("create table if not exists") >= 15
+    assert "asked_in" in mine and "number" in mine and "embedding_backup" in mine
+
+
+def test_the_fence_is_closed_on_both_ends():
+    """An unclosed marker would silently swallow the rest of the file — every table with it."""
+    assert SQL.count("-- >>> owner only") == SQL.count("-- <<< owner only") > 0
+    from app.kb.store import the_app_can_run
+
+    # Nothing outside the fences is lost: the last table of the file survives the strip.
+    assert "jeli.voice_quota" in the_app_can_run(SQL)
