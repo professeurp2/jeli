@@ -64,6 +64,50 @@ def extension(filename: str, mimetype: str = "") -> str | None:
     return None
 
 
+# The first bytes of a file say what it is. A name and a type only say what somebody called it.
+# Measured 24 September: a member asked for the Information Pack and was sent a 4 KB
+# "…Info pack.pdf" that would not open, because what had always been kept under that name was
+# plain text. Whoever receives a document must get one their phone can open, whatever the row says.
+TEXT_TYPES = (".txt", ".md", ".vtt")
+BOM = b"\xef\xbb\xbf"  # a byte-order mark is not part of a signature
+
+
+def real_extension(data: bytes) -> str:
+    """What these bytes really are, when that can be known; "" when it cannot.
+
+    Only two things are certain from a file's start: it is a PDF, or it is text. Everything else is
+    a guess — a .docx, a .pptx and a .zip all begin "PK", so calling one of them a Word file would
+    replace a wrong name with another wrong name. Where nothing is certain this says nothing, and
+    the name is left as it was.
+    """
+    head = bytes(data[:16])
+    head = head[len(BOM):] if head.startswith(BOM) else head
+    if head.startswith(b"%PDF-"):
+        return ".pdf"
+    try:
+        sample = bytes(data[:4096]).decode("utf-8")
+    except UnicodeDecodeError:
+        return ""
+    # Decoding is not enough: a ZIP's header decodes too, because its bytes happen to be small.
+    # What no text file has is a NUL, or a scattering of the other control characters.
+    control = sum(1 for character in sample if ord(character) < 32 and character not in "\t\n\r\f")
+    if "\x00" in sample or control > len(sample) * 0.02:
+        return ""
+    return ".txt"
+
+
+def as_it_really_is(filename: str, mimetype: str, data: bytes) -> tuple[str, str]:
+    """The name and type to send this file under, corrected when its bytes disagree with them."""
+    real = real_extension(data)
+    if not real:
+        return filename, mimetype
+    claimed = extension(filename, mimetype)
+    if filename.lower().endswith(real) or (real == ".txt" and claimed in TEXT_TYPES):
+        return filename, mimetype or TYPES.get(claimed or real, mimetype)
+    stem = re.sub(r"\.[A-Za-z0-9]{1,5}$", "", filename).strip() or "document"
+    return f"{stem}{real}", TYPES[real]
+
+
 def _split(text: str, size: int) -> list[str]:
     """Parts of at most `size` characters, cut between paragraphs, else between sentences."""
     parts, current = [], ""
@@ -344,6 +388,9 @@ class Documents:
     ) -> tuple[Document, bool]:
         """Keep a document and learn its text. Returns it, and whether it was new.
         ValueError, in words for the team, when it cannot be read."""
+        # The bytes decide, before anything else: a file whose name lies about it is read wrong,
+        # stored wrong, and sent back to a member as something their phone cannot open.
+        filename, mimetype = as_it_really_is(filename, mimetype, data)
         ext = extension(filename, mimetype)
         if ext is None:
             raise ValueError("Jeli reads PDF, Word (.docx), text and meeting transcripts (.vtt)")
@@ -380,7 +427,12 @@ class Documents:
         data = await self.store.document_content(document.id)
         if data is None:
             return None
-        return Attachment(document.filename, document.mimetype, data, caption=caption, document_id=document.id)
+        # What is sent is named after what it is, not after what the row calls it: a document kept
+        # under the wrong name is one WhatsApp refuses to open, and the member only sees that.
+        filename, mimetype = as_it_really_is(document.filename, document.mimetype, data)
+        if filename != document.filename:
+            log.info("Sending %s as %s: its bytes are not what its name said", document.id, filename)
+        return Attachment(filename, mimetype, data, caption=caption, document_id=document.id)
 
     async def reply(self, text: str, language: str, turns: list[Turn] = ()) -> Reply | None:
         """A member asks for a document, maybe translated: the file (at once, or once translated),

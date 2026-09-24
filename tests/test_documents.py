@@ -101,8 +101,10 @@ def test_a_document_is_kept_and_learned_page_by_page():
     assert document.id.startswith("document:unipods-hackathon-guidelines-")
     assert store.messages and all(m.chat_id == document.id and m.source == "document" for m in store.messages)
     assert asyncio.run(documents.add("again.pdf", data, title="UniPods Hackathon Guidelines"))[1] is False  # same file
+    # A real slide deck is a ZIP, like .docx — so its bytes say nothing certain, and the name
+    # decides. Jeli cannot read it either way, and says so.
     with pytest.raises(ValueError, match="PDF, Word"):
-        asyncio.run(documents.add("slides.pptx", b"x"))
+        asyncio.run(documents.add("slides.pptx", b"PK" + bytes([3, 4, 20, 0, 6, 0]) + bytes(200)))
 
 
 def test_a_member_gets_the_document_they_ask_for():
@@ -347,3 +349,71 @@ def test_the_team_can_reach_it_from_the_knowledge_page():
     source = inspect.getsource(pages)
     assert '"/dashboard/knowledge/paste"' in source and "Paste an email or an announcement" in source
     assert "knowledge_paste" in source
+
+
+# --- A file is what its bytes say, not what it was called ---------------------------------------
+
+
+PDF = b"%PDF-1.7\n%\xe2\xe3\xcf\xd3\n1 0 obj"
+DOCX = b"PK" + bytes([3, 4, 20, 0, 6, 0])  # a .docx, a .pptx and a .zip all start this way
+TEXT = "METI UniPods Cohort 1 — Information Pack\n\nThe programme starts…".encode("utf-8")
+
+
+def test_a_document_is_sent_under_the_name_its_bytes_deserve():
+    """Measured 24 Sep: a member asked for the Information Pack and got a 4 KB "…Info pack.pdf"
+    WhatsApp could not open. What had always been kept under that name was plain text."""
+    from app.answer.documents import as_it_really_is
+
+    assert as_it_really_is("Info pack.pdf", "application/pdf", TEXT) == ("Info pack.txt", "text/plain")
+    # A real PDF keeps its name, and so does anything Jeli has no opinion about.
+    assert as_it_really_is("Info pack.pdf", "application/pdf", PDF) == ("Info pack.pdf", "application/pdf")
+    assert as_it_really_is("photo.png", "image/png", b"\x89PNG\r\n\x1a\n") == ("photo.png", "image/png")
+    # Markdown and subtitles are text too: they keep the name that says which kind.
+    assert as_it_really_is("notes.md", "text/markdown", b"# Notes")[0] == "notes.md"
+    assert as_it_really_is("call.vtt", "text/vtt", b"WEBVTT\n\n00:00")[0] == "call.vtt"
+    # A ZIP-based file (.docx, .pptx, .xlsx all start "PK") says nothing certain: the name stands.
+    assert as_it_really_is("slides.pdf", "application/pdf", DOCX) == ("slides.pdf", "application/pdf")
+
+
+def test_what_is_kept_is_named_for_what_it_is():
+    """Correcting it on the way in, so the mistake is not made again for every future reader."""
+    import inspect
+
+    from app.answer.documents import Documents
+
+    adding = inspect.getsource(Documents.add)
+    assert "as_it_really_is(filename, mimetype, data)" in adding
+    assert adding.index("as_it_really_is") < adding.index("ext = extension")
+
+
+def test_an_old_row_with_the_wrong_name_is_still_sent_correctly():
+    """The rows already stored wrong must reach members as something they can open."""
+    import inspect
+
+    from app.answer.documents import Documents
+
+    assert "as_it_really_is(document.filename, document.mimetype, data)" in inspect.getsource(Documents.attachment)
+
+
+def test_a_translation_is_a_real_pdf_whose_words_survive_it():
+    """The other half of what a member asked: that the translated file opens, and says something."""
+    import io as _io
+
+    from pypdf import PdfReader
+
+    from app.answer.pdf import build_pdf
+
+    pdf = build_pdf(
+        "METI UniPods Cohort 1 — Kifurushi cha Taarifa (Kiswahili)",
+        "Traduit par Jeli",
+        [("heading", "Tarehe za mwisho"),
+         ("text", "Mpango unaanza tarehe 18 Septemba 2026. Échéances et accompagnement compris.")],
+    )
+    assert pdf.startswith(b"%PDF-") and b"%%EOF" in pdf[-400:]
+    read_back = "\n".join((page.extract_text() or "") for page in PdfReader(_io.BytesIO(pdf)).pages)
+    for word in ("Kifurushi", "Septemba", "Échéances", "accompagnement"):
+        assert word in read_back, word
+    # And it goes out as a PDF, because this time the bytes really are one.
+    from app.answer.documents import as_it_really_is
+
+    assert as_it_really_is("Info pack (Swahili).pdf", "application/pdf", pdf)[1] == "application/pdf"
