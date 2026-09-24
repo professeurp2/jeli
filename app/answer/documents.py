@@ -108,6 +108,20 @@ def as_it_really_is(filename: str, mimetype: str, data: bytes) -> tuple[str, str
     return f"{stem}{real}", TYPES[real]
 
 
+KINDS = {
+    ".pdf": "the original PDF",
+    ".docx": "the original Word file",
+    ".vtt": "a meeting transcript",
+    ".txt": "a plain-text copy",
+    ".md": "a plain-text copy",
+}
+
+
+def _kind(document: Document) -> str:
+    """What this entry is, for whoever has to choose between two of the same document."""
+    return KINDS.get(extension(document.filename, document.mimetype) or "", "a file")
+
+
 def _split(text: str, size: int) -> list[str]:
     """Parts of at most `size` characters, cut between paragraphs, else between sentences."""
     parts, current = [], ""
@@ -249,6 +263,12 @@ conversation, decide which of the listed documents they want: "document" is its 
 they ask for none of these (for example a question about a topic, or a document not in the list).
 "translate_to" is the two-letter code of the language they want it in (en, fr, pt, es, sw, …) when
 they ask for a translation or a version in another language; otherwise "".
+
+When two entries are the same document — the same pack, the same guidelines, the same brief, under
+different names — choose the one that is the original file the community was given: the PDF or the
+Word file, over a plain-text copy of it, even when the text copy's title matches the words the
+member used. A member asking for a document wants the document, not a transcription of it. Prefer
+the fuller one when both are originals, and the more recent when they are otherwise alike.
 """
 
 # Said plainly, in the system and in the request: with a softer wording the light models return the
@@ -440,8 +460,12 @@ class Documents:
         documents = await self.store.list_documents()
         if not documents or self.llm is None:
             return None
+        # What kind of file each one is, said in words: the choice between an original and a text
+        # copy of the same document cannot be made from a title, and ".txt" at the end of a
+        # filename is easy to read past.
         listing = "\n".join(
-            f"[{n}] «{d.title}» ({d.filename}, {d.pages} pages, in {LANGUAGE_NAMES.get(d.language, d.language)}), "
+            f"[{n}] «{d.title}» — {_kind(d)}, {d.pages} pages, "
+            f"in {LANGUAGE_NAMES.get(d.language, d.language)} ({d.filename}), "
             f"shared by {self.who(d.shared_by)} on {short_day(d.shared_at)}"
             for n, d in enumerate(documents[:40], 1)
         )

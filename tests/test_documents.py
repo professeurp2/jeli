@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 import pytest
 
 from app.adapters.whatsapp_waha import parse_shared_document
-from app.answer.documents import Block, Documents, FileChoice, Translated, read_pages
+from app.answer.documents import TYPES, Block, Documents, FileChoice, Translated, read_pages
 from app.answer.language import TEXTS
 from app.answer.pdf import build_pdf
 from app.models import Attachment, Reply
@@ -417,3 +417,36 @@ def test_a_translation_is_a_real_pdf_whose_words_survive_it():
     from app.answer.documents import as_it_really_is
 
     assert as_it_really_is("Info pack (Swahili).pdf", "application/pdf", pdf)[1] == "application/pdf"
+
+
+def test_the_original_is_handed_over_not_a_text_copy_of_it():
+    """Measured 24 Sep: a member asked for the Information Pack and got a 4 KB text copy, while
+    Jeli held the 6-page PDF the community was actually given. Jeli sends what it was given."""
+    from app.answer.documents import CHOOSE_SYSTEM, _kind
+    from app.models import Document as Doc
+
+    def entry(filename, mimetype):
+        return Doc(id="x", title="t", filename=filename, mimetype=mimetype, size_bytes=0, pages=1,
+                   language="en", shared_by="", shared_at=T0, chat_id="", translation_of=None)
+
+    # The listing says what each entry is, in words: ".txt" at the end of a name is read past.
+    assert _kind(entry("pack.pdf", "application/pdf")) == "the original PDF"
+    assert _kind(entry("pack.txt", "text/plain")) == "a plain-text copy"
+    assert _kind(entry("notes.docx", TYPES[".docx"])) == "the original Word file"
+    assert _kind(entry("call.vtt", "text/vtt")) == "a meeting transcript"
+    # And the rule for choosing between two of the same document is stated, not left to luck.
+    assert "the original file the community was given" in CHOOSE_SYSTEM
+    assert "even when the text copy's title matches" in CHOOSE_SYSTEM
+
+
+def test_jeli_never_makes_up_a_document_it_was_not_given():
+    """It may translate one into a PDF, because a member asked for that. It may not turn a text
+    file it holds into a PDF and pass it off as the document: Jeli sends what it was given."""
+    import inspect
+
+    from app.answer import documents
+
+    source = inspect.getsource(documents)
+    assert "as_a_document" not in source
+    sending = inspect.getsource(documents.Documents.attachment)
+    assert "build_pdf" not in sending
