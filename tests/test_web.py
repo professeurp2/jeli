@@ -1,3 +1,4 @@
+import asyncio
 import re
 from datetime import date, datetime, timedelta, timezone
 
@@ -497,3 +498,56 @@ def test_the_team_controls_the_call_from_the_dashboard(client):
     assert runtime["call_quiet_minutes"] == 12 and runtime["call_transcript"] is False
     # A comma inside a question is not a second question, and a blank line is not one at all.
     assert runtime["call_questions"] == ["Et les échéances, c'est quand ?", "What changed this week?"]
+
+
+def test_the_team_can_watch_a_call_in_progress_end_to_end(client):
+    """The whole path, once: the page, the list it refreshes from, and the socket that carries
+    what is being said and both voices to whoever on the team is following."""
+    import json as _json
+
+    from app.web import call as callmod
+
+    sign_in(client)
+    callmod.ON_AIR.clear()
+    page = client.get("/dashboard/calls")
+    assert page.status_code == 200 and "On the line now" in page.text
+    assert '/dashboard/calls.json' in page.text  # the list it refreshes from
+    assert client.get("/dashboard/calls.json").json() == {"calls": []}
+
+    air = callmod.OnAir("abc123", "gemini-2.5-flash-native-audio-latest")
+    air.began -= 75
+    callmod.ON_AIR[air.id] = air
+    [row] = client.get("/dashboard/calls.json").json()["calls"]
+    assert row["id"] == "abc123" and 70 <= row["seconds"] <= 90
+
+    with client.websocket_connect("/dashboard/calls/abc123/listen") as socket:
+        assert air.followers, "the follower was not registered"
+
+        async def speak():
+            await air.note({"said": "C'est quand la prochaine session ?"})
+            await air.note({"jeli": "Mercredi matin, Diane l'a annoncé mardi."})
+            await air.share(b"\x00" + b"caller-audio")
+            await air.share(b"\x01" + b"jeli-audio")
+
+        asyncio.run(speak())
+        assert socket.receive_json() == {"said": "C'est quand la prochaine session ?"}
+        assert socket.receive_json() == {"jeli": "Mercredi matin, Diane l'a annoncé mardi."}
+        # One byte says whose voice it is: the two are not sampled at the same rate.
+        assert socket.receive_bytes() == b"\x00caller-audio"
+        assert socket.receive_bytes() == b"\x01jeli-audio"
+        # And the team's presence is visible on the list, so nobody follows twice by accident.
+        assert client.get("/dashboard/calls.json").json()["calls"][0]["followers"] == 1
+    callmod.ON_AIR.clear()
+
+
+def test_a_follower_who_joins_late_is_told_what_was_already_said(client):
+    from app.web import call as callmod
+
+    sign_in(client)
+    callmod.ON_AIR.clear()
+    air = callmod.OnAir("late1", "m")
+    callmod.ON_AIR[air.id] = air
+    asyncio.run(air.note({"jeli": "Je regarde dans la mémoire du groupe."}))
+    with client.websocket_connect("/dashboard/calls/late1/listen") as socket:
+        assert socket.receive_json() == {"jeli": "Je regarde dans la mémoire du groupe."}
+    callmod.ON_AIR.clear()
