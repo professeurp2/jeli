@@ -50,6 +50,11 @@ on conflict (id) do nothing
 # announcement, and an older repeat of the same words must not win by rank alone.
 # {column} is "embedding" (Gemini) or "embedding_backup" (the local model): a question is searched
 # in the space of whichever embedded it — the two are not comparable. Never user input.
+# The keyword half does not need a vector, so it can find a passage this space never embedded —
+# every passage learned while Google was denied, on 24 September. Its distance is then null, and
+# `float(null)` crashed the member's message. Such a passage is still a real keyword match: it is
+# kept, with a similarity of 0, which is the truth — closeness cannot be measured in a space this
+# passage is not in, and the thresholds are right to treat it as far.
 SEARCH = """
 with semantic as (
     select id, row_number() over (order by {column} <=> %(embedding)s::vector) as rank
@@ -72,7 +77,7 @@ fused as (
 )
 select c.id, c.chat_id, c.started_at, c.ended_at, c.authors, c.message_ids, c.content,
        f.score * (1 + %(recency)s * exp(-greatest(extract(epoch from (now() - c.ended_at)), 0) / (86400.0 * 30))) as score,
-       1 - (c.{column} <=> %(embedding)s::vector) as similarity
+       coalesce(1 - (c.{column} <=> %(embedding)s::vector), 0) as similarity
 from fused as f join jeli.chunks as c using (id)
 order by 8 desc
 limit %(limit)s
@@ -1012,7 +1017,8 @@ class Store:
                 message_ids=row["message_ids"],
                 content=row["content"],
                 score=float(row["score"]),
-                similarity=float(row["similarity"]),
+                # Belt and braces: no shape of row may ever cost a member their answer.
+                similarity=float(row["similarity"] or 0.0),
                 space=space,
             )
             for row in rows

@@ -112,3 +112,30 @@ def test_other_errors_are_not_retried():
     with pytest.raises(errors.ClientError):
         asyncio.run(make_embedder(models).embed_documents(["a"]))
     assert len(models.calls) == 1
+
+
+def test_a_passage_this_space_never_embedded_does_not_cost_a_member_their_answer():
+    """Measured 24 September in production, on a live group message:
+
+        File "/app/app/kb/store.py", line 1015, in search
+          similarity=float(row["similarity"])
+        TypeError: float() argument must be ... not 'NoneType'
+
+    The keyword half of the search needs no vector, so it finds passages Gemini never embedded —
+    every passage learned while Google was denying the project. Their distance is null.
+    """
+    from app.kb.store import SEARCH
+
+    # Fixed at the source: the database answers 0, not null, when there is nothing to measure.
+    assert "coalesce(1 - (c.{column} <=> %(embedding)s::vector), 0) as similarity" in SEARCH
+    # The keyword half really does not filter on the vector — which is why this can happen at all.
+    keyword_half = SEARCH[SEARCH.index("keyword as ("):SEARCH.index("fused as (")]
+    assert "is not null" not in keyword_half
+
+
+def test_the_reader_never_trusts_the_row_to_be_well_shaped():
+    import inspect
+
+    from app.kb.store import Store
+
+    assert 'float(row["similarity"] or 0.0)' in inspect.getsource(Store.search)
