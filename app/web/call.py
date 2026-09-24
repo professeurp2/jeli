@@ -36,11 +36,18 @@ router = APIRouter()
 # The Live API's own models, newest first. Their requests per day are unlimited.
 CALL_MODELS = ["gemini-2.5-flash-native-audio-latest", "gemini-3.8-live", "gemini-3.1-flash-live-preview"]
 VOICE = "Aoede"
-# A call is a conversation, not a broadcast: past this it hangs up, so a forgotten tab cannot hold
-# a session open all night.
-MAX_CALL_SECONDS = 600
+# A call ends for one of three reasons, and none of them is a stopwatch: the caller hangs up, nobody
+# has spoken for a long time, or no Live model will take the call any more. Measured 23 Sep: a
+# ten-minute wall cut conversations that were still going, and a session ending — which Google does
+# routinely, every few minutes — ended the whole call instead of being reopened.
+QUIET_SECONDS = 300
+GIVE_UP_AFTER = 4
+RECONNECT_PAUSE = 1.0
+SHORTEST_REAL_SESSION = 3.0
 # What the caller hears if nothing can answer.
 NO_ENGINE = "Jeli ne peut pas prendre l'appel pour l'instant."
+RESUMING = "Un instant — je reprends…"
+GONE_QUIET = "Personne ne parlait depuis un moment, alors j'ai raccroché. Rappelez quand vous voulez."
 
 SPOKEN = """
 You are on a voice call now, not writing a message. So: short sentences, one idea at a time, the
@@ -259,33 +266,47 @@ async def call_socket(socket: WebSocket) -> None:
         return
     client: genai.Client = clients[0]
     instructions = await _instructions(state)
-    audio: asyncio.Queue = asyncio.Queue(maxsize=200)
-    ears = asyncio.create_task(_ears(socket, audio))
-    handle, model, until = None, None, time.monotonic() + MAX_CALL_SECONDS
+    line = Line(socket)
+    watchers = [asyncio.create_task(line.listen()), asyncio.create_task(_hang_up_on_silence(line))]
+    handle, model, failures = None, CALL_MODELS[0], 0
     try:
-        while time.monotonic() < until:
-            session_model = model or await _first_model_that_answers(client, instructions, handle, socket)
-            if session_model is None:
-                return
-            model = session_model
+        while not line.gone.is_set():
+            opened = time.monotonic()
             try:
                 async with client.aio.live.connect(
                     model=model, config=_config(instructions, handle)
                 ) as session:
                     log.info("A call is running on %s%s", model, " (resumed)" if handle else "")
-                    handle = await _talk(socket, session, state, audio)
+                    handle = await _talk(socket, session, state, line) or handle
+                # A session that lasted is a session that worked. One that died on opening is a
+                # failure however politely it closed, and must not be retried in a tight circle.
+                failures = 0 if time.monotonic() - opened > SHORTEST_REAL_SESSION else failures + 1
             except WebSocketDisconnect:
                 return
             except Exception:
-                log.warning("The call's session ended on %s", model, exc_info=True)
-            if handle is None:
-                # Nothing to resume with: saying so is better than a silence the caller has to guess.
-                await _say(socket, {"state": "L'appel s'est arrêté. Rappelez quand vous voulez.", "end": True})
+                failures += 1
+                log.warning("A call's session on %s did not open (%d in a row)", model, failures, exc_info=True)
+                if failures >= GIVE_UP_AFTER:
+                    await _say(socket, {"state": NO_ENGINE, "end": True})
+                    return
+                # Another Live model may take what this one refused: a call is worth all three.
+                model = CALL_MODELS[(CALL_MODELS.index(model) + 1) % len(CALL_MODELS)]
+                await asyncio.sleep(RECONNECT_PAUSE)
+                continue
+            if line.gone.is_set():
+                break
+            if failures >= GIVE_UP_AFTER:
+                await _say(socket, {"state": NO_ENGINE, "end": True})
                 return
-            await _say(socket, {"state": "Un instant — je reprends…"})
-        await _say(socket, {"state": "L'appel a atteint sa durée maximale. Rappelez quand vous voulez.", "end": True})
+            # The session ended, which Google does every few minutes. That is a reconnection, not
+            # the end of the call — even the first time, before any handle has arrived.
+            await _say(socket, {"state": RESUMING})
+            if failures:
+                await asyncio.sleep(RECONNECT_PAUSE)
+        await _say(socket, {"state": GONE_QUIET if line.quiet else "Appel terminé.", "end": True})
     finally:
-        ears.cancel()
+        for watcher in watchers:
+            watcher.cancel()
         with contextlib.suppress(Exception):
             await socket.close()
 
@@ -314,41 +335,63 @@ def _config(instructions: str, handle: str | None) -> types.LiveConnectConfig:
     )
 
 
-async def _first_model_that_answers(client, instructions, handle, socket) -> str | None:
-    """The first Live model that takes the call; None when none of them will."""
-    for model in CALL_MODELS:
-        try:
-            async with client.aio.live.connect(model=model, config=_config(instructions, handle)):
-                return model
-        except Exception:
-            log.warning("Live model %s could not take the call", model, exc_info=True)
-    await _say(socket, {"state": NO_ENGINE, "end": True})
-    return None
-
-
 async def _say(socket: WebSocket, note: dict) -> None:
     with contextlib.suppress(Exception):
         await socket.send_text(json.dumps(note))
 
 
-async def _ears(socket: WebSocket, audio: asyncio.Queue) -> None:
-    """The caller's microphone, read once for the whole call and not per session: a reconnection
-    must not cost the socket its reader."""
-    while True:
-        chunk = await socket.receive_bytes()
-        if audio.full():  # the line is ahead of the model: the oldest sound is the one to drop
-            with contextlib.suppress(asyncio.QueueEmpty):
-                audio.get_nowait()
-        await audio.put(chunk)
+class Line:
+    """The caller's side of the call: their microphone, and whether they are still on it.
+
+    Read once for the whole call and not per session — a reconnection must not cost the socket its
+    reader. And the caller leaving must end the call: measured 23 Sep, a closed tab left its Live
+    session running to the stopwatch, holding one of the few slots the free tier allows, so the
+    *next* person to call found none and was told Jeli could not take the call.
+    """
+
+    def __init__(self, socket: WebSocket):
+        self.socket = socket
+        self.audio: asyncio.Queue = asyncio.Queue(maxsize=200)
+        self.gone = asyncio.Event()
+        self.quiet = False
+        self.spoke_at = time.monotonic()
+
+    async def listen(self) -> None:
+        try:
+            while True:
+                chunk = await self.socket.receive_bytes()
+                if self.audio.full():  # the line is ahead of the model: drop the oldest sound
+                    with contextlib.suppress(asyncio.QueueEmpty):
+                        self.audio.get_nowait()
+                await self.audio.put(chunk)
+        except Exception:
+            log.info("The caller hung up")
+        finally:
+            self.gone.set()
+
+    def heard(self) -> None:
+        self.spoke_at = time.monotonic()
 
 
-async def _talk(socket: WebSocket, session, state, audio: asyncio.Queue) -> str | None:
+async def _hang_up_on_silence(line: Line) -> None:
+    """A forgotten tab holds a microphone open for hours; a conversation does not go quiet for five
+    minutes. So a call ends on silence, never on a stopwatch."""
+    while not line.gone.is_set():
+        quiet = time.monotonic() - line.spoke_at
+        if quiet >= QUIET_SECONDS:
+            line.quiet = True
+            line.gone.set()
+            return
+        await asyncio.sleep(min(15.0, QUIET_SECONDS - quiet))
+
+
+async def _talk(socket: WebSocket, session, state, line: Line) -> str | None:
     """One session of a call. Returns the handle to resume with, or None when there is none."""
     resume: dict[str, str | None] = {"handle": None}
 
     async def send() -> None:
         while True:
-            chunk = await audio.get()
+            chunk = await line.audio.get()
             await session.send_realtime_input(audio=types.Blob(data=chunk, mime_type="audio/pcm;rate=16000"))
 
     async def receive() -> None:
@@ -357,8 +400,10 @@ async def _talk(socket: WebSocket, session, state, audio: asyncio.Queue) -> str 
             if update is not None and getattr(update, "resumable", False) and update.new_handle:
                 resume["handle"] = update.new_handle
             if getattr(message, "go_away", None) is not None:
-                # Google warns before closing: the caller hears nothing, and the call continues.
-                log.info("The Live API asked to reconnect; the call carries on")
+                # Google warns seconds before closing. Reopening now, while the line is still up,
+                # is the difference between a pause and a dropped call.
+                log.info("The Live API asked to reconnect; reopening before it closes")
+                return
             content = getattr(message, "server_content", None)
             if content is not None:
                 for part in getattr(getattr(content, "model_turn", None), "parts", None) or []:
@@ -368,6 +413,7 @@ async def _talk(socket: WebSocket, session, state, audio: asyncio.Queue) -> str 
                 heard = getattr(getattr(content, "input_transcription", None), "text", "")
                 spoken = getattr(getattr(content, "output_transcription", None), "text", "")
                 if heard:
+                    line.heard()  # somebody is talking: the silence watchdog starts over
                     await _say(socket, {"said": heard})
                 if spoken:
                     await _say(socket, {"jeli": spoken})
@@ -388,7 +434,8 @@ async def _talk(socket: WebSocket, session, state, audio: asyncio.Queue) -> str 
 
     mouth = asyncio.create_task(send())
     ear = asyncio.create_task(receive())
-    done, pending = await asyncio.wait({mouth, ear}, return_when=asyncio.FIRST_COMPLETED)
+    left = asyncio.create_task(line.gone.wait())  # the caller leaving ends the session with them
+    done, pending = await asyncio.wait({mouth, ear, left}, return_when=asyncio.FIRST_COMPLETED)
     for task in pending:
         task.cancel()
     for task in done:
