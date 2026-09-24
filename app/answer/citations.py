@@ -114,9 +114,24 @@ def is_ignored(message, keys: set[str]) -> bool:
     return bool(candidates & keys)
 
 
-def short_day(moment: datetime) -> str:
-    """"Thu 17 Sep": the day, as members read it; no time zone to decode."""
-    return f"{moment.astimezone(timezone.utc):%a %d %b}"
+# A date is the most quoted thing Jeli writes, and it sat under every French answer in English:
+# "Thu 17 Sep, at 12:30" below a reply written in French. Measured 24 September — a member said
+# Jeli was mixing languages, and this was most of it. Only the languages with their own words are
+# listed; the rest read the English, as they already do for every other fixed phrase.
+DAY_NAMES = {"fr": ("lun", "mar", "mer", "jeu", "ven", "sam", "dim")}
+MONTH_NAMES = {
+    "fr": ("janv", "févr", "mars", "avr", "mai", "juin", "juil", "août", "sept", "oct", "nov", "déc")
+}
+AT_TIME = {"fr": "à"}
+
+
+def short_day(moment: datetime, language: str = "en") -> str:
+    """"Thu 17 Sep", or "jeu 17 sept": the day, as this member reads it."""
+    when = moment.astimezone(timezone.utc)
+    days, months = DAY_NAMES.get(language), MONTH_NAMES.get(language)
+    if not days or not months:
+        return f"{when:%a %d %b}"
+    return f"{days[when.weekday()]} {when.day:02d} {months[when.month - 1]}"
 
 
 def snippet(text: str, limit: int = 180) -> str:
@@ -165,10 +180,14 @@ def timestamped_link(url: str | None, offset: timedelta) -> str | None:
     return urlunsplit((parts.scheme, parts.netloc, parts.path, urlencode(query), ""))
 
 
-def recording_quote(recording: Recording, offset: timedelta, speaker: str, text: str, link: bool = True) -> str:
+def recording_quote(recording: Recording, offset: timedelta, speaker: str, text: str, link: bool = True,
+                    language: str = "en") -> str:
     """A moment of a call: its title, day and time within the call, what was said, and the link
     that starts playing there (`link=False`: not repeated under each moment of the same video)."""
-    header = f"🎥 *{recording.title}* · {short_day(recording.recorded_at)}, at {format_offset(offset)}"
+    header = (
+        f"🎥 *{recording.title}* · {short_day(recording.recorded_at, language)}, "
+        f"{AT_TIME.get(language, 'at')} {format_offset(offset)}"
+    )
     url = timestamped_link(recording.source_url, offset) if link else None
     return quote(header, f"{speaker}: {snippet(text)}" if speaker else snippet(text), url or "")
 

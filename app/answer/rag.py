@@ -213,19 +213,30 @@ class Excerpt:
         """Where the quote comes from: two quotes from the same place are one."""
         return self.place_of(self.best_message(words))
 
-    def quote_message(self, message: StoredMessage, words: set[str]) -> str:
+    def quote_message(self, message: StoredMessage, words: set[str], language: str = "en") -> str:
+        """The block shown under an answer, written in the member's language.
+
+        A French reply ending in "Thu 17 Sep, at 12:30 · organiser" is the mixing a member
+        reported on 24 September: the answer was theirs, its date and its labels were not.
+        """
         if self.recording:
-            return recording_quote(self.recording, message.sent_at - self.recording.recorded_at, message.author, message.text)
+            return recording_quote(
+                self.recording, message.sent_at - self.recording.recorded_at, message.author,
+                message.text, language=language,
+            )
         if self.document:
             page = document_page(message.sent_at, self.document.shared_at)
             return quote(f"📄 *{clean_title(self.document.title)}*, page {page}", best_snippet(message.text, words))
-        role = " · organiser" if self.by_organiser(message) else ""
+        role = f" · {TEXTS[language]['source_organiser']}" if self.by_organiser(message) else ""
         clean = _display_label(self.chat_label)
         label = f" · {clean}" if clean else ""
-        return quote(f"*{self.name(message)}*{role}{label}, {short_day(message.sent_at)}", best_snippet(message.text, words))
+        return quote(
+            f"*{self.name(message)}*{role}{label}, {short_day(message.sent_at, language)}",
+            best_snippet(message.text, words),
+        )
 
-    def quote(self, words: set[str]) -> str:
-        return self.quote_message(self.best_message(words), words)
+    def quote(self, words: set[str], language: str = "en") -> str:
+        return self.quote_message(self.best_message(words), words, language)
 
 
 def distinct(excerpts: list[Excerpt], words: set[str]) -> list[Excerpt]:
@@ -341,7 +352,7 @@ class Answerer:
         cached = self._cache.get(key)
         if cached and self._clock() - cached[0] < CACHE_SECONDS:
             _, answer, cited, from_background = cached
-            return self._reply(answer, cited, chat_id, asker_id, factual=not from_background)
+            return self._reply(answer, cited, chat_id, asker_id, factual=not from_background, language=language)
 
         hits = await self._search([question, *queries], prefetched)
         state = await self._state()
@@ -361,7 +372,7 @@ class Answerer:
         except LLMUnavailable:
             log.error("No answer model available: quoting the closest sources instead")
             if excerpts:
-                return self._quotes(texts["fallback"], excerpts, question, shown=2)
+                return self._quotes(texts["fallback"], excerpts, question, shown=2, language=language)
             return await self._no_answer(question, language, member=member)
 
         answer = clean_answer(generated.answer)
@@ -371,7 +382,7 @@ class Answerer:
             near = bool(hits) and max(hit.similarity for hit in hits) >= NEAR_SIMILARITY
             return await self._no_answer(question, language, excerpts if near else [], member=member)
         self._cache[key] = (self._clock(), answer, cited, background_only)
-        return self._reply(answer, cited, chat_id, asker_id, factual=bool(cited))
+        return self._reply(answer, cited, chat_id, asker_id, factual=bool(cited), language=language)
 
     async def _state(self) -> str:
         state = getattr(self, "state", None)
@@ -406,9 +417,9 @@ class Answerer:
         """Not "I don't know" alone: what Jeli knows of the situation, and the closest discussions."""
         texts = TEXTS[language]
         if self.explainer is None:
-            return self._quotes(texts["dont_know_near"], list(near), question) if near else texts["dont_know"]
+            return self._quotes(texts["dont_know_near"], list(near), question, language=language) if near else texts["dont_know"]
         words = _words(question)
-        quotes = "\n\n".join(e.quote(words) for e in distinct(sorted(near, key=lambda e: e.relevance_rank), words)[:QUOTES_SHOWN])
+        quotes = "\n\n".join(e.quote(words, language) for e in distinct(sorted(near, key=lambda e: e.relevance_rank), words)[:QUOTES_SHOWN])
         return Reply(await self.explainer(question, language, quotes, member=member), unanswered=True)
 
     async def already_answered(
@@ -435,7 +446,7 @@ class Answerer:
         cited = self._verified(generated.sources, excerpts, answer)
         if not generated.already_answered or not cited or not answer:
             return None
-        return self._reply(answer, cited, chat_id, asker_id, lead=TEXTS[language]["already_covered"] + " ", factual=True)
+        return self._reply(answer, cited, chat_id, asker_id, lead=TEXTS[language]["already_covered"] + " ", factual=True, language=language)
 
     def is_ignored(self, message: StoredMessage | IncomingMessage) -> bool:
         return is_ignored(message, self.ignored)
@@ -448,11 +459,12 @@ class Answerer:
         asker_id: str | None,
         lead: str = "",
         factual: bool = True,
+        language: str = "en",
     ) -> Reply:
         """The answer with its sources, as WhatsApp does it — an organiser's announcement first."""
         words = _words(answer)
         ordered = sorted(cited, key=lambda pair: (not pair[0].by_organiser(pair[1]), pair[0].relevance_rank))
-        quotes = [excerpt.quote_message(message, words) for excerpt, message in ordered]
+        quotes = [excerpt.quote_message(message, words, language) for excerpt, message in ordered]
         show = self.sources_mode == "one" and factual
         if ordered and show:
             first, source = ordered[0]
@@ -470,10 +482,11 @@ class Answerer:
             return Reply(lead + answer + "".join(f"\n\n{q}" for q in quotes[:QUOTES_SHOWN]), cited=quotes)
         return Reply(lead + answer, cited=quotes if self.sources_mode != "off" else [])
 
-    def _quotes(self, header: str, excerpts: list[Excerpt], question: str, shown: int = QUOTES_SHOWN) -> str:
+    def _quotes(self, header: str, excerpts: list[Excerpt], question: str, shown: int = QUOTES_SHOWN,
+                language: str = "en") -> str:
         words = _words(question)
         best = distinct(sorted(excerpts, key=lambda e: e.relevance_rank), words)[:shown]
-        return header + "".join(f"\n\n{e.quote(words)}" for e in best)
+        return header + "".join(f"\n\n{e.quote(words, language)}" for e in best)
 
     async def _member_names(self) -> dict[str, str]:
         if self._names and time.monotonic() - self._names[0] < NAMES_TTL_SECONDS:
@@ -533,9 +546,10 @@ class Answerer:
     async def where_discussed(self, topic: str) -> str:
         """R11, /search: where the group talked about a topic — quotes, no model call, so it keeps
         working when every model is out of quota."""
-        texts = TEXTS[detect_language(topic)]
+        language = detect_language(topic)
+        texts = TEXTS[language]
         hits = await search(self.store, self.embedder, topic, limit=CANDIDATE_CHUNKS)
         if not hits or max(hit.similarity for hit in hits) < floor_for(hits, self.min_similarity):
             return texts["search_nothing"]
         excerpts = await self._excerpts(hits)
-        return self._quotes(texts["search_header"], excerpts, topic, shown=3) if excerpts else texts["search_nothing"]
+        return self._quotes(texts["search_header"], excerpts, topic, shown=3, language=language) if excerpts else texts["search_nothing"]

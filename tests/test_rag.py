@@ -303,3 +303,44 @@ def test_llm_does_not_hide_request_bugs():
     with pytest.raises(errors.ClientError):
         asyncio.run(llm.answer("system", "prompt"))
     assert models.models == ["primary"]
+
+
+def test_a_french_answer_does_not_end_in_english():
+    """Measured 24 September: a member said Jeli mixed languages. Its answers were in French and
+    the block underneath was not — "Thu 17 Sep, at 12:30 · organiser" under a French reply."""
+    from datetime import datetime, timedelta, timezone
+
+    from app.answer.citations import recording_quote, short_day
+    from app.models import Recording
+
+    when = datetime(2026, 9, 17, 20, 53, tzinfo=timezone.utc)
+    assert short_day(when, "fr") == "jeu 17 sept"
+    assert short_day(when, "en") == "Thu 17 Sep"
+    # A language with no words of its own reads the English, as it already does everywhere else.
+    assert short_day(when, "sw") == "Thu 17 Sep"
+
+    session = Recording(id="r", title="Session Wadhwani", recorded_at=when, method="gemini")
+    header = recording_quote(session, timedelta(minutes=12), "Diane", "on ferme vendredi",
+                             link=False, language="fr").split("\n")[0]
+    assert "jeu 17 sept" in header and " à " in header and " at " not in header
+
+
+def test_the_word_under_an_organisers_quote_is_translated_too():
+    from app.answer.language import TEXTS
+
+    assert TEXTS["fr"]["source_organiser"] == "organisateur"
+    assert TEXTS["en"]["source_organiser"] == "organiser"
+
+
+def test_every_quote_shown_to_a_member_is_given_their_language():
+    """The language must reach the block, not stop at the sentence above it."""
+    import inspect
+
+    from app.answer.rag import Answerer, Excerpt
+
+    assert "language" in inspect.signature(Excerpt.quote).parameters
+    assert "language" in inspect.signature(Excerpt.quote_message).parameters
+    for method in (Answerer._reply, Answerer._quotes):
+        assert "language" in inspect.signature(method).parameters, method.__name__
+    source = inspect.getsource(Answerer)
+    assert "e.quote(words)" not in source and "quote_message(message, words)" not in source
