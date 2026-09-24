@@ -97,3 +97,46 @@ def test_keyword_query_keeps_meaningful_words():
     assert keyword_query("What was decided about the bootcamp dates?") == "decided | bootcamp | dates"
     assert keyword_query("Quand est le bootcamp ?") == "bootcamp"
     assert keyword_query("the and?") is None
+
+
+def test_a_new_message_becomes_answerable_within_half_a_minute():
+    """Measured 24 September: a member asked about something just said and Jeli did not know it
+    yet. The wait is two things added together — how long a conversation must be quiet before it
+    is learned, and how often the memory job looks — and it came to ninety seconds."""
+    from datetime import timedelta
+
+    from app.config import Settings
+    from app.control.setup import SETTLE
+
+    interval = Settings.model_fields["index_interval_seconds"].default
+    worst_case = SETTLE + timedelta(seconds=interval)
+    assert worst_case <= timedelta(seconds=30), f"a new message waits up to {worst_case}"
+    # And not so short that two messages of the same thought are cut apart.
+    assert SETTLE >= timedelta(seconds=15)
+
+
+def test_a_round_with_nothing_to_learn_costs_no_model_call():
+    """Polling often is only free while an empty round stays empty: the moment it embeds something
+    unconditionally, ten seconds becomes a quota bill."""
+    import inspect
+
+    from app.kb.indexer import catch_up_gemini, index_pending
+
+    early = inspect.getsource(catch_up_gemini)
+    assert "if not waiting:" in early and "return 0" in early  # nothing waiting, nothing embedded
+    # And the chunk loop only embeds what it has: no chunks, no call.
+    assert "for start in range(0, len(chunks), BATCH_SIZE)" in inspect.getsource(index_pending)
+
+
+def test_messages_held_back_are_not_lost():
+    """The last chunk of a live chat is dropped from this round, not discarded: its messages stay
+    unindexed and come back with whatever follows them."""
+    import inspect
+
+    from app.kb.indexer import index_pending
+
+    source = inspect.getsource(index_pending)
+    assert "chunks = chunks[:-1]" in source
+    # Nothing marks those messages as done before they are actually embedded.
+    held = source.index("chunks = chunks[:-1]")
+    assert "mark_indexed" not in source[:held]

@@ -16,9 +16,13 @@ from app.kb.indexer import index_pending
 # batches an hour rather than in one burst that would leave members without answers.
 MAX_DEADLINE_BATCHES_PER_RUN = 10
 # A live conversation is learned once quiet for this long.
-# Shorter = new messages become searchable sooner; too short = a multi-message exchange may be
-# chunked before the thread is complete. 1 minute is a good balance for a live group.
-SETTLE = timedelta(minutes=1)
+#
+# It is the larger half of the wait before a new message can be answered about: a minute here, plus
+# up to one round of the memory job, made ninety seconds — long enough that someone asking about
+# what was just said got told Jeli did not know. Twenty seconds is still far longer than the pause
+# between two messages of the same thought, and nothing is lost by cutting early anyway: the
+# messages held back stay pending and are re-chunked with whatever follows them.
+SETTLE = timedelta(seconds=20)
 
 
 def _plural(n: int, word: str) -> str:

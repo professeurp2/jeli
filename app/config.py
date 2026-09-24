@@ -104,7 +104,10 @@ class Settings(BaseSettings):
     # WhatsApp exports carry local times without a timezone: the exporting phone's zone.
     export_timezone: str = "UTC"
     # How often live messages are chunked and embedded. Set to 30 on Railway for faster recall.
-    index_interval_seconds: int = 30
+    # The other half of the wait before a new message is searchable (see SETTLE in
+    # app/control/setup.py). A round with nothing to learn is two cheap queries and no model
+    # call, so polling often costs nothing anyone pays for.
+    index_interval_seconds: int = 10
     log_level: str = "INFO"
 
     @property
