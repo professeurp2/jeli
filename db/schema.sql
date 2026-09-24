@@ -215,10 +215,18 @@ create table if not exists jeli.poll_votes (
 );
 
 -- Keyword search with French and English stemming ("échéances" finds "échéance"), next to the
--- semantic one. Replaces the earlier 'simple' configuration; the column is regenerated at once.
-alter table jeli.chunks drop column if exists search;
-alter table jeli.chunks add column search tsvector generated always as
-    (to_tsvector('french', content) || to_tsvector('english', content)) stored;
+-- semantic one. Added only when missing: this file is run at every start (app/kb/store.py), and
+-- dropping a generated column would rebuild it over every passage each time.
+do $$
+begin
+    if not exists (
+        select from information_schema.columns
+        where table_schema = 'jeli' and table_name = 'chunks' and column_name = 'search'
+    ) then
+        alter table jeli.chunks add column search tsvector generated always as
+            (to_tsvector('french', content) || to_tsvector('english', content)) stored;
+    end if;
+end $$;
 create index if not exists chunks_search on jeli.chunks using gin (search);
 
 -- Exchanges with members, so that Jeli follows a conversation across restarts and deployments.

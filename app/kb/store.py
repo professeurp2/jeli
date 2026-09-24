@@ -5,6 +5,7 @@ import logging
 from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
+from pathlib import Path
 
 from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
@@ -16,6 +17,8 @@ from app.models import Deadline, Document, Recording, StoredMessage, UsageEvent
 
 log = logging.getLogger(__name__)
 
+# The schema this code expects, applied at every start (see Store.apply_schema).
+SCHEMA_FILE = Path(__file__).resolve().parents[2] / "db" / "schema.sql"
 INSERT_BATCH = 1000
 # Jeli is in the groups when it received group messages live within this window.
 LIVE_WINDOW = timedelta(days=3)
@@ -105,6 +108,39 @@ class Store:
         except PoolTimeout:
             # The pool keeps retrying in the background: Jeli still answers what it can meanwhile.
             log.error("Database unreachable at startup, still retrying")
+            return
+        await self.apply_schema()
+
+    async def apply_schema(self) -> str:
+        """Bring the database up to db/schema.sql. Returns "" when it worked, the problem otherwise.
+
+        Every statement in that file is written to be safe to run again, which is what makes this
+        possible — and what it was always for. Nothing ran it: measured 24 September, two columns
+        added to the file that morning never reached the database, and the first anyone knew was a
+        member's reminder crashing at three in the morning. A schema that ships with the code it
+        belongs to cannot drift from it.
+
+        Never fatal. A Jeli that starts without the newest column still answers questions; what it
+        must not do is stay quiet about it, so a failure is logged loudly and named.
+        """
+        try:
+            sql = SCHEMA_FILE.read_text(encoding="utf-8")
+        except OSError as error:
+            problem = f"could not read {SCHEMA_FILE}: {error}"
+        else:
+            try:
+                async with self._pool.connection() as conn:
+                    await conn.execute(sql)  # no parameters: several statements run in one call
+                log.info("Database schema applied (%s)", SCHEMA_FILE.name)
+                return ""
+            except Exception as error:
+                problem = f"{type(error).__name__}: {error}"
+        log.error(
+            "THE DATABASE SCHEMA WAS NOT APPLIED — Jeli may be missing columns its code expects, "
+            "and the features using them will fail one by one. Apply db/schema.sql by hand. (%s)",
+            problem,
+        )
+        return problem
 
     async def close(self) -> None:
         await self._pool.close()
