@@ -568,3 +568,71 @@ def test_what_a_voice_note_cannot_carry_follows_it_in_writing(waha_env, calls, m
     assert "https://" not in spoken_texts[0]  # the voice never reads a link out
     written = next(p["text"] for path, p in calls if path == "/api/sendText")
     assert "https://jeli.example.org/jeli/call" in written and "Diane" in written
+
+
+# --- Who may steer Jeli -------------------------------------------------------------------------
+
+
+def _member(text, author_id="266000696094755@lid", author="Awa", chat="120363@g.us"):
+    from datetime import datetime, timezone
+
+    from app.models import IncomingMessage
+
+    return IncomingMessage(
+        platform="whatsapp", chat_id=chat, message_id="m1", author=author, text=text,
+        sent_at=datetime(2026, 9, 24, 9, tzinfo=timezone.utc), is_private=False,
+        addressed_to_bot=True, author_id=author_id,
+    )
+
+
+def test_no_message_can_switch_jeli_off():
+    """Measured 24 September, in the cohort group: a member wrote "/pause" and Jeli stopped
+    answering all 240 of them. The commands are gone rather than repaired — pausing, resuming and
+    silencing a group are the dashboard's job, where signing in is what proves who you are."""
+    import inspect
+
+    from app.adapters import whatsapp_waha
+
+    source = inspect.getsource(whatsapp_waha)
+    for gone in ("ADMIN_COMMAND", "ADMIN_DURATION", "_try_admin_command", "_is_admin("):
+        assert gone not in source, gone
+    assert not hasattr(whatsapp_waha, "ADMIN_COMMAND")
+
+
+def test_the_super_admin_is_recognised_by_number_never_by_an_account_id():
+    """The check that failed compared the sender against the sender, so every member passed it.
+    This one compares the configured number against the phone numbers the sender is really known
+    by — and an account id, a long run of digits meaning nothing outside WhatsApp, is not one."""
+    from app.answer.citations import NUMBER_OF_LID
+
+    channel = Waha.__new__(Waha)
+    # A LID alone says nothing: not the number, and not a candidate to be matched against one.
+    assert channel._known_numbers(_member("hi", author_id="266000696094755@lid")) == []
+    # A private chat id is the number itself.
+    assert channel._known_numbers(_member("hi", author_id="22393056936@c.us")) == ["22393056936"]
+    # And a LID WhatsApp has translated for us gives the number behind it.
+    NUMBER_OF_LID["266000696094755"] = "22393056936"
+    try:
+        assert channel._known_numbers(_member("hi", author_id="266000696094755@lid")) == ["22393056936"]
+    finally:
+        NUMBER_OF_LID.pop("266000696094755", None)
+
+
+def test_a_lid_that_merely_ends_like_the_admins_number_is_not_the_admin():
+    """Admin numbers are matched on their ending, because a number may or may not carry its
+    country code. Matched against an account id, that would hand the group to a stranger."""
+    from app.control.admin import is_super_admin
+
+    channel = Waha.__new__(Waha)
+    pretender = _member("mets-toi en pause", author_id="99999922393056936@lid")
+    # The old comparison would have said yes, on an id that is not a phone number at all.
+    assert is_super_admin("22393056936", "99999922393056936@lid") is True
+    # The new one never gets the chance: that id is not a number the sender is known by.
+    assert not any(is_super_admin("22393056936", k) for k in channel._known_numbers(pretender))
+
+
+def test_nobody_steers_jeli_when_no_number_is_configured():
+    from app.control.admin import is_super_admin
+
+    assert is_super_admin("", "22393056936@c.us") is False
+    assert is_super_admin("   ", "22393056936@c.us") is False

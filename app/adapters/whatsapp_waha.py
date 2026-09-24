@@ -28,7 +28,7 @@ from fastapi import APIRouter, BackgroundTasks, Header, HTTPException, Request
 
 from app.adapters import Ingest, Respond
 from app.adapters.pacing import SendSpacer, SlidingWindowLimiter, reading_delay, typing_duration
-from app.answer.citations import NUMBER_OF_LID, is_ignored, poll_text
+from app.answer.citations import NUMBER_OF_LID, is_ignored, is_phone_number, poll_text
 from app.answer.language import TEXTS, detect_language
 from app.answer.react import is_correction
 from app.answer import stickers
@@ -52,7 +52,6 @@ RESTRICTION_ERRORS = ("463", "475")
 IGNORED_CHAT_SUFFIXES = ("@broadcast", "@newsletter")
 TEXT_MENTION = re.compile(r"@(\d{5,})")
 # Admin commands that only team members can use.
-ADMIN_COMMAND = re.compile(r"^/(silence|mute|pause|resume|unsilence|unmute)\b(.*)$", re.IGNORECASE | re.DOTALL)
 # Self-introduction patterns: higher voice rate for first contact.
 _INTRO = re.compile(
     r"\b(?:je\s+me\s+pr[eé]sente|je\s+m[''']appelle|je\s+suis\s+nouveau|je\s+rejoins|"
@@ -61,7 +60,6 @@ _INTRO = re.compile(
     r"glad\s+to\s+(?:join|be\s+here)|ravi\s+de\s+(?:rejoindre|vous\s+retrouver))\b",
     re.IGNORECASE,
 )
-ADMIN_DURATION = re.compile(r"(\d+)\s*(h|hours?|heures?|m|min|minutes?)", re.IGNORECASE)
 # Short affirmative answers that confirm a pending image offer.
 _YES = re.compile(
     r"^\s*(?:oui|yes|yep|yeah|ok(?:ay)?|bien\s+s[uû]r|carrement|absolument|go|vas-y|allons-y|affirmative|of\s+course|sure|please|s[''']il\s+te\s+pla[iî]t)\s*[!.]*\s*$",
@@ -449,50 +447,30 @@ class Waha:
         except Exception as error:
             log.warning("Could not set profile picture: %r", error)
 
-    def _is_admin(self, message: IncomingMessage) -> bool:
-        """True when the sender is one of the team members (admin_numbers list)."""
-        if not self.admin_numbers:
-            return False
-        return any(is_super_admin(num, message.author_id, message.author) for num in self._known_numbers(message))
+    # No chat command controls Jeli any more. On 24 September a member wrote "/pause" in the
+    # cohort group and Jeli stopped answering all 240 of them: the check that was meant to keep
+    # that to the team compared the sender against the sender, so everyone passed it. The
+    # commands are gone rather than repaired — pausing, resuming and silencing a group are the
+    # dashboard's job, where signing in is what proves who you are. A message can no longer
+    # switch Jeli off, whoever sends it.
 
     def _known_numbers(self, message: IncomingMessage) -> list[str]:
-        """The sender's id, and the phone number behind it when WhatsApp has told us (learn_numbers)."""
-        who = re.sub(r"\D", "", (message.author_id or message.author or "").split("@")[0].split(":")[0])
-        number = NUMBER_OF_LID.get(who)
-        return [message.author_id or message.author or "", number or ""]
+        """The phone numbers this sender is known by — never their account id.
 
-    async def _auto_unsilence(self, chat_id: str, delay: float) -> None:
-        await asyncio.sleep(delay)
-        self.silent_groups.discard(chat_id)
-        log.info("Auto-unsilenced group %s after admin timer expired", chat_id)
-
-    async def _try_admin_command(self, message: IncomingMessage) -> bool:
-        """Handle /silence [duration] and /resume. Returns True if an admin command was handled."""
-        match = ADMIN_COMMAND.match(message.text.strip())
-        if not match:
-            return False
-        verb = match.group(1).lower()
-        args = (match.group(2) or "").strip()
-        language = detect_language(message.text)
-        if verb in ("resume", "unsilence", "unmute"):
-            self.silent_groups.discard(message.chat_id)
-            reply = TEXTS[language]["admin_resumed"]
-        else:
-            self.silent_groups.add(message.chat_id)
-            dur_match = ADMIN_DURATION.search(args)
-            if dur_match:
-                amount = int(dur_match.group(1))
-                unit = dur_match.group(2)[0].lower()
-                seconds = amount * 3600 if unit == "h" else amount * 60
-                task = asyncio.create_task(self._auto_unsilence(message.chat_id, seconds))
-                self._later.add(task)
-                task.add_done_callback(self._later.discard)
-                duration_str = (f" for {amount}h" if unit == "h" else f" for {amount} min") if language == "en" else (f" pendant {amount}h" if unit == "h" else f" pendant {amount} min")
-            else:
-                duration_str = ""
-            reply = TEXTS[language]["admin_silenced"].format(duration=duration_str)
-        await self.send_text(message.chat_id, reply, reply_to=message.message_id)
-        return True
+        A LID is a long run of digits that means nothing outside WhatsApp, and admin numbers are
+        matched on their ending (a number may or may not carry its country code). Comparing the two
+        would make an administrator of whoever's LID happened to end the right way.
+        """
+        numbers = []
+        raw = (message.author_id or "").split("@")[0].split(":")[0]
+        if message.author_id and message.author_id.endswith("@c.us"):
+            numbers.append(re.sub(r"\D", "", raw))  # a private chat id is the number itself
+        behind = NUMBER_OF_LID.get(re.sub(r"\D", "", raw))
+        if behind:
+            numbers.append(behind)  # what WhatsApp told us this account id belongs to
+        if message.author and is_phone_number(message.author):
+            numbers.append(re.sub(r"\D", "", message.author))  # exports name people by number
+        return [n for n in numbers if n]
 
     def may_reply(self, message: IncomingMessage) -> str | None:
         """Anti-ban guards: returns the refusal reason, or None when Jeli may answer.
@@ -978,9 +956,6 @@ class Waha:
         pending = self._pending_repeats.pop(mk, None)
         if pending:
             pending.cancel()
-        # Admin commands bypass all rate limits, silence and suspension.
-        if self._is_admin(message) and await self._try_admin_command(message):
-            return
         # The super admin steers Jeli in plain words (app/control/admin.py) — in private, or in a
         # group when speaking to Jeli. In a group it must be addressed to Jeli: otherwise every
         # sentence the super admin says to the cohort would be read as an order. By voice too: the
@@ -988,7 +963,9 @@ class Waha:
         if (
             self.admin is not None
             and (message.is_private or message.addressed_to_bot)
-            and is_super_admin(self.super_admin_number, message.author_id, message.author)
+            # By phone number only: an account id is a long run of digits that means nothing
+            # outside WhatsApp, and could end like a number by chance.
+            and any(is_super_admin(self.super_admin_number, known) for known in self._known_numbers(message))
         ):
             done = await self.admin.handle(message.text or "", actor="super admin")
             if done:
