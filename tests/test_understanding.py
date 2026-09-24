@@ -333,3 +333,47 @@ def test_the_understanding_step_knows_someone_saying_who_they_are():
     # Someone else's contact, or a number quoted for another reason, is not this.
     assert "is not\n    this" in SYSTEM
     assert Understood(kind="identity").person_name == "" and Understood(kind="identity").person_number == ""
+
+
+def test_jeli_never_promises_to_do_something_afterwards():
+    """Measured 24 September: "resume moi les chats de ce soir" was answered "C'est noté, je te
+    prépare le résumé des échanges de ce soir." — twice, and no summary ever came. Jeli has no
+    later: the message it sends is everything it will send."""
+    from app.answer.persona import PERSONA
+    from app.answer.understand import SYSTEM
+
+    assert "Never promise to do something afterwards" in PERSONA
+    assert "You have no later" in PERSONA
+    # A reminder is the one thing that really does arrive later, and it is named as the exception.
+    assert "The only exception is a reminder" in PERSONA
+    # The understanding step is told the same, where the promise was actually written.
+    assert "It is the whole of what Jeli sends: nothing follows it" in SYSTEM
+    assert "never announces work to come" in SYSTEM
+
+
+def test_a_request_for_work_is_never_small_talk():
+    from app.answer.understand import SYSTEM
+
+    assert "Never a request for something Jeli does" in SYSTEM
+    assert "answering them as small talk means promising" in SYSTEM
+
+
+def test_the_deterministic_rules_overrule_a_misread_as_small_talk():
+    """The rules that routed every message before the model existed still recognise a recap or a
+    deadline question. When the model calls one of those small talk, they win."""
+    import asyncio
+
+    from app.answer.understand import Understood, Understander
+
+    class Misreads:
+        async def generate(self, prompt, schema, **kwargs):
+            return Understood(kind="social", reply="C'est noté, je m'en occupe.", language="fr")
+
+    understander = Understander(Misreads())
+    read = asyncio.run(understander.understand("recap de la session d'hier", "fr", []))
+    assert read.kind in ("recap", "catchup")  # work of some kind, never small talk
+    assert read.reply == ""  # the promise is dropped with the misreading
+
+    # Real small talk is left alone.
+    hello = asyncio.run(understander.understand("salut Jeli, ça va ?", "fr", []))
+    assert hello.kind == "social" and hello.reply

@@ -65,6 +65,10 @@ you, from the messages. Return:
 
 - "kind", one of:
   "social": greetings, thanks, compliments, small talk, jokes, "can you help me?" without a question.
+    Never a request for something Jeli does — a summary, a catch-up, a document, a deadline, a
+    reminder. Those have their own kind below, and answering them as small talk means promising
+    work that is never done: measured 24 September, "resume moi les chats de ce soir" was answered
+    "C'est noté, je te prépare le résumé" and no summary ever came.
   "about_jeli": about Jeli itself — who or what it is, what it can do, how it works, whether it is
     a bot, whether some message or daily summary in the group is Jeli's, how it can help someone.
     NOT questions about the group's content (what was said, who is who in the programme).
@@ -101,6 +105,9 @@ you, from the messages. Return:
 - "reply": for "social", "about_jeli" and "clarify" only — what Jeli says, in the member's
   language, in the persona above (one to three short sentences; for about_jeli, only the parts of
   its capabilities that answer the member). Otherwise "".
+  It is the whole of what Jeli sends: nothing follows it. So it never announces work to come
+  ("I'm preparing it", "one moment", "I'll send it shortly"). If the member is asking for
+  something Jeli does, the kind is that thing, not "social".
 - "standalone": the latest message rewritten as a complete request that makes sense on its own,
   using the conversation so far and the message quoted ("and for the video?" → "What is the
   deadline for the demo video?"; "4" after a numbered list → the fourth item's name), in the
@@ -218,6 +225,16 @@ class Understander:
             understood.kind = "question"
         if understood.kind == "vague":
             understood.kind = "clarify"
+        # A request for work is never small talk. The prompt says so, and this makes sure of it:
+        # `plain` holds the rules that routed every message before the model existed, and they
+        # recognise a catch-up, a recap or a deadline question without one. Measured 24 September:
+        # "resume moi les chats de ce soir" came back as "social", and Jeli answered "C'est noté,
+        # je te prépare le résumé" — a promise nothing would ever keep.
+        if understood.kind in ("social", "clarify", "vague"):
+            plainly = plain(text, understood.language or language).kind
+            if plainly not in ("question", "social", "clarify", "vague"):
+                log.info("Read as %s, but this is a %s request: doing it", understood.kind, plainly)
+                understood.kind, understood.reply = plainly, ""
         code = understood.language.strip().lower()[:2]
         # Any language the member writes in (Sesotho, Hausa, Portuguese…): the code the model gave
         # is kept, with its name, so that the answer is written in it; only nonsense falls back.
