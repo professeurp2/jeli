@@ -59,11 +59,13 @@ def progress_words(progress: str, language: str) -> str:
 
 
 class Awareness:
-    def __init__(self, store: Store, llm: LLM | None, sessions=None, chat_labels: dict[str, str] | None = None):
+    def __init__(self, store: Store, llm: LLM | None, sessions=None, chat_labels: dict[str, str] | None = None,
+                 runtime=None):
         self.store = store
         self.llm = llm
         self.sessions = sessions
         self.chat_labels = chat_labels or {}
+        self.runtime = runtime  # what the team has switched on; None: everything, as before
         self.brief = ""  # the community brief, background for the explanation
 
     async def explain(self, question: str, language: str, quotes: str = "", member: str = "") -> str:
@@ -96,6 +98,13 @@ class Awareness:
         reply = explanation.reply.strip() or texts["dont_know"]
         return reply + (f"\n\n{quotes}" if quotes else "")
 
+    def _on(self, key: str) -> bool:
+        """Whether the team has this switched on; True when there is no runtime to ask."""
+        try:
+            return bool(self.runtime[key])
+        except Exception:
+            return True
+
     async def state(self) -> str:
         now = datetime.now(timezone.utc)
         lines = [f"Today is {now:%A %d %B %Y}."]
@@ -115,11 +124,14 @@ class Awareness:
                 )
             )
         domain = get_settings().railway_public_domain
-        if domain:
+        if domain and self._on("enabled.calls"):
             lines.append(
                 f"Members can call you and talk out loud at https://{domain}/jeli/call — give that exact "
                 "link when someone asks to speak to you or asks for the call link."
             )
+        elif not self._on("enabled.calls"):
+            # Switched off in the dashboard: Jeli must stop offering a line nobody can pick up.
+            lines.append("You cannot take calls at the moment: there is no call link to give. Say so kindly.")
         recordings = await self.store.all_recordings()
         transcribed = [r for r in recordings if r.method != "link"]
         links = [r for r in recordings if r.method == "link"]

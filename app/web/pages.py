@@ -1690,6 +1690,22 @@ async def settings_page(request: Request, member: Member) -> HTMLResponse:
                _segmented("voice_engine", runtime["voice_engine"], VOICE_ENGINE_CHOICES))
     )
     voice_settings = await _voice_quota_line(_state(request)) + voice_settings
+    calls = (
+        _row("Take calls", "Jeli's page where anyone can talk to it out loud, in any browser. Off closes "
+             "the page and stops Jeli offering the link when someone asks to speak to it.",
+             f'<label class="check"><input type="checkbox" name="enabled_calls"{" checked" if runtime["enabled.calls"] else ""}> On</label>')
+        + _row("The voice on the call", "The character callers hear. This is not the voice of Jeli's voice notes: "
+               "a call can carry a different one.", _segmented("call_voice", runtime["call_voice"], _VOICE_PERSONALITIES))
+        + _row("Hang up after silence", "A call ends when nobody has spoken for this long — never mid-conversation. "
+               "Shorter on a busy day; longer for a demo where people think between questions.",
+               number("call_quiet_minutes", 1, 30) + '<span class="muted small">minutes</span>')
+        + _row("Show what is being said", "The live transcript under the orb: useful in a noisy room, distracting on a stage.",
+               f'<label class="check"><input type="checkbox" name="call_transcript"{" checked" if runtime["call_transcript"] else ""}> On</label>')
+        + _row("Questions the page offers", "One per line, at most six. Someone who does not know the programme has "
+               "nothing to say to Jeli; tapping one of these asks it out loud for them. Empty: no suggestions.",
+               '<textarea name="call_questions" rows="4" style="width:100%;min-width:260px" '
+               f'placeholder="C&#39;est quand la prochaine session ?">{esc(chr(10).join(runtime["call_questions"]))}</textarea>')
+    )
     pace = (
         ui.notice("warn", "WhatsApp blocks numbers that behave like machines. Raise these only if members really need it.")
         + '<div style="height:8px"></div>'
@@ -1714,6 +1730,10 @@ async def settings_page(request: Request, member: Member) -> HTMLResponse:
         + ui.card("Images", f'<div class="rows">{images}</div>', icon_name="picture", description="AI-generated images — high-quality primary engine with a free fallback.")
         + '<div style="height:20px"></div>'
         + ui.card("Voice", f'<div class="rows">{voice_settings}</div>', icon_name="mic", description="How often Jeli replies by voice, and which personality it uses.")
+        + '<div style="height:20px"></div>'
+        + ui.card("Calls", f'<div class="rows">{calls}</div>', icon_name="call",
+                  description="Talking to Jeli out loud from a browser, at /jeli/call.",
+                  actions=f'<a class="btn ghost" href="/jeli/call" target="_blank" rel="noopener">{ui.icon("call")} Open the page</a>')
         + '<div style="height:20px"></div>'
         + ui.card("Pace", f'<div class="rows">{pace}</div>', icon_name="shield", description="Protects Jeli's WhatsApp number.")
         + f'<div class="actions" style="margin-top:20px">{ui.button("Save the settings", kind="primary", icon_name="check")}</div>',
@@ -1745,6 +1765,11 @@ SETTING_WORDS = {
     "whatsapp_hourly_limit": "answers per hour",
     "member_daily_limit": "a member's share of answers per day",
     "whatsapp_min_send_interval_seconds": "pause between messages",
+    "enabled.calls": "taking calls",
+    "call_voice": "the voice on the call",
+    "call_quiet_minutes": "how long a call waits in silence",
+    "call_transcript": "showing what is said on a call",
+    "call_questions": "the questions the call page offers",
 }
 
 
@@ -1775,6 +1800,13 @@ async def settings_change(request: Request, member: Change) -> RedirectResponse:
         "voice_name": form.get("voice_name", "Aoede"),
         "voice_engine": form.get("voice_engine", "auto"),
         "answer_engine": form.get("answer_engine", "auto"),
+        "enabled.calls": bool(form.get("enabled_calls")),
+        "call_voice": form.get("call_voice", "aoede"),
+        "call_quiet_minutes": form.get("call_quiet_minutes", "5"),
+        "call_transcript": bool(form.get("call_transcript")),
+        # Split here, not in coerce: a question may contain a comma, and splitting on one
+        # would cut "Et les échéances, c'est quand ?" into two half-questions.
+        "call_questions": [line.strip() for line in str(form.get("call_questions", "")).splitlines() if line.strip()],
     }
     runtime = _state(request).runtime
     for key, value in changes.items():

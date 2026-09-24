@@ -1,5 +1,7 @@
 """Calling Jeli from a browser: no phone number, no app, no account."""
 
+import json
+
 from fastapi.testclient import TestClient
 
 from app.main import app
@@ -9,9 +11,9 @@ def test_anyone_can_open_the_call_page():
     with TestClient(app) as client:
         page = client.get("/jeli/call")
     assert page.status_code == 200
-    assert "Appeler" in page.text
+    assert "Parlez à Jeli" in page.text and 'aria-label="Appeler Jeli"' in page.text
     # The microphone is asked for only when the call starts, and released when it ends.
-    assert "getUserMedia" in page.text and "getTracks().forEach(t => t.stop())" in page.text
+    assert "getUserMedia" in page.text and "track.stop()" in page.text
 
 
 def test_a_call_answers_from_the_memory_not_from_general_knowledge():
@@ -65,7 +67,7 @@ def test_the_caller_is_told_what_is_happening():
 
     from app.web import call
 
-    page = inspect.getsource(call.call_page) + inspect.getsource(call._script)
+    page = inspect.getsource(call.call_page) + call.CALL_SCRIPT
     assert "searching" in page and "cherche dans la mémoire" in page
     assert "je reprends" in call.RESUMING and "RESUMING" in inspect.getsource(call.call_socket)
 
@@ -106,7 +108,7 @@ def test_the_caller_leaving_ends_the_call():
     from app.web.call import Line, _talk
 
     class Hung:
-        async def receive_bytes(self):
+        async def receive(self):
             raise RuntimeError("the tab is gone")
 
     line = Line(Hung())
@@ -149,8 +151,8 @@ def test_the_transcript_is_one_row_per_turn_not_per_fragment():
 
     from app.web import call
 
-    script = inspect.getsource(call._script)
-    assert "open[who]" in script and "line.textContent + ' ' + text" in script
+    script = call.CALL_SCRIPT
+    assert "open[who]" in script and "row.textContent + ' ' + text" in script
     assert "message.turn" in script  # a finished sentence closes its row
 
 
@@ -161,3 +163,147 @@ def test_jeli_says_it_can_be_called():
     assert "Be called and talked to out loud" in CAPABILITIES
     assert "never invent one" in CAPABILITIES  # the address comes from its state, not from guessing
     assert "m'appeler et me parler de vive voix" in HELLO_TEXT
+
+
+# --- What the team controls, and what the page shows ------------------------------------------
+
+
+class Chosen(dict):
+    """A runtime the team has set; anything not named falls back to the field's default."""
+
+    def __missing__(self, key):
+        from app.control.runtime import FIELDS
+        from app.config import get_settings
+
+        return FIELDS[key].default(get_settings())
+
+
+class Knowing:
+    async def knowledge_overview(self):
+        return {
+            "chats": [
+                {"chat_id": "1@g.us", "messages": 9312, "last_message": None, "live": 1},
+                {"chat_id": "2@g.us", "messages": 2461, "last_message": None, "live": 1},
+                {"chat_id": "22370000000@c.us", "messages": 74, "last_message": None, "live": 1},
+            ],
+            "recordings": [{"id": "a", "method": "gemini"}, {"id": "b", "method": "link"}],
+        }
+
+
+def test_the_page_says_what_jeli_keeps_before_anyone_has_to_believe_it():
+    with TestClient(app) as client:
+        app.state.store = Knowing()
+        page = client.get("/jeli/call").text
+    # The figures are real, read from the memory itself — and a thin space, not a comma.
+    assert "11 847" in page and "messages en mémoire" in page
+    assert ">2<" in page and "groupes suivis" in page  # the private chat is not a group
+    assert "sessions transcrites" in page  # a link Jeli cannot watch is not a transcription
+
+
+def test_the_team_chooses_what_the_page_offers_to_ask():
+    with TestClient(app) as client:
+        app.state.runtime = Chosen({"call_questions": ["Et les échéances, c'est quand ?", "Who runs MIT UAI?"]})
+        page = client.get("/jeli/call").text
+    # A comma inside a question must survive: it is one question, not two.
+    assert 'data-ask="Et les échéances, c&#x27;est quand ?"' in page
+    assert 'data-ask="Who runs MIT UAI?"' in page
+    assert "C&#x27;est quand la prochaine session ?" not in page  # the defaults are replaced, not added to
+
+
+def test_the_team_can_close_the_line():
+    with TestClient(app) as client:
+        app.state.runtime = Chosen({"enabled.calls": False})
+        page = client.get("/jeli/call")
+        with client.websocket_connect("/jeli/call/ws") as socket:
+            note = socket.receive_json()
+    assert page.status_code == 200 and "La ligne est fermée" in page.text
+    assert "aria-label=\"Appeler Jeli\"" not in page.text  # no button that cannot work
+    assert note["end"] is True and note["state"] == "Jeli ne prend pas d'appels pour le moment."
+
+
+def test_a_closed_line_is_not_offered_by_jeli_either():
+    """Switched off, Jeli must stop handing out a number nobody can pick up."""
+    import asyncio
+
+    from app.answer.awareness import Awareness
+
+    class Empty:
+        async def knowledge_overview(self):
+            return {"chats": []}
+
+        async def all_recordings(self):
+            return []
+
+        async def deadlines_between(self, *args, **kwargs):
+            return []
+
+        async def list_documents(self):
+            return []
+
+    closed = asyncio.run(Awareness(Empty(), None, runtime=Chosen({"enabled.calls": False})).state())
+    assert "/jeli/call" not in closed and "cannot take calls" in closed
+
+
+def test_the_team_chooses_the_voice_the_transcript_and_the_patience():
+    from app.web.call import _config, call_settings
+
+    class State:
+        runtime = Chosen({"call_voice": "kore", "call_quiet_minutes": 12, "call_transcript": False})
+
+    chosen = call_settings(State())
+    assert chosen["voice"] == "Kore" and chosen["quiet"] == 12 and chosen["transcript"] is False
+    spoken = _config("instructions", None, chosen["voice"]).speech_config
+    assert spoken.voice_config.prebuilt_voice_config.voice_name == "Kore"
+    with TestClient(app) as client:
+        app.state.runtime = State.runtime
+        page = client.get("/jeli/call").text
+    assert "SHOW_TRANSCRIPT = false" in page and 'id="said"' not in page
+
+
+def test_a_question_tapped_on_the_page_reaches_jeli_as_a_spoken_one_would():
+    """Somebody who does not know the programme has nothing to say to it, and a silent room is
+    where a demo dies. The chips are asked for real, not pasted into a box."""
+    import asyncio
+    import inspect
+
+    from app.web.call import CALL_SCRIPT, Line, _talk
+
+    assert "JSON.stringify({ ask: question })" in CALL_SCRIPT
+    # Not on the line yet: the page calls first, then asks it for them.
+    assert "pending = chip.dataset.ask" in CALL_SCRIPT
+    assert "send_client_content" in inspect.getsource(_talk)
+
+    class Tapping:
+        def __init__(self):
+            self.packets = [
+                {"type": "websocket.receive", "text": json.dumps({"ask": "C'est quand la session ?"})},
+                {"type": "websocket.disconnect"},
+            ]
+
+        async def receive(self):
+            return self.packets.pop(0)
+
+    line = Line(Tapping())
+    asyncio.run(line.listen())
+    assert line.typed.get_nowait() == "C'est quand la session ?"
+
+
+def test_the_page_never_grows_wider_than_the_phone_it_is_read_on():
+    """Measured: one long sentence in the transcript pushed the whole page sideways, because an
+    implicit grid column sizes to its widest child."""
+    from app.web.call import CALL_CSS
+
+    assert "grid-template-columns: minmax(0, 1fr)" in CALL_CSS  # the transcript
+    assert "repeat(3, minmax(0, 1fr))" in CALL_CSS  # the figures
+    assert "viewport-fit=cover" in __import__("inspect").getsource(__import__("app.web.call", fromlist=["x"])._shell)
+    assert "prefers-reduced-motion" in CALL_CSS  # the animation can be turned off by the reader
+
+
+def test_the_orb_reacts_to_real_sound_not_to_a_decorative_loop():
+    from app.web.call import CALL_SCRIPT
+
+    # Jeli's voice on the way in, and the caller's own microphone on the way out.
+    assert "want = Math.max(want, loudness(channel))" in CALL_SCRIPT
+    assert "want = Math.max(want, loudness(input))" in CALL_SCRIPT
+    for state in ("idle", "listening", "searching", "speaking"):
+        assert state + ":" in CALL_SCRIPT

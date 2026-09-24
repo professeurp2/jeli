@@ -103,7 +103,7 @@ async def lifespan(app: FastAPI):
         state.sessions = Sessions(
             store, state.llm.with_models(settings.transcription_model_list), state.recaps, learn_now, reader=state.light_llm
         )
-        state.awareness = Awareness(store, state.light_llm, state.sessions)
+        state.awareness = Awareness(store, state.light_llm, state.sessions, runtime=state.runtime)
         if state.answerer:
             state.answerer.explainer = state.awareness.explain
             state.answerer.state = state.awareness.state

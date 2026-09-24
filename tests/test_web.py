@@ -471,3 +471,29 @@ def test_a_bot_muted_by_its_number_is_recognised_behind_its_account_id():
         NUMBER_OF_LID.clear()
     # A name still works on its own, as it always did.
     assert is_ignored(Message(author="Nexus Bot", author_id="999@lid"), muted)
+
+
+def test_the_team_controls_the_call_from_the_dashboard(client):
+    """The call is Jeli's most visible feature: closing the line must be one checkbox, not a deploy."""
+    sign_in(client)
+    page = client.get("/dashboard/settings").text
+    assert "Take calls" in page and 'name="call_questions"' in page
+    assert 'href="/jeli/call"' in page  # and it can be opened from there
+    token = csrf_of(page)
+    saved = client.post("/dashboard/settings", data={
+        "csrf": token, "care": "balanced", "pointer_care": "balanced", "bot_name": "Jeli",
+        "follow_up_minutes": "5", "sources": "one", "duplicate_replies_per_hour": "3",
+        "whatsapp_user_limit": "5", "whatsapp_hourly_limit": "60", "member_daily_limit": "40",
+        "whatsapp_min_send_interval_seconds": "3", "proactive_image_rate": "100",
+        "voice_rate": "0", "voice_intro_rate": "50", "voice_name": "aoede", "voice_engine": "auto",
+        "answer_engine": "auto",
+        # The call: switched on, a different voice, more patience, no transcript on stage.
+        "enabled_calls": "on", "call_voice": "kore", "call_quiet_minutes": "12",
+        "call_questions": "Et les échéances, c'est quand ?\nWhat changed this week?\n\n",
+    }, follow_redirects=False)
+    assert saved.status_code in (302, 303)
+    runtime = app.state.runtime
+    assert runtime["enabled.calls"] is True and runtime["call_voice"] == "kore"
+    assert runtime["call_quiet_minutes"] == 12 and runtime["call_transcript"] is False
+    # A comma inside a question is not a second question, and a blank line is not one at all.
+    assert runtime["call_questions"] == ["Et les échéances, c'est quand ?", "What changed this week?"]

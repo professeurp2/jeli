@@ -17,3 +17,6 @@ data/
 .idea/
 .DS_Store
 Thumbs.db
+
+# Local editor scratch (the dev-server config each machine writes for itself).
+.claude/
