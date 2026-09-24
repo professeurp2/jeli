@@ -1,8 +1,15 @@
 """Talking to Jeli out loud, from a browser — no phone number, no app, no account.
 
-WhatsApp does not let a program answer a call, and Teams needs an administrator's blessing. A
-browser needs neither: the page takes the microphone, the audio goes to Gemini's Live API, and
-Jeli answers in its own voice, interrupting and being interrupted like a person.
+WAHA — the WhatsApp client Jeli runs on — sees an incoming call and can refuse it, nothing more;
+and Teams needs an administrator's blessing. A browser needs neither: the page takes the
+microphone, the audio goes to Gemini's Live API, and Jeli answers in its own voice, interrupting
+and being interrupted like a person.
+
+(Checked 24 September: it is not that WhatsApp calls are impossible. `baileys-caller` places
+outgoing 1:1 calls but cannot answer one and plays a file rather than a live stream; whatsapp-rust
+does both directions, in Rust and wasm, by reimplementing WhatsApp's own voice codec — and warns
+that a custom client may cost the account. Jeli has one number and a community on it, so this page
+is the way in, and that stays a decision rather than an oversight.)
 
 It answers from the community's memory, not from general knowledge. Two things carry that: what
 Jeli already knows without looking (the brief and its own state, the same block every written
