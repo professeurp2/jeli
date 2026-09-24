@@ -238,6 +238,56 @@ class NotTranslated(LLMUnavailable):
     """The model returned the original instead of a translation."""
 
 
+# --- Something the team pastes ------------------------------------------------------------------
+#
+# Half of what this community decides never reaches WhatsApp: it arrives by email — an organiser's
+# announcement, a change of date, a circular from UNDP. Members then ask Jeli about it and Jeli has
+# never heard of it.
+#
+# So the team can paste it. What is pasted is not treated as "an email": it is text with a
+# provenance to be read out of it — who it is from, when, what it is called. A forwarded message, a
+# circular, the minutes of a meeting all work the same way, and all become documents like any
+# other, searched and quoted by the same machinery. There is no email pipeline to maintain.
+
+PASTED_SYSTEM = """\
+A member of Jeli's team has pasted something the community should be able to ask about: most often
+an email, sometimes an announcement, a circular, minutes, or a message forwarded from elsewhere.
+Read it and return:
+- title: what it should be called in a list of documents, in its own language, a few words
+  ("Wadhwani Ignite: module 3 deadline moved"). Use the subject line when there is one.
+- sender: who it is from, as a person would say it ("Diane Mukasa", "the UniPod team"); "" when the
+  text does not say.
+- sent_at: when it was sent, ISO 8601 in UTC, from the date written in it; "" when it says none.
+- body: the content itself, word for word, with the envelope removed — mail headers, the signature
+  block, confidentiality footers, unsubscribe links, and the quoted copy of an earlier message
+  under a reply. Never summarise, never translate, never rephrase, never add a word: members will
+  ask about the exact sentences, and Jeli will quote them back.
+"""
+
+# Below this share of what was pasted, the model summarised instead of trimming an envelope, and
+# what it returned is thrown away: the words members will ask about matter more than a tidy copy.
+KEPT_AT_LEAST = 0.55
+MAX_PASTED_CHARS = 120_000
+
+
+class Pasted(BaseModel):
+    title: str = ""
+    sender: str = ""
+    sent_at: str = ""
+    body: str = ""
+
+
+def _moment(value: str) -> datetime | None:
+    try:
+        moment = datetime.fromisoformat((value or "").strip().replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    moment = moment if moment.tzinfo else moment.replace(tzinfo=timezone.utc)
+    # A date the model read wrong — next year, or before the community existed — is worse than none.
+    now = datetime.now(timezone.utc)
+    return moment if timedelta(days=-1) <= now - moment <= timedelta(days=3650) else None
+
+
 class Documents:
     def __init__(self, store: Store, llm: LLM | None):
         self.store = store
@@ -246,6 +296,40 @@ class Documents:
 
     def who(self, author: str) -> str:
         return self.known_names.get(re.sub(r"\D", "", author)) or display_author(author) if author else "a member"
+
+    async def paste(self, text: str, pasted_by: str = "Team") -> tuple[Document, bool]:
+        """Text the team pasted, kept as a document like any other.
+
+        A model reads its provenance out of it — its subject, who sent it, when — and strips the
+        envelope. Everything after that is the ordinary document path, so a pasted email is
+        searched, quoted and removed exactly like an uploaded file. ValueError, in words for the
+        team, when there is nothing to keep.
+        """
+        text = text.strip()
+        if len(text) < 40:
+            raise ValueError("there is not enough text here to be worth keeping")
+        if len(text) > MAX_PASTED_CHARS:
+            raise ValueError("this is too long to paste (send it as a file instead)")
+        read = Pasted()
+        if self.llm is not None:
+            try:
+                read = await self.llm.generate(text, Pasted, system=PASTED_SYSTEM, timeout=30, temperature=0, attempts=2)
+            except LLMUnavailable:
+                log.warning("No model could read what was pasted: keeping it as it is")
+        body = read.body.strip()
+        if len(body) < len(text) * KEPT_AT_LEAST:
+            # It summarised rather than trimmed an envelope. The words are what members will ask
+            # about, so the paste is kept whole and the envelope is a small price.
+            body = text
+        title = " ".join(read.title.split())[:120] or " ".join(text.split()[:9])[:120]
+        sender = " ".join(read.sender.split())[:80] or pasted_by
+        return await self.add(
+            f"{slugify(title) or 'note'}.txt",
+            body.encode("utf-8"),
+            title=title,
+            shared_by=sender,
+            shared_at=_moment(read.sent_at),
+        )
 
     async def add(
         self,

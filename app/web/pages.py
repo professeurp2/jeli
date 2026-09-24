@@ -1036,6 +1036,15 @@ async def knowledge_page(request: Request, member: Member, preview: str = "") ->
         </div><div class="actions" style="margin-top:14px">{ui.button("Add the document", kind="primary", icon_name="upload")}</div>""",
         upload=True,
     )
+    paste_document = ui.form(
+        "/dashboard/knowledge/paste",
+        csrf,
+        """<label>Paste it here, headers and all
+          <textarea name="text" rows="9" required maxlength="120000" style="width:100%"
+            placeholder="From: Diane Mukasa&#10;Date: Tue, 23 Sep 2026 09:14&#10;Subject: Module 3 deadline moved&#10;&#10;Dear all, …"></textarea></label>
+        <p class="hint" style="margin-top:8px">Jeli reads who it is from, when it was sent and what it is about, and drops the headers, the signature and the quoted reply underneath. It then becomes a document like any other: members can ask about it, and Jeli quotes it with its sender and its date.</p>"""
+        + f'<div class="actions" style="margin-top:14px">{ui.button("Add it to Jeli's knowledge", kind="primary", icon_name="plus")}</div>',
+    )
     sessions_state = getattr(_state(request), "sessions", None)
     jobs = sorted(sessions_state.imports.values(), key=lambda j: j.started_at, reverse=True) if sessions_state else []
     state_pills = {"waiting": ("neutral", "Waiting"), "transcribing": ("info", "Transcribing"), "learning": ("info", "Learning"),
@@ -1069,6 +1078,8 @@ async def knowledge_page(request: Request, member: Member, preview: str = "") ->
                    icon_name="alert", description="These were shared in the chats, but the chat history came without its files. Upload one here and Jeli learns it; members who ask about it are told it is missing meanwhile.")
            if missing_rows else "")
         + ui.card("Add a document", add_document, icon_name="upload", description="Guidelines, rules, forms: anything members may ask about or ask for.")
+        + ui.card("Paste an email or an announcement", paste_document, icon_name="mail",
+                  description="Half of what is decided never reaches WhatsApp — it arrives by email. Paste it and Jeli knows it.")
         + ui.card("Sessions", ui.table(["Session", "Date", "Length", "Summaries", ""], session_rows, empty_text="No session yet."),
                   icon_name="clock", description="Recorded calls Jeli can quote to the minute.")
         + ui.card("Add a recorded session", add_session + (ui.table(["Session", "State", "Progress", "Started"], job_rows) if job_rows else ""),
@@ -1111,6 +1122,30 @@ async def documents_upload(request: Request, member: Change) -> RedirectResponse
     if memory:
         memory.run_now(member)
     return _done(request, "/dashboard/knowledge", f"“{document.title}” added ({document.pages} pages). Jeli is learning it now.")
+
+
+@router.post("/dashboard/knowledge/paste")
+async def knowledge_paste(request: Request, member: Change) -> RedirectResponse:
+    """An email — or anything else — the team pastes, kept as a document like any other."""
+    documents = getattr(_state(request), "documents", None)
+    if documents is None:
+        return _done(request, "/dashboard/knowledge", "This needs the knowledge base and Jeli's AI.", "bad")
+    form = await request.form()
+    try:
+        document, new = await documents.paste(str(form.get("text", "")), pasted_by=member.capitalize())
+    except ValueError as error:
+        return _done(request, "/dashboard/knowledge", f"Nothing was added: {error}.", "bad")
+    if not new:
+        return _done(request, "/dashboard/knowledge", f"“{document.title}” was already known.", "info")
+    await _store(request).add_audit(member, f"Pasted “{document.title}”")
+    memory = getattr(_state(request), "activities", {}).get("memory")
+    if memory:
+        memory.run_now(member)
+    return _done(
+        request,
+        "/dashboard/knowledge",
+        f"“{document.title}” added, from {document.shared_by}. Jeli is learning it now.",
+    )
 
 
 @router.get("/dashboard/documents/download")

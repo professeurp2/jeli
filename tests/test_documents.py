@@ -207,3 +207,143 @@ def test_a_transcript_shared_in_a_group_is_kept_like_any_document():
     from app.adapters.whatsapp_waha import DOCUMENT_TYPES
 
     assert ".vtt" in DOCUMENT_TYPES
+
+
+# --- Something the team pastes ------------------------------------------------------------------
+
+
+EMAIL = """From: Diane Mukasa <diane@unipod.org>
+To: cohort-1@unipod.org
+Date: Tue, 22 Sep 2026 09:14:00 +0200
+Subject: Module 3 deadline moved to Friday
+
+Dear all,
+
+After yesterday's coaching session we are moving the Module 3 submission deadline
+from Wednesday 23 September to Friday 25 September, 17:00 CAT. Teams that already
+submitted do not need to do anything. The platform stays open until then.
+
+Please share this with your teammates.
+
+Best,
+Diane
+
+--
+Diane Mukasa | UniPod METI AI Innovation Programme
+This message and any attachments are confidential.
+
+> On Mon, 21 Sep 2026, Stanley wrote:
+> Is the Wednesday deadline still firm?
+"""
+
+BODY = """Dear all,
+
+After yesterday's coaching session we are moving the Module 3 submission deadline
+from Wednesday 23 September to Friday 25 September, 17:00 CAT. Teams that already
+submitted do not need to do anything. The platform stays open until then.
+
+Please share this with your teammates."""
+
+
+class Reads:
+    """A model that read the paste; `answer` is what it returns."""
+
+    def __init__(self, answer):
+        self.answer, self.prompts = answer, []
+
+    async def generate(self, prompt, schema, **kwargs):
+        self.prompts.append(prompt)
+        return self.answer
+
+
+class Keeps:
+    """Just enough store for a document to be kept."""
+
+    def __init__(self):
+        self.saved = []
+
+    async def documents(self, ids=None):
+        return {}
+
+    async def save_document(self, document, content):
+        self.saved.append((document, content.decode("utf-8")))
+        return True
+
+    async def add_messages(self, messages):
+        return len(messages)
+
+
+def _paste(model, text=EMAIL, store=None):
+    from app.answer.documents import Documents
+
+    return asyncio.run(Documents(store or Keeps(), model).paste(text, pasted_by="Stanley"))
+
+
+def test_an_email_the_team_pastes_becomes_a_document_with_who_sent_it_and_when():
+    """Half of what this community decides never reaches WhatsApp: it arrives by email."""
+    from app.answer.documents import Pasted
+
+    model = Reads(Pasted(title="Module 3 deadline moved to Friday", sender="Diane Mukasa",
+                         sent_at="2026-09-22T07:14:00Z", body=BODY))
+    document, new = _paste(model)
+    assert new and document.title == "Module 3 deadline moved to Friday"
+    assert document.shared_by == "Diane Mukasa"  # not the teammate who pasted it
+    assert document.shared_at.isoformat().startswith("2026-09-22T07:14")
+    # The envelope is gone; the sentences members will ask about are not.
+    assert document.filename.endswith(".txt")
+
+
+def test_what_was_pasted_is_never_quietly_summarised():
+    """A model asked to trim an envelope sometimes rewrites the whole thing. Members ask about the
+    exact sentences, so a short answer is thrown away and the paste is kept whole."""
+    from app.answer.documents import Pasted
+
+    model = Reads(Pasted(title="Deadline moved", sender="Diane",
+                         body="The Module 3 deadline moved to Friday."))
+    store = Keeps()
+    _paste(model, store=store)
+    [(_, kept)] = store.saved
+    assert "This message and any attachments are confidential" in kept  # the envelope came back
+    assert "Teams that already" in kept  # and so did everything members might ask about
+
+
+def test_a_paste_with_no_model_is_still_kept():
+    """The team pastes something the minute it arrives; no engine is a reason to keep it as it is,
+    not a reason to lose it."""
+    store = Keeps()
+    document, new = _paste(None, store=store)
+    assert new and document.shared_by == "Stanley"  # nobody read who it was from
+    assert document.title.startswith("From: Diane Mukasa")
+    [(_, kept)] = store.saved
+    assert "moving the Module 3 submission deadline" in kept
+
+
+def test_a_date_read_wrong_is_dropped_rather_than_believed():
+    from app.answer.documents import Pasted, _moment
+
+    assert _moment("2026-09-22T07:14:00Z") is not None
+    assert _moment("2035-01-01T00:00:00Z") is None  # years away: misread, not prophetic
+    assert _moment("1998-01-01T00:00:00Z") is None  # before the community existed
+    assert _moment("") is None and _moment("next Tuesday") is None
+
+
+def test_too_little_or_too_much_is_refused_in_words_the_team_understands():
+    from app.answer.documents import Documents, MAX_PASTED_CHARS
+
+    documents = Documents(Keeps(), None)
+    for text, said in (("ok", "not enough text"), ("x" * (MAX_PASTED_CHARS + 1), "too long")):
+        try:
+            asyncio.run(documents.paste(text))
+            assert False, "accepted what it should refuse"
+        except ValueError as error:
+            assert said in str(error)
+
+
+def test_the_team_can_reach_it_from_the_knowledge_page():
+    import inspect
+
+    from app.web import pages
+
+    source = inspect.getsource(pages)
+    assert '"/dashboard/knowledge/paste"' in source and "Paste an email or an announcement" in source
+    assert "knowledge_paste" in source

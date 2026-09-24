@@ -33,6 +33,7 @@ ICONS = {
     "alert": '<path d="M10.3 4.2 2.8 17.5A2 2 0 0 0 4.5 20.5h15a2 2 0 0 0 1.7-3L13.7 4.2a2 2 0 0 0-3.4 0Z"/><path d="M12 9.5v4M12 17h.01"/>',
     "info": '<circle cx="12" cy="12" r="9"/><path d="M12 11v5.5M12 7.5h.01"/>',
     "send": '<path d="M4.5 12 20 4.5 15.5 20l-3.5-6.5z"/><path d="M12 13.5 20 4.5"/>',
+    "mail": '<rect x="3" y="5" width="18" height="14" rx="2"/><path d="m3.5 6.5 8.5 6 8.5-6"/>',
     "run": '<path d="M20 12a8 8 0 1 1-2.4-5.7L20 8.5"/><path d="M20 3.5v5h-5"/>',
     "stop": '<rect x="6.5" y="6.5" width="11" height="11" rx="2"/>',
     "menu": '<path d="M4 7h16M4 12h16M4 17h16"/>',
