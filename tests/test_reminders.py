@@ -2,6 +2,7 @@ import asyncio
 from datetime import date, datetime, timedelta, timezone
 
 from app.answer.conversation import Turn
+from app.answer.language import TEXTS
 from app.answer.reminders import ReminderPlan, Reminders
 from app.models import Deadline, IncomingMessage
 
@@ -86,15 +87,17 @@ def test_asked_to_be_reminded_before_the_meeting_jeli_says_when_and_keeps_it():
     # The model works from the conversation (the meeting's time Jeli just gave) and the dated events.
     assert "Jeli: L'atelier d'évaluation des besoins est mercredi 23 septembre de 10:00 à 11:30 CAT." in prompt
     assert "Wednesday 23 September 2026, 10:00 AM CAT: Needs assessment workshop" in prompt
-    assert prompt.startswith("Now: Tuesday 22 September 2026, 12:00 UTC (14:00 CAT).")
+    assert prompt.startswith("Now: Tuesday 22 September 2026, 12:00:00 UTC (14:00:00 CAT).")
 
 
 def test_an_unclear_or_past_reminder_is_asked_about_and_a_member_can_cancel():
     store = Store()
     unclear = ReminderPlan(action="clarify", reply="Tu parles de l'atelier de mercredi ou de la session Wadhwani de jeudi ?")
     assert asyncio.run(Reminders(store, Plans(unclear), clock=lambda: NOW).handle(ask("rappelle-moi"), "rappelle-moi", "fr")) == unclear.reply
+    # A time already gone by is refused for what it is, not with a question the member answered.
     past = SET.model_copy(update={"remind_at": "2026-09-21T07:30:00Z"})
-    assert asyncio.run(Reminders(store, Plans(past), clock=lambda: NOW).handle(ask("rappelle-moi"), "rappelle-moi", "fr")).startswith("Avec plaisir ⏰")
+    refused = asyncio.run(Reminders(store, Plans(past), clock=lambda: NOW).handle(ask("rappelle-moi"), "rappelle-moi", "fr"))
+    assert refused == TEXTS["fr"]["reminder_past"]
     assert store.rows == []
     asyncio.run(Reminders(store, Plans(SET), clock=lambda: NOW).handle(ask("rappelle-moi avant la réunion"), "…", "fr", TURNS))
     cancel = ReminderPlan(action="cancel", reply="C'est fait, rappel annulé 👍")
@@ -242,3 +245,49 @@ def test_jeli_knows_it_can_remind_privately():
 
     assert "or privately, just to them, when they ask for that" in CAPABILITIES
     assert '"private" when the member asks' in PLAN_SYSTEM and "any words and any language" in PLAN_SYSTEM
+
+
+def test_a_reminder_for_a_minute_from_now_is_accepted_not_questioned():
+    """Measured 24 September: a member asked three times to be reminded "in one minute" and was
+    asked back "when exactly, and before what?" every time. The model answers to the minute — at
+    15:57:23 it returns 15:58:00 — while the floor demanded a full minute from the moment the code
+    checked, a few seconds later. The request was refused, and the refusal talked about something
+    else entirely."""
+    from app.answer.reminders import SOONEST
+
+    store = Store()
+    soon = SET.model_copy(update={
+        "remind_at": (NOW + timedelta(seconds=37)).isoformat().replace("+00:00", "Z"),
+        "reply": "C'est noté ⏰ Je te préviens dans une minute.",
+    })
+    reply = asyncio.run(Reminders(store, Plans(soon), clock=lambda: NOW).handle(
+        ask("Remind me in one minute"), "Remind me in one minute", "fr", TURNS))
+    assert reply == soon.reply
+    [kept] = store.rows
+    assert kept["remind_at"] >= NOW + SOONEST  # never in the past, never refused
+
+
+def test_a_time_already_rounded_past_is_honoured_at_the_next_round():
+    """"In one minute" can land a few seconds behind by the time it is checked. That is rounding,
+    not a mistake: it fires at the next round rather than being thrown away."""
+    from app.answer.reminders import SOONEST
+
+    store = Store()
+    just_behind = SET.model_copy(update={"remind_at": (NOW - timedelta(seconds=20)).isoformat().replace("+00:00", "Z")})
+    asyncio.run(Reminders(store, Plans(just_behind), clock=lambda: NOW).handle(ask("rappelle-moi"), "…", "fr", TURNS))
+    [kept] = store.rows
+    assert kept["remind_at"] == NOW + SOONEST
+
+
+def test_a_reminder_too_far_ahead_says_so():
+    store = Store()
+    far = SET.model_copy(update={"remind_at": (NOW + timedelta(days=400)).isoformat().replace("+00:00", "Z")})
+    reply = asyncio.run(Reminders(store, Plans(far), clock=lambda: NOW).handle(ask("rappelle-moi"), "…", "fr", TURNS))
+    assert reply == TEXTS["fr"]["reminder_too_far"] and store.rows == []
+
+
+def test_the_model_is_told_the_time_to_the_second():
+    """Told only the minute, it answers in whole minutes — which is what broke "in one minute"."""
+    store, llm = Store(), Plans(SET)
+    asyncio.run(Reminders(store, llm, clock=lambda: NOW).handle(ask("rappelle-moi"), "…", "fr", TURNS))
+    assert llm.prompts[0].startswith("Now: Tuesday 22 September 2026, 12:00:00 UTC (14:00:00 CAT).")

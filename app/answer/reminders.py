@@ -39,6 +39,14 @@ log = logging.getLogger(__name__)
 
 MAX_ACTIVE_PER_MEMBER = 5
 MAX_AHEAD = timedelta(days=60)
+# The soonest a reminder may be set for. Measured 24 September: a member asked to be reminded "in
+# one minute" three times and was asked back "when exactly?" every time. The model answers to the
+# minute — at 15:57:23 it returns 15:58:00 — while the floor demanded a full minute from the moment
+# the code checked, a few seconds later. Every such request was refused, and the refusal talked
+# about something else entirely.
+SOONEST = timedelta(seconds=15)
+# A time already gone by this much was misread, not merely rounded.
+ALREADY_GONE = timedelta(minutes=2)
 EVENTS_AHEAD_DAYS = 30
 PLAN_TIMEOUT = 10
 # A reminder sent this late is no longer a reminder: dropped (the server was down, WhatsApp off).
@@ -124,7 +132,9 @@ class Reminders:
             return Reply(texts["reminder_unavailable"])
         now = self.clock()
         prompt = (
-            f"Now: {now:%A %d %B %Y, %H:%M} UTC ({now + CAT:%H:%M} CAT).\n"
+            # To the second, not the minute: told only "15:57", the model answers "15:58:00" for
+            # "in one minute", which is less than a minute away by the time this is checked.
+            f"Now: {now:%A %d %B %Y, %H:%M:%S} UTC ({now + CAT:%H:%M:%S} CAT).\n"
             f"Dated events Jeli knows:\n{await self._events(now.date()) or '- none'}\n\n"
             + (f"Conversation so far:\n{conversation_text(list(turns))}\n\n" if turns else "")
             + f"Member's message: {text}\n\nWrite \"reply\" and \"message\" in {LANGUAGES.get(language, 'English')}."
@@ -141,8 +151,12 @@ class Reminders:
         remind_at = _moment(plan.remind_at)
         if action != "set" or remind_at is None or not plan.message.strip():
             return Reply(plan.reply.strip() or texts["reminder_when"])
-        if not now + timedelta(minutes=1) <= remind_at <= now + MAX_AHEAD:
-            return Reply(texts["reminder_when"])
+        if remind_at > now + MAX_AHEAD:
+            return Reply(texts["reminder_too_far"])
+        if remind_at < now - ALREADY_GONE:
+            return Reply(texts["reminder_past"])
+        # Asked for a moment that is here or all but here: honoured at the next round, not refused.
+        remind_at = max(remind_at, now + SOONEST)
         if len(await self.store.active_reminders(member)) >= MAX_ACTIVE_PER_MEMBER:
             return Reply(texts["reminder_too_many"].format(limit=MAX_ACTIVE_PER_MEMBER))
         send_to, reply_to, waiting = message.chat_id, message.message_id, False

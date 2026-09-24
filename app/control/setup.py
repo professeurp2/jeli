@@ -107,7 +107,9 @@ def build_activities(state, settings: Settings, runtime: Runtime) -> dict[str, A
             "Every minute, Jeli sends the reminders members asked for (\u201cremind me before the meeting\u201d), "
             "in the chat where they asked. One that cannot go before the event starts is dropped.",
             send_reminders,
-            every(timedelta(minutes=1), first=timedelta(seconds=30)),
+            # Twenty seconds, not sixty: a member who asks to be reminded in a minute should
+            # not wait two. The round is one indexed query when nothing is due.
+            every(timedelta(seconds=20), first=timedelta(seconds=30)),
             lambda: runtime["enabled.reminders"],
             blocked=not_connected,
         )
