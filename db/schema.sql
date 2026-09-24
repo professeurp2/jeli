@@ -244,7 +244,7 @@ create table if not exists jeli.briefs (
 );
 
 -- What Jeli knows of each member: name as shown, the language they write in, their own
--- introduction and recent topics (notes). No phone number beyond the key WhatsApp already uses.
+-- introduction and recent topics (notes), and the phone number they gave it themselves.
 create table if not exists jeli.members (
     member_key text primary key,
     name       text not null default '',
@@ -253,6 +253,9 @@ create table if not exists jeli.members (
     first_seen timestamptz not null default now(),
     last_seen  timestamptz not null default now()
 );
+-- The number a member told Jeli themselves, when WhatsApp does not say it (a group message carries
+-- an account id, not a number). It is how Jeli reaches them privately when they ask it to.
+alter table jeli.members add column if not exists number text not null default '';
 
 -- Members' verdicts on Jeli's answers: a 👍/👎 reaction on one of its messages, or a correction.
 create table if not exists jeli.feedback (

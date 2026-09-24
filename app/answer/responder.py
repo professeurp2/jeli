@@ -20,6 +20,7 @@ from app.answer.catchup import Catchup
 from app.answer.conversation import Conversations, member_of
 from app.answer.deadlines import Deadlines
 from app.answer.intents import SESSION_WORD, catchup_since, is_deadlines_request, is_recap_request, looks_like_question, parse_since
+from app.answer.citations import a_number, private_chat_of
 from app.answer.language import TEXTS, detect_language, reaction_for
 from app.answer.rag import Answerer
 from app.answer.recaps import Recaps
@@ -188,6 +189,36 @@ class Responder:
         self._pending.add(task)
         task.add_done_callback(self._pending.discard)
 
+    async def _identity(self, message: IncomingMessage, understood, language: str) -> str:
+        """A member telling Jeli who they are.
+
+        Jeli knows members by the id WhatsApp hands it, which is not a name and not a number. So
+        anything that needs to address someone, or reach them, was stuck — the private reminder was
+        only the first place it showed. A member can now simply say, and Jeli keeps it: one seam,
+        used by everything that needs to know who it is talking to.
+
+        Whatever was waiting on it then goes ahead by itself, so nobody has to ask twice.
+        """
+        texts = TEXTS[language]
+        name = " ".join((understood.person_name or "").split())[:80]
+        number = a_number(understood.person_number)
+        if understood.person_number.strip() and not number:
+            return texts["identity_unclear"]
+        if not name and not number:
+            return texts["greeting_reply"]
+        member = member_of(message)
+        if self.store is not None and hasattr(self.store, "remember_member"):
+            # Never logged: a number is the one thing here that identifies a person off WhatsApp.
+            await self.store.remember_member(member, name=name, language=language, number=number)
+            log.info("A member told Jeli who they are (name: %s, number: %s)", bool(name), bool(number))
+        said = texts["identity_kept_number" if number else "identity_kept"].format(
+            name=name or message.author or ""
+        ).replace(" ,", ",").replace("  ", " ")
+        if number and self.store is not None and hasattr(self.store, "settle_reminders"):
+            if await self.store.settle_reminders(member, private_chat_of("", number)):
+                said += "\n\n" + texts["identity_settled"]
+        return said
+
     # --- Routing ----------------------------------------------------------------------------------
 
     async def _route(self, message: IncomingMessage, language: str) -> tuple[str, str, str]:
@@ -228,6 +259,9 @@ class Responder:
             self._drop(prefetch)
             last = turns[-1].reply if turns else ""
             return (Reply(last) if last else texts["help"]), "voice", language
+        if kind == "identity":
+            self._drop(prefetch)
+            return await self._identity(message, understood, language), "identity", language
         if kind == "reminder" and self.reminders is not None:
             self._drop(prefetch)
             return await self.reminders.handle(message, question, language, turns), "reminder", language

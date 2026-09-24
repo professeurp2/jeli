@@ -14,9 +14,12 @@ started is dropped rather than sent late.
 A member can also ask, in any words, for the reminder to reach them privately rather than in front
 of the group. Then it goes to their own chat instead, with no @mention and no reply to a message
 that lives elsewhere, and Jeli still remembers where it was asked for so they can cancel it there.
+
 Reaching them needs the phone number behind their group id, which WhatsApp does not put in group
-messages (app/answer/citations.py); when that is not known, Jeli says so — a reminder someone
-wanted kept quiet must never fall back to the group.
+messages. Two things can say it: WhatsApp itself, or the member (app/answer/citations.py). When
+neither has, the reminder is kept with no chat at all and Jeli asks who they are — and the moment
+they say, it is addressed and goes ahead on its own. It is never sent to the group instead: a
+reminder someone wanted kept quiet must not arrive in front of 240 people.
 """
 
 import logging
@@ -95,6 +98,17 @@ class Reminders:
         self.deadlines = deadlines  # the dated events Jeli knows (app.answer.deadlines.Deadlines)
         self.clock = clock
 
+    async def _number(self, member_key: str) -> str:
+        """The number this member gave Jeli themselves, when they have."""
+        if self.store is None or not hasattr(self.store, "member"):
+            return ""
+        try:
+            profile = await self.store.member(member_key)
+        except Exception:
+            log.warning("Could not read a member's profile for a reminder", exc_info=True)
+            return ""
+        return (profile or {}).get("number", "") or ""
+
     async def _events(self, today: date) -> str:
         if self.store is None or not hasattr(self.store, "deadlines_between"):
             return ""
@@ -131,13 +145,14 @@ class Reminders:
             return Reply(texts["reminder_when"])
         if len(await self.store.active_reminders(member)) >= MAX_ACTIVE_PER_MEMBER:
             return Reply(texts["reminder_too_many"].format(limit=MAX_ACTIVE_PER_MEMBER))
-        send_to, reply_to = message.chat_id, message.message_id
+        send_to, reply_to, waiting = message.chat_id, message.message_id, False
         if plan.where.strip().lower() == "private" and message.chat_id.endswith("@g.us"):
             # Asked for in private, so delivered in private: not as a reply to a message in another
             # chat, and with nobody mentioned in front of 240 people.
-            send_to = private_chat_of(message.author_id or "")
-            if not send_to:
-                return Reply(texts["reminder_not_private"])
+            send_to = private_chat_of(message.author_id or "", await self._number(member))
+            # Nobody has said which number this is yet. The reminder is kept without a chat and Jeli
+            # asks — rather than refusing and making the member set it up twice.
+            waiting = not send_to
             reply_to = ""
         await self.store.add_reminder(
             platform=message.platform, chat_id=send_to, message_id=reply_to, member_key=member,
@@ -145,7 +160,10 @@ class Reminders:
             remind_at=remind_at, language=language, message=plan.message.strip()[:1000],
             asked_in=message.chat_id,
         )
-        log.info("Reminder set for %s in %s at %s: %s", member, send_to, remind_at.isoformat(), plan.what)
+        log.info("Reminder set for %s at %s (%s): %s", member, remind_at.isoformat(),
+                 "waiting for a number" if waiting else "addressed", plan.what)
+        if waiting:
+            return Reply(texts["reminder_not_private"])
         return Reply(plan.reply.strip() or texts["reminder_set"])
 
     async def send_due(self, send) -> tuple[int, int]:

@@ -73,20 +73,31 @@ def display_person(entry: str) -> str:
 NUMBER_OF_LID: dict[str, str] = {}
 
 
-def private_chat_of(author_id: str) -> str:
-    """The one-to-one chat with whoever wrote under this id, or "" when WhatsApp has not said.
+def a_number(text: str) -> str:
+    """The phone number in what someone wrote, as digits, or "" when there is none to trust.
+
+    International length, so a year, a room number or a time is not mistaken for a way to reach
+    somebody. The leading zeros of a local form are dropped with the rest of the punctuation: what
+    is kept is what WhatsApp uses.
+    """
+    digits = re.sub(r"\D", "", text or "")
+    if digits.startswith("00"):
+        digits = digits[2:]  # "00223…" is how many keyboards write "+223…"; WhatsApp keeps neither
+    return digits if 8 <= len(digits) <= 15 else ""
+
+
+def private_chat_of(author_id: str, known: str = "") -> str:
+    """The one-to-one chat with whoever wrote under this id, or "" when nobody has said.
 
     A group message carries a LID, and a LID is not a chat anyone can open — the number behind it
-    is. So asking Jeli in a group for something to arrive in private only works once WhatsApp has
-    told us which number that member is (learn_numbers). When it has not, the caller decides what
-    to do about it; guessing a chat id would write to a stranger.
+    is. Two sources know it: WhatsApp itself (learn_numbers), and the member, who can simply tell
+    Jeli. WhatsApp first, because it cannot be mistyped. Guessing is not a third source: without
+    one of the two this returns nothing, and whoever asked decides what to do about it.
     """
     who = re.sub(r"\D", "", (author_id or "").split("@")[0].split(":")[0])
-    if not who:
-        return ""
-    if author_id.endswith("@c.us"):
+    if author_id.endswith("@c.us") and who:
         return f"{who}@c.us"
-    number = NUMBER_OF_LID.get(who)
+    number = (NUMBER_OF_LID.get(who) if who else "") or a_number(known)
     return f"{number}@c.us" if number else ""
 
 

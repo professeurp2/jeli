@@ -53,6 +53,7 @@ SOURCE_REQUEST = re.compile(
 KINDS = (
     "question", "social", "about_jeli", "catchup", "recap", "session_question", "deadlines", "file",
     "list_documents", "list_sessions", "clarify", "voice", "image", "sources", "vague", "reminder",
+    "identity",
 )
 # Kinds whose reply the model writes itself (no search).
 REPLYING_KINDS = ("social", "about_jeli", "clarify", "vague")
@@ -80,6 +81,12 @@ you, from the messages. Return:
   "sources": asks where the previous answer came from ("source?", "d'où tu tiens ça ?").
   "voice": only asks for the previous answer again by voice ("en vocal", "say it in a voice note").
   "image": asks for an image or illustration of something (the subject is in "standalone").
+  "identity": tells Jeli who they are — their name, their phone number, or both, whether Jeli
+    asked for them or they simply said so ("je m'appelle Awa", "mon numéro c'est +223 …", "c'est
+    Awa au 93 05 69 36", "here's my number"). Put what they gave in "person_name" and
+    "person_number", exactly as written, and leave the other empty when only one was given. A
+    number quoted for some other reason — a deadline, an amount, someone else's contact — is not
+    this.
   "reminder": asks Jeli to remind them of something later — before a meeting, a session, a
     deadline, at a time ("remind me before the meeting", "rappelle-moi demain à 9 h", "préviens-moi
     une heure avant") — or to cancel a reminder. "standalone" names what and when, from the
@@ -108,6 +115,8 @@ you, from the messages. Return:
 - "since": for "catchup" only, the start of the period as an ISO date-time in UTC, computed from
   today's date; "" when not stated.
 - "session": for "recap" and "session_question", the words naming the session; "" otherwise.
+- "person_name" / "person_number": for "identity" only — the name and the phone number the member
+  gave for themselves, as they wrote them. "" otherwise, and "" for whichever they did not give.
 """
 
 
@@ -120,6 +129,8 @@ class Understood(BaseModel):
     language_name: str = ""
     since: str = ""
     session: str = ""
+    person_name: str = ""
+    person_number: str = ""
 
 
 def plain(text: str, language: str = "") -> Understood:

@@ -11,7 +11,7 @@ WORKSHOP = Deadline("Needs assessment workshop with the Ethiopian AI Institute",
 
 class Store:
     def __init__(self):
-        self.rows, self.finished = [], []
+        self.rows, self.finished, self.profiles = [], [], {}
 
     async def deadlines_between(self, start, end, include_dismissed=False):
         return [WORKSHOP]
@@ -34,7 +34,18 @@ class Store:
         return len(found)
 
     async def due_reminders(self, now):
-        return [r for r in self.rows if r["remind_at"] <= now and r["sent_at"] is None and not r["cancelled"]]
+        # A reminder with no chat is not due: it is unaddressed, waiting for a member's number.
+        return [r for r in self.rows
+                if r["remind_at"] <= now and r["chat_id"] and r["sent_at"] is None and not r["cancelled"]]
+
+    async def member(self, member_key):
+        return self.profiles.get(member_key)
+
+    async def settle_reminders(self, member_key, chat_id):
+        waiting = [r for r in self.rows if r["member_key"] == member_key and not r["chat_id"]]
+        for row in waiting:
+            row["chat_id"] = chat_id
+        return len(waiting)
 
     async def finish_reminder(self, reminder_id, sent):
         row = next(r for r in self.rows if r["id"] == reminder_id)
@@ -185,13 +196,34 @@ def test_a_group_member_is_reached_by_the_number_behind_their_group_id():
         NUMBER_OF_LID.pop("216324735279308", None)
 
 
-def test_when_the_private_chat_is_unknown_jeli_says_so_instead_of_telling_the_group():
-    """The reminder a member wanted kept quiet must never fall back to the group."""
+def test_when_jeli_cannot_reach_them_the_reminder_waits_and_it_asks_who_they_are():
+    """The reminder a member wanted kept quiet must never fall back to the group — and refusing
+    would make them set it up twice. So it is kept without a chat, and Jeli asks for the number."""
     store = Store()
     message = ask("rappelle-moi en privé")
     message = message.__class__(**{**message.__dict__, "author_id": "999888777666@lid"})
     reply = asyncio.run(Reminders(store, Plans(PRIVATELY), clock=lambda: NOW).handle(message, "…", "fr", TURNS))
-    assert "en privé" in reply and store.rows == []
+    assert "ton nom et ton numéro" in reply
+    [waiting] = store.rows
+    assert waiting["chat_id"] == "" and waiting["asked_in"] == GROUP  # kept, but addressed nowhere
+    sent = []
+
+    async def send(chat_id, text, reply_to, mentions):
+        sent.append(chat_id)
+        return True
+
+    on_time = Reminders(store, None, clock=lambda: datetime(2026, 9, 23, 7, 30, 20, tzinfo=timezone.utc))
+    assert asyncio.run(on_time.send_due(send)) == (0, 0) and sent == []  # never to the group
+
+
+def test_a_number_a_member_gave_jeli_is_the_one_it_writes_to():
+    """Told once, used from then on — the reminder no longer has to ask."""
+    store = Store()
+    store.profiles["999888777666"] = {"name": "Awa", "number": "22399887766"}  # their group id
+    message = ask("rappelle-moi en privé")
+    message = message.__class__(**{**message.__dict__, "author_id": "999888777666@lid"})
+    asyncio.run(Reminders(store, Plans(PRIVATELY), clock=lambda: NOW).handle(message, "…", "fr", TURNS))
+    assert store.rows[0]["chat_id"] == "22399887766@c.us"
 
 
 def test_asking_in_private_changes_nothing_and_the_normal_case_is_unchanged():

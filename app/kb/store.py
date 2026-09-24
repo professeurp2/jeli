@@ -676,12 +676,30 @@ class Store:
             )
         return cursor.rowcount
 
+    async def settle_reminders(self, member_key: str, chat_id: str) -> int:
+        """Give a chat to the reminders that were waiting for one.
+
+        A member can ask for a reminder in private before Jeli knows how to reach them. Rather than
+        refuse and make them ask twice, the reminder waits; the moment they say who they are, it is
+        addressed and goes ahead on its own.
+        """
+        async with self._pool.connection() as conn:
+            cursor = await conn.execute(
+                "update jeli.reminders set chat_id = %s where member_key = %s and chat_id = '' "
+                "and sent_at is null and cancelled_at is null",
+                (chat_id, member_key),
+            )
+        return cursor.rowcount
+
     async def due_reminders(self, now: datetime) -> list[dict]:
         async with self._pool.connection() as conn:
             return await (
                 await conn.execute(
                     "select id, platform, chat_id, message_id, member_id, what, event_at, remind_at, message from jeli.reminders "
-                    "where remind_at <= %s and sent_at is null and cancelled_at is null order by remind_at limit 50",
+                    # A reminder with no chat yet is one waiting on a member's number: it is not due,
+                    # it is unaddressed, and sending it nowhere would only lose it.
+                    "where remind_at <= %s and chat_id <> '' and sent_at is null and cancelled_at is null "
+                    "order by remind_at limit 50",
                     (now,),
                 )
             ).fetchall()
@@ -996,22 +1014,26 @@ class Store:
         async with self._pool.connection() as conn:
             return await (
                 await conn.execute(
-                    "select member_key, name, language, notes, first_seen, last_seen from jeli.members where member_key = %s",
+                    "select member_key, name, language, number, notes, first_seen, last_seen "
+                    "from jeli.members where member_key = %s",
                     (member_key,),
                 )
             ).fetchone()
 
-    async def remember_member(self, member_key: str, name: str = "", language: str = "", notes: dict | None = None) -> None:
+    async def remember_member(self, member_key: str, name: str = "", language: str = "",
+                              notes: dict | None = None, number: str = "") -> None:
         """What Jeli learned of a member: their name as shown, the language they write in, notes
-        (their own introduction, what they asked lately). Empty values keep the old ones."""
+        (their own introduction, what they asked lately), and the number they gave it. Empty values
+        keep the old ones."""
         async with self._pool.connection() as conn:
             await conn.execute(
-                "insert into jeli.members (member_key, name, language, notes) values (%s, %s, %s, %s) "
+                "insert into jeli.members (member_key, name, language, notes, number) values (%s, %s, %s, %s, %s) "
                 "on conflict (member_key) do update set "
                 "name = case when excluded.name <> '' then excluded.name else jeli.members.name end, "
                 "language = case when excluded.language <> '' then excluded.language else jeli.members.language end, "
+                "number = case when excluded.number <> '' then excluded.number else jeli.members.number end, "
                 "notes = jeli.members.notes || excluded.notes, last_seen = now()",
-                (member_key, name[:80], language[:8], Jsonb(notes or {})),
+                (member_key, name[:80], language[:8], Jsonb(notes or {}), number[:20]),
             )
 
     async def forget_member_profile(self, member_key: str) -> None:

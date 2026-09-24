@@ -320,3 +320,16 @@ def test_an_overloaded_model_hands_over_to_the_next_model_not_the_next_key():
     llm._clients = clients
     assert asyncio.run(llm.generate("p", GeneratedAnswer, attempts=2)) == good
     assert models.calls == ["lite-a", "lite-b"]  # not "lite-a" again on another key
+
+
+def test_the_understanding_step_knows_someone_saying_who_they_are():
+    """Jeli knows members by an account id. Being told a name and a number is how it learns the
+    rest — and it has to recognise it in any words, not after a question it asked."""
+    from app.answer.understand import KINDS, SYSTEM, Understood
+
+    assert "identity" in KINDS
+    assert '"identity": tells Jeli who they are' in SYSTEM
+    assert "whether Jeli\n    asked for them or they simply said so" in SYSTEM
+    # Someone else's contact, or a number quoted for another reason, is not this.
+    assert "is not\n    this" in SYSTEM
+    assert Understood(kind="identity").person_name == "" and Understood(kind="identity").person_number == ""

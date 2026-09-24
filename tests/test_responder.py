@@ -144,3 +144,88 @@ def test_duplicate_detection_can_be_switched_off_and_ignores_other_bots():
     assert reply("When is the deadline?", responder=off, addressed_to_bot=False) is None
     assert reply("When is the deadline?", answerer, addressed_to_bot=False, author="OtherBot") is None
     assert answerer.checked == []
+
+
+# --- A member telling Jeli who they are --------------------------------------------------------
+
+
+class Directory:
+    """The little Jeli keeps about each member, and the reminders waiting on it."""
+
+    def __init__(self, waiting=0):
+        self.kept, self.settled, self.waiting = {}, [], waiting
+
+    async def remember_member(self, member_key, name="", language="", notes=None, number=""):
+        held = self.kept.setdefault(member_key, {"name": "", "number": ""})
+        held["name"] = name or held["name"]
+        held["number"] = number or held["number"]
+
+    async def settle_reminders(self, member_key, chat_id):
+        self.settled.append((member_key, chat_id))
+        return self.waiting
+
+
+class Says:
+    """An understanding step that read the message as an introduction."""
+
+    def __init__(self, **fields):
+        from app.answer.understand import Understood
+
+        self.understood = Understood(kind="identity", language="fr", **fields)
+
+    async def understand(self, text, language, turns, member=""):
+        return self.understood
+
+
+def _reply(understander, store, text="je m'appelle Awa, mon numéro c'est +223 93 05 69 36"):
+    from app.answer.conversation import Conversations
+
+    responder = Responder(FakeAnswerer(), understander=understander, store=store,
+                          conversations=Conversations())
+    return asyncio.run(responder.respond(make_incoming(text)))
+
+
+def test_a_member_who_says_who_they_are_is_remembered():
+    """Jeli knows members by the id WhatsApp hands it — not a name, not a number. Now it can be told."""
+    store = Directory()
+    reply = _reply(Says(person_name="Awa", person_number="+223 93 05 69 36"), store)
+    assert store.kept == {"22370000000": {"name": "Awa", "number": "22393056936"}}
+    assert "Awa" in reply and "numéro" in reply
+    # And whatever was waiting on it was asked to go ahead, addressed to that number.
+    assert store.settled == [("22370000000", "22393056936@c.us")]
+
+
+def test_the_reminder_that_was_waiting_goes_ahead_by_itself():
+    """Nobody should have to ask twice: the reminder they set up before Jeli knew them is settled."""
+    store = Directory(waiting=1)
+    reply = _reply(Says(person_name="Awa", person_number="0022393056936"), store)
+    assert TEXTS["fr"]["identity_settled"] in reply
+    assert store.settled == [("22370000000", "22393056936@c.us")]
+
+
+def test_a_name_alone_is_kept_without_pretending_to_have_a_number():
+    store = Directory()
+    reply = _reply(Says(person_name="Awa"), store, "moi c'est Awa")
+    assert store.kept == {"22370000000": {"name": "Awa", "number": ""}}
+    assert store.settled == []  # nothing to address: no reminder is quietly sent anywhere
+    assert reply == TEXTS["fr"]["identity_kept"].format(name="Awa")
+
+
+def test_something_that_is_not_a_number_is_not_taken_for_one():
+    """A year, a room, an amount: Jeli asks again rather than writing to a stranger."""
+    store = Directory()
+    reply = _reply(Says(person_name="Awa", person_number="2026"), store, "je suis Awa, salle 2026")
+    assert reply == TEXTS["fr"]["identity_unclear"]
+    # No number is kept, and nothing waiting is addressed to a room number.
+    assert not store.kept.get("22370000000", {}).get("number") and store.settled == []
+
+
+def test_the_number_itself_is_never_written_to_the_log(caplog):
+    import logging
+
+    store = Directory()
+    with caplog.at_level(logging.INFO):
+        _reply(Says(person_name="Awa", person_number="+223 93 05 69 36"), store)
+    printed = " ".join(record.getMessage() for record in caplog.records)
+    assert "22393056936" not in printed and "93 05 69 36" not in printed
+    assert "told Jeli who they are" in printed  # that it happened is worth knowing; the number is not
