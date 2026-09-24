@@ -175,7 +175,10 @@ async def call_page(request: Request) -> HTMLResponse:
         + "<p>Il écoute, cherche dans la mémoire du groupe, et vous répond de vive voix.</p>"
         + "</header>"
         + '<section class="stage" id="stage" data-state="idle">'
+        + '<div class="orb-wrap">'
         + '<canvas id="orb" width="560" height="560" aria-hidden="true"></canvas>'
+        + JELI_FACE
+        + "</div>"
         + '<p class="status" id="status">Appuyez pour appeler</p>'
         + '<button id="talk" class="dial" type="button" aria-label="Appeler Jeli">'
         + f'<span class="dial-icon">{ui.icon("call", 30)}</span></button>'
@@ -188,6 +191,28 @@ async def call_page(request: Request) -> HTMLResponse:
         + _script(chosen)
     )
     return HTMLResponse(_shell(f'<main class="call-page">{body}</main>'))
+
+
+# Jeli's own face, the one members see on WhatsApp — not a stock avatar. It is the same lemur as
+# ui.LEMUR, taken apart so each piece can move: the ears perk up when it is listening, the eyes
+# blink and follow what it is doing, and the mouth opens on the loudness of its own voice. That
+# last one is the point: a caller watching the face is watching Jeli speak, not a loading spinner.
+JELI_FACE = """<svg id="face" viewBox="0 0 64 64" aria-hidden="true">
+<g id="head">
+<circle cx="32" cy="34" r="27" fill="#2a2c32"/>
+<g id="earL"><path d="M12 21 17 8l9 11z" fill="#cfcbc1"/></g>
+<g id="earR"><path d="M52 21 47 8l-9 11z" fill="#cfcbc1"/></g>
+<ellipse cx="32" cy="35" rx="19" ry="17" fill="#f1eee7"/>
+<path d="M32 18c-3 0-4 4-4 8h8c0-4-1-8-4-8z" fill="#2a2c32"/>
+<g id="eyeL"><ellipse cx="23.5" cy="32" rx="7.4" ry="7.8" fill="#2a2c32"/>
+  <circle cx="23.5" cy="32" r="4.8" fill="#f5b301"/>
+  <circle id="pupilL" cx="24" cy="32.4" r="2.1" fill="#141518"/></g>
+<g id="eyeR"><ellipse cx="40.5" cy="32" rx="7.4" ry="7.8" fill="#2a2c32"/>
+  <circle cx="40.5" cy="32" r="4.8" fill="#f5b301"/>
+  <circle id="pupilR" cx="41" cy="32.4" r="2.1" fill="#141518"/></g>
+<path id="smile" d="M29 42.5q3 3.2 6 0z" fill="#2a2c32"/>
+<ellipse id="mouth" cx="32" cy="43.4" rx="4.2" ry="0" fill="#2a2c32" opacity="0"/>
+</g></svg>"""
 
 
 CLOSED_BODY = (
@@ -230,7 +255,10 @@ CALL_CSS = """
   padding: clamp(18px, 5vw, 28px) 16px 24px; border-radius: 26px;
   background: linear-gradient(180deg, rgba(255,255,255,.045), rgba(255,255,255,.015));
   border: 1px solid rgba(255,255,255,.08); }
+.orb-wrap { position: relative; display: grid; place-items: center; }
 #orb { width: clamp(180px, 54vw, 260px); height: clamp(180px, 54vw, 260px); display: block; margin: -6px 0 -4px; }
+/* Jeli sits inside its own aura: the canvas is the halo, this is the face in the middle of it. */
+#face { position: absolute; width: 46%; height: 46%; pointer-events: none; }
 .status { margin: 0; min-height: 22px; font-size: 15px; font-weight: 600; color: #cfd2db;
   letter-spacing: -0.01em; text-align: center; }
 .stage-note { margin: 0; font-size: 12.5px; color: #7e8290; text-align: center; max-width: 32ch; }
@@ -348,13 +376,15 @@ function draw() {
     ctx.lineWidth = Math.max(1, unit * 0.011);
     ctx.stroke();
   }
-  const core = ctx.createRadialGradient(mid, mid - base * 0.3, base * 0.08, mid, mid, base);
-  core.addColorStop(0, shade(tone, 0.95));
-  core.addColorStop(1, shade(tone, 0.22));
+  /* A rim, not a disc: the middle belongs to Jeli's face, and a filled core would bury it. */
   ctx.beginPath();
-  ctx.arc(mid, mid, base * (0.9 + level * 0.16), 0, Math.PI * 2);
-  ctx.fillStyle = core;
-  ctx.fill();
+  ctx.arc(mid, mid, base * (0.86 + level * 0.06), 0, Math.PI * 2);
+  ctx.strokeStyle = shade(tone, 0.85);
+  ctx.lineWidth = Math.max(2, unit * (0.018 + level * 0.02));
+  ctx.shadowColor = shade(tone, 0.9);
+  ctx.shadowBlur = unit * (0.09 + level * 0.14);
+  ctx.stroke();
+  ctx.shadowBlur = 0;
   if (stage.dataset.state === 'searching') {
     for (let dot = 0; dot < 3; dot++) {
       const angle = phase * 1.6 + dot * (Math.PI * 2 / 3);
@@ -366,11 +396,64 @@ function draw() {
     }
   }
 }
-function frame() {
+/* --- Jeli's face -----------------------------------------------------------------------------
+   The same lemur members see on WhatsApp, given something to do. What it does is not decoration:
+   the mouth opens on the measured loudness of Jeli's own voice, so watching the face is watching
+   Jeli speak. The rest is the manners that make it read as someone rather than something —
+   it blinks, it looks where it is working, its ears go up when it is listening to you. */
+const head = document.getElementById('head'), mouth = document.getElementById('mouth');
+const smile = document.getElementById('smile'), earL = document.getElementById('earL');
+const earR = document.getElementById('earR'), eyeL = document.getElementById('eyeL');
+const eyeR = document.getElementById('eyeR'), pupilL = document.getElementById('pupilL');
+const pupilR = document.getElementById('pupilR');
+/* Per state: how far the ears lift, where the eyes rest, how wide they open. */
+const MOOD = {
+  idle:      { ears: 0,  look: [0, 0],     open: 1,    sway: 0.25 },
+  dialing:   { ears: 4,  look: [0, -0.5],  open: 1,    sway: 0.2 },
+  listening: { ears: 13, look: [0, 0.2],   open: 1.1,  sway: 0.35 },
+  searching: { ears: -6, look: [1.5, -1.6], open: 0.9, sway: 0.8 },
+  speaking:  { ears: 5,  look: [0, 0],     open: 1,    sway: 0.6 },
+  ended:     { ears: -9, look: [0, 0.6],   open: 0.45, sway: 0.1 },
+};
+let ears = 0, lookX = 0, lookY = 0, opened = 1, blinkUntil = 0, nextBlink = 0;
+
+function ease(now, to, by) { return now + (to - now) * by; }
+
+function face(at) {
+  const mood = MOOD[stage.dataset.state] || MOOD.idle;
+  ears = ease(ears, mood.ears, 0.08);
+  lookX = ease(lookX, mood.look[0], 0.06);
+  lookY = ease(lookY, mood.look[1], 0.06);
+  /* A blink every few seconds, never twice in the same breath. */
+  if (at > nextBlink) { blinkUntil = at + 110; nextBlink = at + 2600 + Math.random() * 3600; }
+  const blinking = at < blinkUntil;
+  opened = ease(opened, blinking ? 0.07 : mood.open, blinking ? 0.55 : 0.3);
+  earL.setAttribute('transform', 'rotate(' + (-ears) + ' 19 20)');
+  earR.setAttribute('transform', 'rotate(' + ears + ' 45 20)');
+  eyeL.setAttribute('transform', 'translate(23.5 32) scale(1 ' + opened.toFixed(3) + ') translate(-23.5 -32)');
+  eyeR.setAttribute('transform', 'translate(40.5 32) scale(1 ' + opened.toFixed(3) + ') translate(-40.5 -32)');
+  pupilL.setAttribute('cx', (24 + lookX).toFixed(2));
+  pupilR.setAttribute('cx', (41 + lookX).toFixed(2));
+  pupilL.setAttribute('cy', (32.4 + lookY).toFixed(2));
+  pupilR.setAttribute('cy', (32.4 + lookY).toFixed(2));
+  /* The mouth is the voice: closed it is a smile, open it is Jeli talking. */
+  const speaking = stage.dataset.state === 'speaking';
+  const gap = speaking ? level * 5.2 : 0;
+  mouth.setAttribute('ry', gap.toFixed(2));
+  mouth.setAttribute('rx', (4.2 - gap * 0.18).toFixed(2));
+  mouth.setAttribute('opacity', gap > 0.25 ? 1 : 0);
+  smile.setAttribute('opacity', gap > 0.25 ? 0 : 1);
+  const tilt = STILL ? 0 : Math.sin(phase * 0.55) * mood.sway;
+  const bob = STILL ? 0 : Math.sin(phase * 0.9) * mood.sway * 0.7 + (speaking ? level * 0.7 : 0);
+  head.setAttribute('transform', 'rotate(' + tilt.toFixed(2) + ' 32 40) translate(0 ' + bob.toFixed(2) + ')');
+}
+
+function frame(at) {
   level += (want - level) * 0.2;
   want *= 0.9;
   phase += STILL ? 0.004 : 0.022;
   draw();
+  face(at || 0);
   requestAnimationFrame(frame);
 }
 function loudness(samples) {

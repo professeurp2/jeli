@@ -307,3 +307,32 @@ def test_the_orb_reacts_to_real_sound_not_to_a_decorative_loop():
     assert "want = Math.max(want, loudness(input))" in CALL_SCRIPT
     for state in ("idle", "listening", "searching", "speaking"):
         assert state + ":" in CALL_SCRIPT
+
+
+def test_jeli_has_a_face_on_the_call_and_it_is_its_own():
+    """A caller watching the face is watching Jeli speak. Not a stock avatar: the lemur members
+    already see on WhatsApp, taken apart so each piece can move."""
+    from app.web import ui
+    from app.web.call import CALL_SCRIPT, JELI_FACE
+
+    # The same pieces as the mark itself: the ears, the eye patches, the gold irises, the smile.
+    for piece in ('d="M12 21 17 8l9 11z"', 'fill="#f5b301"', 'd="M29 42.5q3 3.2 6 0z"'):
+        assert piece in JELI_FACE and piece in ui.LEMUR
+    # The ears are drawn after the head, or the head hides them.
+    assert JELI_FACE.index('r="27"') < JELI_FACE.index('id="earL"')
+    # The mouth is the voice: it opens on the measured loudness, and only while Jeli is speaking.
+    assert "const gap = speaking ? level * 5.2 : 0;" in CALL_SCRIPT
+    assert "mouth.setAttribute('ry', gap.toFixed(2));" in CALL_SCRIPT
+    # Closed, it is a smile; open, it is Jeli talking. Never both.
+    assert "smile.setAttribute('opacity', gap > 0.25 ? 0 : 1);" in CALL_SCRIPT
+
+
+def test_the_face_has_a_mood_for_everything_the_call_can_be_doing():
+    from app.web.call import CALL_SCRIPT
+
+    for state in ("idle", "dialing", "listening", "searching", "speaking", "ended"):
+        assert state + ":" in CALL_SCRIPT.split("const MOOD")[1].split("};")[0]
+    # Listening perks the ears up; searching looks away, the way anyone does when thinking.
+    moods = CALL_SCRIPT.split("const MOOD")[1].split("};")[0]
+    assert "listening: { ears: 13" in moods and "searching: { ears: -6" in moods
+    assert "blinkUntil = at + 110" in CALL_SCRIPT  # and it blinks, because things that live do
