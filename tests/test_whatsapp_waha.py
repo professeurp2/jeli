@@ -383,15 +383,24 @@ class FakeEmotions:
         return Feeling(emotion=emotion, strength=strength, reaction=reaction)
 
 
-def test_jeli_reacts_to_strong_emotion_in_the_group(waha_env, calls):
-    """Sad news or a loud laugh in the group gets the reaction the model chose."""
+def test_jeli_answers_strong_emotion_in_the_group_with_one_gesture(waha_env, calls):
+    """Sad news or a loud laugh gets an answer — and exactly one of them.
+
+    Measured 24 September: a sticker AND an emoji went on the same message, which is Jeli saying
+    the same thing twice and reads as a machine doing both because it can. Humour and sadness are
+    both feelings it has pictures for, so the picture goes and the emoji stays home.
+    """
     emotions = FakeEmotions({"haha trop drôle 😂": ("humor", 3, "😂"), "Notre ami est décédé hier.": ("sadness", 3, "😢")})
     with TestClient(app) as client:
         app.state.whatsapp.emotions = emotions
         post_event(client, message_event("haha trop drôle 😂", message_id="m1"))
         post_event(client, message_event("Notre ami est décédé hier.", message_id="m2"))
     reactions = [(p["messageId"], p["reaction"]) for path, p in calls if path == "/api/reaction"]
-    assert reactions == [("m1", "😂"), ("m2", "😢")]
+    stickers = [p for path, p in calls if path == "/api/sendSticker"]
+    assert len(stickers) == 2 and reactions == []
+    # Two feelings, two different pictures: a feeling is not a single fixed image.
+    drawn = {str(p["file"].get("data"))[-80:] for p in stickers if isinstance(p.get("file"), dict)}
+    assert len(drawn) == 2, "both feelings were answered with the same sticker"
 
 
 def test_jeli_does_not_react_to_ordinary_chatter_or_thanks_in_the_group(waha_env, calls):

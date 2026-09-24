@@ -122,3 +122,53 @@ def test_every_tier_keeps_a_model_that_can_still_answer():
     assert settings.light_model_list[0] != best, "the cheap models still come first"
     # The transcription tier has one too.
     assert best in settings.transcription_model_list
+
+
+def test_a_denied_project_sets_its_key_aside_instead_of_reaching_the_member():
+    """Measured 24 September in production: "403 PERMISSION_DENIED — Your project has been denied
+    access". It fell through to `raise`, so the dead key stayed first in the rotation, was tried
+    again on every request, and the traceback reached the member instead of an answer."""
+    import asyncio
+
+    from google.genai import errors
+
+    from app.answer.llm import LLM
+
+    class Denied:
+        """A first key whose project is denied, and a second that answers."""
+
+        def __init__(self, llm):
+            self.llm, self.asked = llm, []
+
+        async def __call__(self, key_idx, model, contents, config, timeout):
+            self.asked.append(key_idx)
+            if key_idx == 0:
+                raise errors.ClientError(
+                    403, {"error": {"code": 403, "message": "Your project has been denied access.",
+                                    "status": "PERMISSION_DENIED"}}, None
+                )
+            return Answer()
+
+    class Answer:
+        parsed = None
+        text = '{"reply": "ok"}'
+
+    llm = LLM(api_keys=["a", "b"], models=["m1"])
+    assert len(llm.valid_keys()) == 2
+    llm._disable_key(0, "its project was denied access")
+    # The key is out of the rotation for a day, and Jeli says how many are left.
+    assert llm.valid_keys() == [1]
+    assert all(llm._resting_until[(0, m)] > 0 for m in llm.models)
+
+
+def test_the_rotation_says_how_many_keys_are_left():
+    import inspect
+
+    from app.answer.llm import LLM
+
+    source = inspect.getsource(LLM._disable_key)
+    assert "still usable" in source  # the log says what remains, not just what broke
+    handling = inspect.getsource(LLM)
+    assert "error.code in (401, 403)" in handling
+    # And the dead key's other models are dropped from what is still to try.
+    assert "pair[0] != key_idx" in handling

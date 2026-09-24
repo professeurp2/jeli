@@ -387,6 +387,8 @@ class Waha:
         self._sent: OrderedDict[str, tuple[str, str, str]] = OrderedDict()  # id → (chat, question, answer)
         self.reaction_limiter = SlidingWindowLimiter(REACTIONS_PER_HOUR, 3600)
         self.sticker_limiter = SlidingWindowLimiter(STICKERS_PER_HOUR, 3600)
+        # The last sticker each chat saw, so the next one is a different one.
+        self._last_sticker: dict[str, str] = {}
         self.enabled_stickers: bool = True  # set from the dashboard (apply.py)
         # The knowledge base, for the stickers the groups use (set at startup in app/main.py).
         self.store = None
@@ -757,12 +759,17 @@ class Waha:
                 or not self.reaction_limiter.allow(message.chat_id)
             ):
                 return
-            await self.send_reaction(message.chat_id, message.message_id, feeling.reaction)
-            log.info("Reacted %s to message %s (%s, strength %d)", feeling.reaction, message.message_id, feeling.emotion, feeling.strength)
             if sticker and message.image_url and self.store is not None:
                 # The groups' own stickers, with what each one says: Jeli answers with theirs.
                 await self.store.remember_sticker(message.image_url, feeling.emotion, message.chat_id)
-            await self._answer_with_a_sticker(message, feeling)
+            # One gesture per message, never two. A sticker and an emoji on the same message is
+            # Jeli saying the same thing twice, and it reads as a machine doing both because it
+            # can. The sticker is the fuller answer, so it is tried first and the emoji is what
+            # happens when there is no picture to send.
+            if await self._answer_with_a_sticker(message, feeling):
+                return
+            await self.send_reaction(message.chat_id, message.message_id, feeling.reaction)
+            log.info("Reacted %s to message %s (%s, strength %d)", feeling.reaction, message.message_id, feeling.emotion, feeling.strength)
         except Exception:
             log.exception("Could not react to message %s", message.message_id)
 
@@ -818,7 +825,7 @@ class Waha:
             payload["reply_to"] = reply_to
         await self._post("/api/sendSticker", payload)
 
-    async def _answer_with_a_sticker(self, message: IncomingMessage, feeling) -> None:
+    async def _answer_with_a_sticker(self, message: IncomingMessage, feeling) -> bool:
         """A sticker back, when a member's own sticker or a strong feeling calls for one.
 
         An emoji on their message is a nod; a sticker is Jeli joining in. The groups' own sticker
@@ -831,22 +838,28 @@ class Waha:
             or feeling.emotion not in STICKER_EMOTIONS
             or not self.sticker_limiter.allow(message.chat_id)
         ):
-            return
+            return False
         file_url = await self.store.pick_sticker(feeling.emotion) if self.store is not None else None
-        mine = None if file_url else stickers.for_reaction(feeling.reaction)
-        if not file_url and not mine:
-            return  # nothing to say in pictures for this feeling
+        # Never the one this chat just saw: a feeling that always comes out as the same picture is
+        # what makes a bot feel like a reflex rather than a reply.
+        chosen = None if file_url else stickers.for_feeling(feeling.emotion, avoid=self._last_sticker.get(message.chat_id, ""))
+        if not file_url and not chosen:
+            return False  # nothing to say in pictures for this feeling
         try:
             await self.spacer.wait_turn()
             await self.send_sticker(
-                message.chat_id, file_url or "", reply_to=message.message_id, data=mine
+                message.chat_id, file_url or "", reply_to=message.message_id, data=chosen[1] if chosen else None
             )
+            if chosen:
+                self._last_sticker[message.chat_id] = chosen[0]
             log.info(
                 "Answered message %s with a %s sticker (%s)", message.message_id, feeling.emotion,
-                "the groups' own" if file_url else "Jeli's own",
+                "the groups' own" if file_url else f"Jeli's own {chosen[0]}",
             )
+            return True
         except Exception:
             log.warning("Could not send a sticker to %s", message.chat_id, exc_info=True)
+            return False
 
     def _remember_image(self, message: IncomingMessage) -> None:
         """Describe an image posted in a group and remember the description with its caption, so

@@ -11,6 +11,7 @@ Jeli has one.
 """
 
 import logging
+import random
 from pathlib import Path
 
 log = logging.getLogger(__name__)
@@ -18,22 +19,53 @@ log = logging.getLogger(__name__)
 HERE = Path(__file__).resolve().parent.parent.parent / "assets" / "stickers"
 MIMETYPE = "image/webp"
 
+# What Jeli has to say in pictures, per feeling. Several for each, because one is a tic: measured
+# 24 September, a feeling always produced the same image and the group started reading it as a
+# machine repeating itself. These are not the reaction emoji — a sticker is its own vocabulary,
+# and it is wider on purpose.
+#
+# This table is the only list: scripts/make_stickers.py draws exactly what is written here, so a
+# feeling can never be given a sticker that was never drawn, nor a drawing nobody asks for.
+FOR_FEELING = {
+    "joy": ("🎉", "🥳", "😄", "✨", "🎊"),
+    "humor": ("😂", "🤣", "😅", "😆"),
+    "pride": ("💪", "💯", "🔥", "🏆", "🌟"),
+    "sadness": ("😢", "😔", "😞", "🫂"),
+    "gratitude": ("🙏", "🤝", "💐", "😊"),
+    "love": ("❤️", "🥰", "🤗", "💖", "😍"),
+    "encouragement": ("👍", "🚀", "✊", "🙌", "👏"),
+}
+
 
 def _name(emoji: str) -> str:
     """"😂" -> "1f602": the code points, without the variation and joining marks."""
     return "-".join(f"{ord(ch):x}" for ch in emoji if ord(ch) not in (0xFE0F, 0x200D))
 
 
-def for_reaction(emoji: str) -> bytes | None:
-    """The sticker that says the same thing as this reaction, or None when there is none."""
-    if not emoji:
-        return None
-    path = HERE / f"{_name(emoji)}.webp"
+def _read(stem: str) -> bytes | None:
+    path = HERE / f"{stem}.webp"
     try:
         return path.read_bytes() if path.is_file() else None
     except OSError:
         log.warning("Could not read the sticker %s", path, exc_info=True)
         return None
+
+
+def for_feeling(emotion: str, avoid: str = "") -> tuple[str, bytes] | None:
+    """One of the stickers that say this feeling, and its name; None when Jeli has none for it.
+
+    Chosen at random among them, never the one just used in this chat. A feeling that always came
+    out as the same picture is what made Jeli feel like a machine: the emotion was right and the
+    answer was a reflex.
+    """
+    choices = [_name(emoji) for emoji in FOR_FEELING.get(emotion, ())]
+    choices = [stem for stem in choices if (HERE / f"{stem}.webp").is_file()]
+    if not choices:
+        return None
+    fresh = [stem for stem in choices if stem != avoid] or choices
+    stem = random.choice(fresh)
+    data = _read(stem)
+    return (stem, data) if data else None
 
 
 def known() -> list[str]:

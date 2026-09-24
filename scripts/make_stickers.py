@@ -22,7 +22,7 @@ from pathlib import Path
 from PIL import Image, ImageDraw, ImageFont
 
 sys.path.insert(0, ".")
-from app.answer.emotion import REACTIONS  # noqa: E402
+from app.answer.stickers import FOR_FEELING  # noqa: E402
 
 # WhatsApp stickers are 512×512 with a transparent background, and animated ones must stay under
 # 500 KB — measured: 12 frames of a 440 px emoji come to about 165 KB.
@@ -47,11 +47,13 @@ BOUNCE = "bounce"    # celebrations: a jump with a little squash
 PULSE = "pulse"      # warmth: a heartbeat
 SHAKE = "shake"      # laughter: a quick tilt left and right
 BREATHE = "breathe"  # gravity: a slow swell, nothing sudden
+# One motion per feeling, not per emoji: a new sticker added to a family moves like its family,
+# and nobody has to remember to describe it twice.
 MOTION = {
-    "🎉": BOUNCE, "🙌": BOUNCE, "👏": BOUNCE, "🔥": BOUNCE, "💯": BOUNCE, "💪": BOUNCE,
-    "❤️": PULSE, "🥰": PULSE, "🤗": PULSE, "👍": PULSE,
-    "😂": SHAKE, "😅": SHAKE,
-    "😢": BREATHE, "🙏": BREATHE, "😮": BREATHE,
+    "joy": BOUNCE, "pride": BOUNCE, "encouragement": BOUNCE,
+    "love": PULSE, "gratitude": PULSE,
+    "humor": SHAKE,
+    "sadness": BREATHE,
 }
 
 
@@ -125,16 +127,18 @@ def main() -> None:
     glyphs = font()
     HERE.mkdir(parents=True, exist_ok=True)
     made = 0
-    for emoji in REACTIONS:
-        ink = glyph(emoji, glyphs)
-        if not ink.getbbox():
-            print(f"  {name_of(emoji)} drew nothing - skipped")
-            continue
-        data = encode(animate(ink, MOTION.get(emoji, BREATHE)))
-        path = HERE / f"{name_of(emoji)}.webp"
-        path.write_bytes(data)
-        made += 1
-        print(f"  {path}  {len(data):,} bytes  {MOTION.get(emoji, BREATHE)}")
+    for feeling, emojis in FOR_FEELING.items():
+        for emoji in emojis:
+            ink = glyph(emoji, glyphs)
+            if not ink.getbbox():
+                print(f"  {name_of(emoji)} ({feeling}) drew nothing - skipped")
+                continue
+            moves = MOTION.get(feeling, BREATHE)
+            data = encode(animate(ink, moves))
+            path = HERE / f"{name_of(emoji)}.webp"
+            path.write_bytes(data)
+            made += 1
+            print(f"  {path}  {len(data):,} bytes  {feeling}/{moves}")
     print(f"{made} animated stickers in {HERE}")
 
 

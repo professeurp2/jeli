@@ -190,13 +190,16 @@ class LLM:
         self._resting_until[(key, model)] = self._clock() + seconds
         log.warning("Key %d model %s %s, skipped for %d s", key, model, reason, seconds)
 
-    def _disable_key(self, key: int) -> None:
-        """Mark all models on a key as invalid for 24 h (e.g. after 401 UNAUTHENTICATED)."""
+    def _disable_key(self, key: int, why: str = "refused") -> None:
+        """Mark all models on a key as invalid for 24 h: the key is refused, or its project is."""
         until = self._clock() + COOLDOWN_SECONDS["invalid"]
         for m in self.models:
             self._resting_until[(key, m)] = until
         self._invalid_until[key] = until
-        log.error("Key %d disabled for 24 h — verify it is valid and Gemini API is enabled on its project", key)
+        log.error(
+            "Key %d set aside for 24 h (%s) — %d of %d keys still usable",
+            key, why, len(self.valid_keys()), len(self._clients),
+        )
 
     def with_models(self, models: list[str]) -> "LLM":
         """The same keys on other models: rotation cursor apart, but sharing which (key, model) pairs
@@ -329,8 +332,16 @@ class LLM:
                 self._model_succeeded(model, self._clock() - started)
                 return result
             except errors.ClientError as error:
-                if error.code == 401:
-                    self._disable_key(key_idx)  # bad key: skip all models on it for 24 h
+                if error.code in (401, 403):
+                    # 401: the key itself is refused. 403: the project behind it is — "Your project
+                    # has been denied access", measured 24 September, the same suspension that took
+                    # eight projects on 22 September. Either way this key is unusable on every
+                    # model, so it is set aside and the next one is tried. Before this, a 403 was
+                    # re-raised: the dead key stayed first in the rotation, was tried again on every
+                    # single request, and the traceback reached the member instead of an answer the
+                    # next key — or the spare engine — could have given.
+                    self._disable_key(key_idx, "refused" if error.code == 401 else "its project was denied access")
+                    pairs[position:] = [pair for pair in pairs[position:] if pair[0] != key_idx]
                 elif error.code == 429 and "PerDay" in str(error):
                     # The day's quota is spent: nothing to try again before it renews.
                     self._rest(key_idx, model, "quota", seconds=seconds_until_quota_renewal(self._wall_clock()))

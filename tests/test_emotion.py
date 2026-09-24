@@ -94,6 +94,11 @@ def reactions(waha):
     return [(body["messageId"], body["reaction"]) for path, body in waha.sent if path == "/api/reaction"]
 
 
+def stickers_sent(waha):
+    """One gesture per message: a sticker goes instead of an emoji, never beside it."""
+    return [body.get("file") for path, body in waha.sent if path == "/api/sendSticker"]
+
+
 STICKER = {"url": "http://localhost:3000/api/files/default/sticker.webp", "mimetype": "image/webp"}
 
 
@@ -104,7 +109,9 @@ def sticker_event(chat_id=AWA):
 def test_jeli_looks_at_a_sticker_sent_to_it_and_reacts_to_its_feeling(waha):
     waha.emotions = Feels(Feeling(emotion="humor", strength=2, reaction="😂"))
     asyncio.run(waha.handle(parse_message(sticker_event(), "Jeli")))
-    assert waha.emotions.seen == [("", b"RIFF-webp")] and reactions(waha) == [("sticker-1", "😂")]
+    # Humour is a feeling Jeli has pictures for, so it answers with one — and then no emoji.
+    assert waha.emotions.seen == [("", b"RIFF-webp")]
+    assert len(stickers_sent(waha)) == 1 and reactions(waha) == []
     # A sticker between members, outside any conversation with Jeli: not even looked at.
     waha.emotions, waha.sent[:] = Feels(Feeling(emotion="humor", strength=3, reaction="😂")), []
     waha.in_conversation = lambda message: False
@@ -115,7 +122,8 @@ def test_jeli_looks_at_a_sticker_sent_to_it_and_reacts_to_its_feeling(waha):
 def test_a_thanks_to_jeli_gets_its_reaction_and_its_reply(waha):
     waha.emotions = Feels(Feeling(emotion="gratitude", strength=2, reaction="❤️"))
     asyncio.run(waha.handle(parse_message(message_event("Merci Jeli ❤️", chat_id=AWA, message_id="m1"), "Jeli")))
-    assert reactions(waha) == [("m1", "❤️")]
+    # Gratitude has its own stickers: one of them goes, and the message keeps its emoji-free nod.
+    assert len(stickers_sent(waha)) == 1 and reactions(waha) == []
     assert [body["text"] for path, body in waha.sent if path == "/api/sendText"] == ["Avec plaisir ! 😊"]
 
 
@@ -209,14 +217,19 @@ def test_jeli_answers_a_strong_feeling_with_one_of_the_groups_own_stickers():
 def test_jelis_own_stickers_say_the_same_thing_as_its_reactions():
     """Measured 23 Sep: Jeli had learned no sticker from the groups, so the feature could never
     fire. Its own pack is drawn from the very emojis it reacts with (scripts/make_stickers.py)."""
-    from app.answer.emotion import REACTIONS
-    from app.answer.stickers import for_reaction, known
+    from app.adapters.whatsapp_waha import STICKER_EMOTIONS
+    from app.answer.stickers import FOR_FEELING, for_feeling, known
 
-    assert len(known()) >= 10, "the pack is missing: run python -m scripts.make_stickers"
-    for emoji in REACTIONS:
-        sticker = for_reaction(emoji)
-        assert sticker and sticker[:4] == b"RIFF", emoji
-    assert for_reaction("") is None and for_reaction("🦖") is None
+    assert len(known()) >= 30, "the pack is missing: run python -m scripts.make_stickers"
+    # Several for every feeling Jeli answers in pictures: one apiece is a tic, not an answer.
+    for emotion in STICKER_EMOTIONS:
+        assert len(FOR_FEELING.get(emotion, ())) >= 4, emotion
+        chosen = for_feeling(emotion)
+        assert chosen and chosen[1][:4] == b"RIFF", emotion
+    # And over many picks it really does use them all, instead of settling on one.
+    drawn = {for_feeling("joy")[0] for _ in range(200)}
+    assert len(drawn) == len(FOR_FEELING["joy"])
+    assert for_feeling("") is None and for_feeling("boredom") is None
 
 
 def test_stickers_stay_rare_and_can_be_switched_off():
@@ -252,11 +265,10 @@ def test_jelis_stickers_move_and_fit_what_whatsapp_accepts():
 
     from PIL import Image
 
-    from app.answer.emotion import REACTIONS
-    from app.answer.stickers import for_reaction
+    from app.answer.stickers import FOR_FEELING, _name, _read
 
-    for emoji in REACTIONS:
-        data = for_reaction(emoji)
+    for emoji in {e for family in FOR_FEELING.values() for e in family}:
+        data = _read(_name(emoji))
         assert data, emoji
         assert len(data) <= 500_000, (emoji, len(data))
         image = Image.open(_io.BytesIO(data))
