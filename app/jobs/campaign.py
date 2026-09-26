@@ -131,11 +131,16 @@ async def who_to_write_to(adapter, group_id: str, already: set[str]) -> tuple[li
     return numbers, left_out
 
 
-async def send_campaign(adapter, store, voice, group_id: str, actor: str = "the team") -> str:
-    """Write to everyone still to reach, at Jeli's ordinary pace. Returns what happened, for the team.
+async def send_campaign(adapter, store, voice, group_id: str, actor: str = "the team",
+                        limit: int | None = None) -> str:
+    """Write to the next `limit` members still to reach. Returns what happened, for the team.
 
-    Runs until the hourly limit says no more, then stops and leaves the rest for the next press —
-    which is why every number reached is written down before the next one is tried.
+    The team commands each send: one press, one message — or a handful, when they say so. Nothing
+    runs on its own, because this is the only thing Jeli sends to people who did not ask, and the
+    person pressing should be able to read the first one before the second goes.
+
+    Stops early if the hourly limit says no more; every number reached is written down before the
+    next one is tried, so nothing is ever sent twice.
     """
     kept = await store.load_settings() if store else {}
     already = {a_number(n) for n in (kept.get(CAMPAIGN) or []) if a_number(n)}
@@ -150,7 +155,7 @@ async def send_campaign(adapter, store, voice, group_id: str, actor: str = "the 
         except Exception:
             log.warning("The campaign's voice note could not be made: sending the text alone", exc_info=True)
     sent = 0
-    for number in numbers:
+    for number in numbers[:limit] if limit else numbers:
         if adapter.suspended or adapter.paused:
             break
         if not await adapter.post(f"{number}@c.us", CAMPAIGN_TEXT.strip()):
@@ -167,15 +172,13 @@ async def send_campaign(adapter, store, voice, group_id: str, actor: str = "the 
             await store.save_settings({CAMPAIGN: sorted(already)}, actor)
     if store and sent:
         await store.add_audit(actor, f"Sent the vote message to {sent} member{'s' if sent > 1 else ''}")
-    log.info("Campaign: wrote to %d members, %d still to reach", sent, len(numbers) - sent)
-    return f"written to {sent}, {len(numbers) - sent} still to reach ({_in_words(left_out)})"
+    remaining = len(numbers) - sent
+    log.info("Campaign: wrote to %d members, %d still to reach", sent, remaining)
+    if not sent:
+        return "nothing was sent — Jeli is paused, or its hourly limit is reached"
+    return f"written to {sent}, {remaining} still to reach"
 
 
 def _in_words(left_out: dict) -> str:
     said = [f"{n} {why}" for why, n in left_out.items() if n]
     return "; ".join(said) if said else "nobody left out"
-
-
-def start(adapter, store, voice, group_id: str, actor: str) -> asyncio.Task:
-    """Run the campaign in the background: the dashboard must not wait on hours of sending."""
-    return asyncio.get_running_loop().create_task(send_campaign(adapter, store, voice, group_id, actor))

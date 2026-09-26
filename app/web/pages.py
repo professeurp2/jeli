@@ -2027,11 +2027,11 @@ setInterval(refresh, 4000);
 
 
 async def _campaign_card(request: Request, csrf: str) -> str:
-    """The vote message, who is still to receive it, and the one button that starts it.
+    """The vote message, which group it would go to, and the one button that starts it.
 
-    Shown before it is sent, never after the fact: a message to every member one by one is the
-    kind of thing a team should see the shape of first — how many, who is left out, and how long
-    it will take at a pace WhatsApp does not punish.
+    The group is chosen, never guessed: Jeli is in several, and the cohort is not always the first
+    of them. Each one says how many people it would reach, so the choice is made on the number and
+    not on the name.
     """
     from app.jobs.campaign import CAMPAIGN, CAMPAIGN_SPOKEN, CAMPAIGN_TEXT, who_to_write_to
 
@@ -2040,80 +2040,118 @@ async def _campaign_card(request: Request, csrf: str) -> str:
     store = getattr(state, "store", None)
     kept = await store.load_settings() if store else {}
     already = {n for n in (kept.get(CAMPAIGN) or []) if n}
-    groups = _state(request).runtime["groups"]
-    group = groups[0] if groups else ""
+    connected = whatsapp is not None and whatsapp.status == "WORKING"
+    groups = state.runtime["groups"]
+    names = await whatsapp.group_names() if connected else {}
 
-    left, why = [], {}
-    if whatsapp is not None and whatsapp.status == "WORKING" and group:
-        try:
-            left, why = await who_to_write_to(whatsapp, group, already)
-        except Exception:
-            log.warning("Could not work out who the vote message would go to", exc_info=True)
+    counted: list[tuple[str, str, int, dict]] = []
+    if connected:
+        for group in groups:
+            try:
+                left, why = await who_to_write_to(whatsapp, group, already)
+            except Exception:
+                log.warning("Could not work out who the vote message would reach in %s", group, exc_info=True)
+                left, why = [], {}
+            counted.append((group, names.get(group) or group, len(left), why))
+    counted.sort(key=lambda row: -row[2])
 
-    per_hour = max(1, int(_state(request).runtime["whatsapp_hourly_limit"]))
-    hours = (len(left) + per_hour - 1) // per_hour if left else 0
+    if not connected:
+        return ui.card(
+            "Ask the cohort for their vote",
+            ui.notice("warn", "WhatsApp is not connected, so Jeli cannot see who is in the groups yet."),
+            icon_name="send",
+            description="A private message to every member of a group — never its admins, never the team.",
+        )
+    if not counted:
+        return ui.card(
+            "Ask the cohort for their vote",
+            ui.notice("warn", "No group is chosen in the settings, so there is nobody to write to."),
+            icon_name="send",
+        )
+
+    best = counted[0]
+    options = "".join(
+        f'<option value="{esc(group)}"{" selected" if group == best[0] else ""}>'
+        f"{esc(label)} — {number} to write to</option>"
+        for group, label, number, _ in counted
+    )
+    per_hour = max(1, int(state.runtime["whatsapp_hourly_limit"]))
+    hours = (best[2] + per_hour - 1) // per_hour
     counts = (
-        f'<div class="stats">'
-        f'<div class="stat"><b>{len(left)}</b><span>still to write to</span></div>'
+        '<div class="stats">'
+        f'<div class="stat"><b>{best[2]}</b><span>still to write to</span></div>'
         f'<div class="stat"><b>{len(already)}</b><span>already written to</span></div>'
         f'<div class="stat"><b>{hours} h</b><span>at Jeli\'s usual pace</span></div>'
-        f"</div>"
+        "</div>"
     )
-    excluded = ", ".join(f"{n} {reason}" for reason, n in why.items() if n) or "nobody"
-    ready = bool(left) and whatsapp is not None and whatsapp.status == "WORKING"
-    button = (
-        ui.button(f"Write to the {len(left)} remaining", kind="primary", icon_name="send")
-        if ready
-        else ui.pill("neutral", "Nothing to send" if not left else "WhatsApp is not connected")
-    )
+    why = ", ".join(f"{n} {reason}" for reason, n in best[3].items() if n) or "nobody"
+    if best[2]:
+        button = (
+            '<label>How many now<input type="number" name="how_many" value="1" min="1" max="25" '
+            'style="width:80px"></label>'
+            + ui.button("Send", kind="primary", icon_name="send")
+        )
+        note = ""
+    else:
+        button = ui.pill("good", "Everyone has been written to")
+        note = ui.notice("info", f"Nobody is left in “{esc(best[1])}”. Left out there: {esc(why)}.")
     form = ui.form(
         "/dashboard/campaign",
         csrf,
-        counts
-        + f'<p class="hint" style="margin-top:10px">Left out: {esc(excluded)}. '
+        f'<label>Which group<select name="group" style="width:100%">{options}</select></label>'
+        + '<div style="height:12px"></div>'
+        + counts
+        + f'<p class="hint" style="margin-top:10px">Left out of the chosen group: {esc(why)}. '
         "Each member gets the message in writing and a short voice note in English, once. "
-        "Jeli sends at its ordinary pace and through the same hourly limit as everything else — "
-        "sending faster is how a WhatsApp number gets blocked, and this one carries the community. "
-        "Press again later to continue where it stopped; nobody is ever written to twice.</p>"
+        "Nothing is sent on its own: one press sends the number you ask for, and no more. "
+        "Read the first one on your phone before sending the next — two hundred private messages "
+        "in a row is how a WhatsApp number gets blocked, and this one carries the community. "
+        "Nobody is ever written to twice.</p>"
         + f'<div class="actions" style="margin-top:14px">{button}</div>',
         confirm=(
-            f"Write to {len(left)} members privately, one by one? Jeli has told the group it only "
-            "speaks when spoken to — this is the exception."
-            if ready
+            "Send the vote message privately now? Jeli has told the group it only speaks when "
+            "spoken to — this is the exception."
+            if best[2]
             else ""
         ),
     )
     return ui.card(
         "Ask the cohort for their vote",
-        form
+        note
+        + form
         + '<div style="height:14px"></div>'
-        + f'<details><summary class="muted small">Read what each member receives</summary>'
+        + "<details><summary class=\"muted small\">Read what each member receives</summary>"
         f'<pre class="pre-wrap" style="margin-top:10px">{esc(CAMPAIGN_TEXT.strip())}</pre>'
         f'<p class="hint" style="margin-top:8px">And the voice note says: “{esc(CAMPAIGN_SPOKEN)}”</p>'
         "</details>",
         icon_name="send",
-        description="A private message to every member of the cohort — never the group's admins, never the team.",
+        description="A private message to every member of a group — never its admins, never the team.",
     )
 
 
 @router.post("/dashboard/campaign")
 async def campaign_send(request: Request, member: Change) -> RedirectResponse:
-    """Start writing to the members who have not been written to yet."""
+    """Start writing to the members of the chosen group who have not been written to yet."""
     from app.jobs import campaign
 
     state = _state(request)
     whatsapp = getattr(state, "whatsapp", None)
     if whatsapp is None or whatsapp.status != "WORKING":
         return _done(request, "/dashboard/team", "WhatsApp is not connected.", "bad")
-    groups = state.runtime["groups"]
-    if not groups:
-        return _done(request, "/dashboard/team", "No group is chosen in the settings.", "bad")
-    campaign.start(whatsapp, getattr(state, "store", None), getattr(state, "voice", None), groups[0], member)
-    return _done(
-        request,
-        "/dashboard/team",
-        "Jeli has started writing, at its usual pace. Come back to this page to see how far it is.",
+    form = await request.form()
+    group = str(form.get("group") or "")
+    if group not in state.runtime["groups"]:
+        return _done(request, "/dashboard/team", "Choose one of Jeli's groups first.", "bad")
+    try:
+        how_many = max(1, min(25, int(str(form.get("how_many") or "1"))))
+    except ValueError:
+        how_many = 1
+    said = await campaign.send_campaign(
+        whatsapp, getattr(state, "store", None), getattr(state, "voice", None), group, member,
+        limit=how_many,
     )
+    await _store(request).add_audit(member, f"Vote message: {said}")
+    return _done(request, "/dashboard/team", said.capitalize() + ".")
 
 
 # --- WhatsApp -------------------------------------------------------------------------------------

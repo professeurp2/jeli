@@ -87,7 +87,7 @@ def test_nobody_is_ever_written_to_twice():
     said = asyncio.run(send_campaign(waha, store, Voice(), "g@g.us", actor="stanley"))
     written = [chat for chat, _ in waha.sent]
     assert written == ["22370000002@c.us", "22370000003@c.us"]
-    assert "already written to" in said
+    assert said == "written to 2, 0 still to reach"  # the first was skipped, not rewritten
     # And the record grows, so the next press skips these too.
     assert set(store.kept[CAMPAIGN]) == {"22370000001", "22370000002", "22370000003"}
 
@@ -113,6 +113,27 @@ def test_it_stops_at_the_hourly_limit_and_continues_on_the_next_press():
     assert len(waha.sent) == 3  # the two already written to are not written to again
 
 
+def test_the_team_commands_each_send():
+    """One press, one message. Nothing runs on its own: this is the only thing Jeli sends to
+    people who did not ask, and whoever presses should read the first before sending the second."""
+    store, waha = Store(), Waha(MEMBERS)
+    said = asyncio.run(send_campaign(waha, store, None, "g@g.us", limit=1))
+    assert len(waha.sent) == 1 and "written to 1, 2 still to reach" in said
+    asyncio.run(send_campaign(waha, store, None, "g@g.us", limit=1))
+    assert [chat for chat, _ in waha.sent] == ["22370000001@c.us", "22370000002@c.us"]
+    # And nothing in the module starts sending by itself.
+    import app.jobs.campaign as module
+
+    assert not hasattr(module, "start")
+
+
+def test_when_nothing_could_be_sent_the_team_is_told_why():
+    store, waha = Store(), Waha(MEMBERS)
+    waha.paused = True
+    said = asyncio.run(send_campaign(waha, store, None, "g@g.us", limit=1))
+    assert "nothing was sent" in said and waha.sent == []
+
+
 def test_a_paused_jeli_writes_to_nobody():
     store, waha = Store(), Waha(MEMBERS)
     waha.suspended = True
@@ -127,6 +148,9 @@ def test_the_team_sees_the_shape_of_it_before_pressing():
 
     card = inspect.getsource(pages._campaign_card)
     assert "still to write to" in card and "already written to" in card
-    assert "usual pace" in card  # how long it will take, before starting
-    assert "Left out:" in card  # and who will not receive it
+    assert "Left out of the chosen group" in card  # who will not receive it, and why
+    assert 'name="how_many"' in card  # the team says how many go now
+    assert "Nothing is sent on its own" in card
     assert "confirm=" in card  # pressing it asks once more
+    # The group is chosen, never guessed: Jeli is in several and the cohort is not always first.
+    assert 'name="group"' in card and "to write to</option>" in card
