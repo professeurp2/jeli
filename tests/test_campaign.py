@@ -199,3 +199,49 @@ def test_a_member_named_by_number_needs_no_question_at_all():
     numbers, _ = asyncio.run(who_to_write_to(waha, "g@g.us", already=set()))
     assert numbers == ["22370000002", "22370000001"]
     assert "1111" not in waha.asked  # its number was written on the tin
+
+
+def test_numbers_typed_in_by_hand_get_the_message_and_the_voice_note():
+    """Measured 26 September: WhatsApp would not name the members of the cohort's group, so the
+    team reads the numbers off their own phone instead. Same message, same voice note."""
+    from app.jobs.campaign import send_to_numbers
+
+    waha, store = Waha([]), Store()
+    said = asyncio.run(send_to_numbers(waha, store, Voice(), "+223 60 55 77 61\n22370000002"))
+    assert [chat for chat, _ in waha.sent] == ["22360557761@c.us", "22370000002@c.us"]
+    assert [chat for chat, _ in waha.voices] == ["22360557761@c.us", "22370000002@c.us"]
+    assert "written to 2" in said
+
+
+def test_a_number_written_to_by_hand_is_never_written_to_again():
+    """The two ways of sending share one list, in both directions: the group button will not write
+    to someone the team typed in, and a second press of the typed form sends nothing."""
+    from app.jobs.campaign import send_to_numbers
+
+    waha, store = Waha([{"id": "22370000002@c.us"}]), Store()
+    asyncio.run(send_to_numbers(waha, store, None, "22370000002"))
+    assert store.kept[CAMPAIGN] == ["22370000002"]
+
+    again = asyncio.run(send_to_numbers(waha, store, None, "22370000002"))
+    assert len(waha.sent) == 1 and "nothing to send" in again
+    # and the group button leaves them out too
+    numbers, why = asyncio.run(who_to_write_to(waha, "g@g.us", already=set(store.kept[CAMPAIGN])))
+    assert numbers == [] and why["already written to"] == 1
+
+
+def test_something_that_is_not_a_phone_number_is_said_so_not_sent():
+    """A pasted name or a half-copied number must not become a message to a stranger."""
+    from app.jobs.campaign import send_to_numbers
+
+    waha, store = Waha([]), Store()
+    said = asyncio.run(send_to_numbers(waha, store, None, "Brendah\n12"))
+    assert waha.sent == [] and "did not look like a phone number" in said
+
+
+def test_a_number_copied_off_a_phone_with_its_spaces_is_one_number():
+    """How a number is actually pasted: +223 60 55 77 61. Splitting on spaces made five people."""
+    from app.jobs.campaign import send_to_numbers
+
+    waha, store = Waha([]), Store()
+    asyncio.run(send_to_numbers(waha, store, None, "+223 60 55 77 61"))
+    assert [chat for chat, _ in waha.sent] == ["22360557761@c.us"]

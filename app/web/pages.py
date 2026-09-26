@@ -2124,12 +2124,27 @@ async def _campaign_card(request: Request, csrf: str, chosen: str = "") -> str:
             else ""
         ),
     )
+    by_hand = ui.form(
+        "/dashboard/campaign/numbers",
+        csrf,
+        '<p class="hint" style="margin:0 0 10px">WhatsApp does not always say which number an '
+        "account belongs to, and then Jeli cannot reach that member by itself. Read the number off "
+        "your phone and put it here — one per line, with the country code. Same message, same "
+        "voice note; Jeli writes it down, so nobody is ever written to twice.</p>"
+        '<label>Numbers<textarea name="numbers" rows="3" placeholder="+223 60 55 77 61" '
+        'style="width:100%"></textarea></label>'
+        f'<div class="actions" style="margin-top:12px">{ui.button("Send to these", icon_name="send")}</div>',
+        confirm="Send the vote message to these numbers now?",
+    )
     return ui.card(
         "Ask the cohort for their vote",
         picker
         + '<div style="height:12px"></div>'
         + note
         + form
+        + '<div style="height:18px"></div>'
+        + "<details><summary class=\"muted small\">Send to numbers you type in yourself</summary>"
+        f'<div style="margin-top:10px">{by_hand}</div></details>'
         + '<div style="height:14px"></div>'
         + "<details><summary class=\"muted small\">Read what each member receives</summary>"
         f'<pre class="pre-wrap" style="margin-top:10px">{esc(CAMPAIGN_TEXT.strip())}</pre>'
@@ -2164,6 +2179,27 @@ async def campaign_send(request: Request, member: Change) -> RedirectResponse:
     )
     await _store(request).add_audit(member, f"Vote message: {said}")
     return _done(request, "/dashboard/team", said.capitalize() + ".")
+
+
+@router.post("/dashboard/campaign/numbers")
+async def campaign_send_by_hand(request: Request, member: Change) -> RedirectResponse:
+    """Write to the numbers the team typed in, for the members WhatsApp will not name."""
+    from app.jobs import campaign
+
+    state = _state(request)
+    whatsapp = getattr(state, "whatsapp", None)
+    if whatsapp is None or whatsapp.status != "WORKING":
+        return _done(request, "/dashboard/team", "WhatsApp is not connected.", "bad")
+    form = await request.form()
+    said = await campaign.send_to_numbers(
+        whatsapp, getattr(state, "store", None), getattr(state, "voice", None),
+        str(form.get("numbers") or ""), member,
+    )
+    await _store(request).add_audit(member, f"Vote message by hand: {said}")
+    return _done(
+        request, "/dashboard/team", said.capitalize() + ".",
+        "good" if said.startswith("written") else "warn",
+    )
 
 
 # --- WhatsApp -------------------------------------------------------------------------------------

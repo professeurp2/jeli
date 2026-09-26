@@ -166,6 +166,65 @@ async def send_campaign(adapter, store, voice, group_id: str, actor: str = "the 
     if not numbers:
         return f"nobody left to write to ({_in_words(left_out)})"
 
+    sent = await _write_to(adapter, store, voice, numbers[:limit] if limit else numbers, already, actor)
+    remaining = len(numbers) - sent
+    log.info("Campaign: wrote to %d members, %d still to reach", sent, remaining)
+    if not sent:
+        return "nothing was sent — Jeli is paused, or its hourly limit is reached"
+    return f"written to {sent}, {remaining} still to reach"
+
+
+async def send_to_numbers(adapter, store, voice, given: str, actor: str = "the team") -> str:
+    """Write to the numbers the team typed in themselves, one per line. Returns what happened.
+
+    WhatsApp will not always say which number an account id belongs to, and then Jeli cannot reach
+    that member on its own. This is the way round it: the team reads the number off their phone and
+    hands it over. It is the same message, the same voice note, and the same list of people already
+    written to — so a number reached here is never written to again by the group button, and the
+    other way round.
+    """
+    kept = await store.load_settings() if store else {}
+    already = {a_number(n) for n in (kept.get(CAMPAIGN) or []) if a_number(n)}
+    team = {re.sub(r"\D", "", n) for n in getattr(adapter, "admin_numbers", []) if n}
+
+    wanted, bad, seen = [], 0, set()
+    # One per line: a number is copied off a phone with its spaces in it (+223 60 55 77 61), so
+    # only a line break, a comma or a semicolon separates two people.
+    for line in re.split(r"[\n\r,;]+", given or ""):
+        if not line.strip():
+            continue
+        number = a_number(line)
+        if not number:
+            bad += 1
+        elif number not in already and number not in team and number not in seen:
+            seen.add(number)
+            wanted.append(number)
+
+    trouble = []
+    if bad:
+        trouble.append(f"{bad} did not look like a phone number")
+    if not wanted:
+        said = "; ".join(trouble) or "they have all been written to already"
+        return f"nothing to send ({said})"
+
+    sent = await _write_to(adapter, store, voice, wanted, already, actor)
+    if not sent:
+        return "nothing was sent — Jeli is paused, or its hourly limit is reached"
+    said = f"written to {sent}"
+    if len(wanted) > sent:
+        said += f", {len(wanted) - sent} could not be sent yet"
+    if trouble:
+        said += f" ({'; '.join(trouble)})"
+    return said
+
+
+async def _write_to(adapter, store, voice, numbers: list[str], already: set[str], actor: str) -> int:
+    """Send the message and its voice note to each number in turn. Returns how many were reached.
+
+    The voice note is made once and the same audio goes to everyone: one voice note's worth of
+    quota for the whole run. Every number reached is written down before the next one is tried, so
+    a crash, a deploy or a closed browser never costs someone a second copy.
+    """
     spoken = None
     if voice is not None:
         try:
@@ -173,7 +232,7 @@ async def send_campaign(adapter, store, voice, group_id: str, actor: str = "the 
         except Exception:
             log.warning("The campaign's voice note could not be made: sending the text alone", exc_info=True)
     sent = 0
-    for number in numbers[:limit] if limit else numbers:
+    for number in numbers:
         if adapter.suspended or adapter.paused:
             break
         if not await adapter.post(f"{number}@c.us", CAMPAIGN_TEXT.strip()):
@@ -190,11 +249,7 @@ async def send_campaign(adapter, store, voice, group_id: str, actor: str = "the 
             await store.save_settings({CAMPAIGN: sorted(already)}, actor)
     if store and sent:
         await store.add_audit(actor, f"Sent the vote message to {sent} member{'s' if sent > 1 else ''}")
-    remaining = len(numbers) - sent
-    log.info("Campaign: wrote to %d members, %d still to reach", sent, remaining)
-    if not sent:
-        return "nothing was sent — Jeli is paused, or its hourly limit is reached"
-    return f"written to {sent}, {remaining} still to reach"
+    return sent
 
 
 def _in_words(left_out: dict) -> str:
