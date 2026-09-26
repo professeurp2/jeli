@@ -1382,6 +1382,11 @@ class Waha:
         self._people[chat_id] = (time.monotonic(), people)
         return people
 
+    async def people_in(self, chat_id: str) -> list[dict]:
+        """Everyone in a group, as WhatsApp lists them. Public because the vote campaign needs to
+        know who is in the cohort before writing to them one by one (app/jobs/campaign.py)."""
+        return await self._participants(chat_id)
+
     async def group_admins(self, chat_id: str) -> set[str] | None:
         """The admins of a group (number or id digits), cached for an hour; None if unknown."""
         cached = self._admins.get(chat_id)

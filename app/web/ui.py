@@ -373,6 +373,8 @@ nav { display: flex; flex-direction: column; gap: 2px; overflow-y: auto; }
 /* Stats */
 .stats { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; }
 .stat { display: flex; flex-direction: column; gap: 2px; padding: 14px 16px; border: 1px solid var(--border); border-radius: 12px; background: var(--surface-2); min-width: 0; }
+/* A message shown exactly as it will be sent: its own line breaks, never the page's. */
+.pre-wrap { white-space: pre-wrap; font: inherit; margin: 0; color: var(--ink-2); }
 .stat-label { color: var(--ink-2); font-size: 13px; }
 .stat-value { font-size: 26px; font-weight: 700; letter-spacing: -0.02em; line-height: 1.2; }
 .stat-sub { color: var(--muted); font-size: 12px; }
