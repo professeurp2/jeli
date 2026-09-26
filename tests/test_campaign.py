@@ -245,3 +245,28 @@ def test_a_number_copied_off_a_phone_with_its_spaces_is_one_number():
     waha, store = Waha([]), Store()
     asyncio.run(send_to_numbers(waha, store, None, "+223 60 55 77 61"))
     assert [chat for chat, _ in waha.sent] == ["22360557761@c.us"]
+
+
+def test_the_team_can_write_to_its_own_number_to_see_what_a_member_receives():
+    """Measured 26 September: the first real test was the tester's own number. It sent nothing and
+    said everyone had been written to already — neither true. The group button leaves the team out
+    because nobody campaigns to themselves; a number typed in by hand is a deliberate choice."""
+    from app.jobs.campaign import send_to_numbers
+
+    waha, store = Waha([], team=["22360557761"]), Store()
+    said = asyncio.run(send_to_numbers(waha, store, Voice(), "+223 60 55 77 61"))
+    assert [chat for chat, _ in waha.sent] == ["22360557761@c.us"]
+    assert "written to 1" in said
+    # and the group button still leaves the team out
+    numbers, why = asyncio.run(who_to_write_to(waha, "g@g.us", already=set()))
+    assert numbers == []
+
+
+def test_a_number_already_written_to_says_so_and_not_something_else():
+    """The wrong reason is worse than no reason: it sent the team looking for a bug in the sending."""
+    from app.jobs.campaign import send_to_numbers
+
+    waha, store = Waha([]), Store({CAMPAIGN: ["22370000002"]})
+    said = asyncio.run(send_to_numbers(waha, store, None, "22370000002\nBrendah"))
+    assert waha.sent == []
+    assert "1 already written to" in said and "1 did not look like a phone number" in said

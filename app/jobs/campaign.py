@@ -182,12 +182,16 @@ async def send_to_numbers(adapter, store, voice, given: str, actor: str = "the t
     hands it over. It is the same message, the same voice note, and the same list of people already
     written to — so a number reached here is never written to again by the group button, and the
     other way round.
+
+    A number typed here is a deliberate choice, so the team's own numbers are NOT skipped: the
+    group button leaves them out because nobody campaigns to themselves, but typing one in is how
+    the team tests what a member receives. Measured 26 September: the first test, with the tester's
+    own number, sent nothing and said everyone had been written to already — neither was true.
     """
     kept = await store.load_settings() if store else {}
     already = {a_number(n) for n in (kept.get(CAMPAIGN) or []) if a_number(n)}
-    team = {re.sub(r"\D", "", n) for n in getattr(adapter, "admin_numbers", []) if n}
 
-    wanted, bad, seen = [], 0, set()
+    wanted, bad, done, seen = [], 0, 0, set()
     # One per line: a number is copied off a phone with its spaces in it (+223 60 55 77 61), so
     # only a line break, a comma or a semicolon separates two people.
     for line in re.split(r"[\n\r,;]+", given or ""):
@@ -196,15 +200,22 @@ async def send_to_numbers(adapter, store, voice, given: str, actor: str = "the t
         number = a_number(line)
         if not number:
             bad += 1
-        elif number not in already and number not in team and number not in seen:
+        elif number in seen:
+            continue
+        elif number in already:
+            seen.add(number)
+            done += 1
+        else:
             seen.add(number)
             wanted.append(number)
 
     trouble = []
     if bad:
         trouble.append(f"{bad} did not look like a phone number")
+    if done:
+        trouble.append(f"{done} already written to")
     if not wanted:
-        said = "; ".join(trouble) or "they have all been written to already"
+        said = "; ".join(trouble) or "there was nothing in the box"
         return f"nothing to send ({said})"
 
     sent = await _write_to(adapter, store, voice, wanted, already, actor)
