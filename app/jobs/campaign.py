@@ -29,43 +29,50 @@ log = logging.getLogger(__name__)
 CAMPAIGN = "campaign.vote"
 
 CAMPAIGN_TEXT = """\
+Hello 👋
+
+It's *Jeli* — the assistant you've been talking to these past days. What follows isn't mine. \
+It's from the people who built me (*+223 60 55 77 61*), in their own words. They asked me to \
+bring it to you myself.
+
+—
+
 Dear Innovators,
 
-I'm *Jeli_bot*, one of the team members behind *Jeli Bot (+223 60 55 77 61).*
+Building Jeli took a lot out of us. We worked through sleepless nights, and when the credits ran \
+out we paid for more from our own pockets — not to win something, but because we wanted you to \
+have an assistant that actually works.
 
-Building Jeli took a lot from our team. We worked through sleepless nights and even put in our own \
-money when we ran out of credits, simply because we wanted to give you the best experience possible.
+Yes, we'd love to win. But what we want more is for Jeli to become the buddy and the assistant \
+you can genuinely rely on.
 
-Yes, we'd love to win, but more importantly, we want Jeli to become the fun buddy and intelligent \
-assistant everyone can actually rely on.
+That's why we taught it to:
 
-So we built it to:
-
-- Talk back with voice, not just text.
+- Talk back with its voice, not only in writing.
 - React with stickers and emojis.
-- Hold genuinely intelligent conversations.
-- DM you reminders for classes and deadlines.
-- Summarise missed classes and entire PDF documents.
-- Speak your language, in both text and voice.
-- Catch you up on what happened in the group while you were away.
-- And help you with whatever you need.
+- Hold a real conversation, not a scripted one.
+- Message you privately with reminders for classes and deadlines.
+- Summarise a class you missed, or a whole PDF.
+- Speak your language — in writing and out loud.
+- Catch you up on everything said while you were away.
+- And help with whatever else you need.
 
-Voting for Jeli is voting for an experience we've poured our time, energy and resources into \
-building, and a team committed to making it better every step of the way.
+A vote for Jeli is a vote for the nights that went into it, and for a team that isn't finished \
+working on it.
 
-We'd really appreciate your vote.
+We'd be truly grateful for yours.
 
-Much love, and thank you! ❤️
+Thank you ❤️
 """
 
 # What the voice note says. The written message stays whole; this is what a person will actually
 # listen to — the same words, in the time someone gives a voice note from a bot.
 CAMPAIGN_SPOKEN = (
-    "Dear innovators, this is the team behind Jeli. "
-    "Building Jeli took sleepless nights, and our own money when the credits ran out, because we "
-    "wanted to give you something you could really rely on: a buddy that talks back with its "
-    "voice, remembers your deadlines, catches you up on what you missed, and speaks your language. "
-    "We would love your vote. Thank you, truly."
+    "Hello, it's Jeli. This message isn't mine — it's from the team who built me, and they asked "
+    "me to bring it to you. They say: building Jeli took sleepless nights, and our own money when "
+    "the credits ran out, because we wanted you to have something you could really rely on. An "
+    "assistant that talks back with its voice, remembers your deadlines, catches you up on what "
+    "you missed, and speaks your language. We would be truly grateful for your vote. Thank you."
 )
 
 
