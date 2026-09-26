@@ -76,11 +76,17 @@ CAMPAIGN_SPOKEN = (
 )
 
 
-def _number_of(person: dict) -> str:
-    """The phone number of one participant as WAHA lists them, or "" when it cannot be known.
+# How many numbers are asked of WhatsApp at once when they are not already known. A group of two
+# hundred and forty is two hundred and forty questions; asked one after another that is minutes of
+# waiting, and all at once it is a burst WAHA has no reason to enjoy.
+AT_A_TIME = 8
 
-    WhatsApp gives a group's people by account id; the number is either alongside it or in what
-    WhatsApp has already told us (app/answer/citations.py). Never guessed: a wrong number here is
+
+async def _number_of(adapter, person: dict) -> str:
+    """The phone number of one participant, or "" when WhatsApp will not say.
+
+    WhatsApp gives a group's people by account id, and the number is either alongside it, already
+    known (app/answer/citations.py), or has to be asked for. Never guessed: a wrong number here is
     a stranger receiving the team's campaign.
     """
     for key in ("pn", "phoneNumber"):
@@ -88,10 +94,13 @@ def _number_of(person: dict) -> str:
         if number:
             return number
     raw = str(person.get("id") or person.get("lid") or "")
-    if raw.endswith("@c.us"):
-        return a_number(raw.split("@")[0])
-    behind = NUMBER_OF_LID.get(re.sub(r"\D", "", raw.split("@")[0].split(":")[0]))
-    return a_number(behind or "")
+    if not raw:
+        return ""
+    try:
+        return a_number(await adapter.number_behind(raw))
+    except Exception:
+        log.warning("Could not ask WhatsApp who an account id belongs to", exc_info=True)
+        return ""
 
 
 def _keys(person: dict) -> set[str]:
@@ -105,28 +114,37 @@ def _keys(person: dict) -> set[str]:
 
 
 async def who_to_write_to(adapter, group_id: str, already: set[str]) -> tuple[list[str], dict]:
-    """The numbers left to write to, and a count of everyone left out and why."""
+    """The numbers left to write to in this group, and a count of everyone left out and why."""
     people = await adapter.people_in(group_id)
     admins = await adapter.group_admins(group_id) or set()
     team = {re.sub(r"\D", "", n) for n in getattr(adapter, "admin_numbers", []) if n}
     left_out = {"group admins": 0, "the team": 0, "number unknown": 0, "already written to": 0}
-    numbers: list[str] = []
+
+    wanted = []
     for person in people:
         keys = _keys(person)
         if keys & admins:
             left_out["group admins"] += 1
-            continue
-        number = _number_of(person)
+        elif keys & team:
+            left_out["the team"] += 1
+        else:
+            wanted.append(person)
+
+    gate = asyncio.Semaphore(AT_A_TIME)
+
+    async def ask(person):
+        async with gate:
+            return await _number_of(adapter, person)
+
+    numbers: list[str] = []
+    for number in await asyncio.gather(*(ask(p) for p in wanted)):
         if not number:
             left_out["number unknown"] += 1
-            continue
-        if number in team or keys & team:
+        elif number in team:
             left_out["the team"] += 1
-            continue
-        if number in already:
+        elif number in already:
             left_out["already written to"] += 1
-            continue
-        if number not in numbers:
+        elif number not in numbers:
             numbers.append(number)
     return numbers, left_out
 

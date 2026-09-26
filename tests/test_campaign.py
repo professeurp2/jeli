@@ -5,17 +5,27 @@ the surest way to lose its number. These tests hold the rails.
 """
 
 import asyncio
+import re
 
 from app.jobs.campaign import CAMPAIGN, CAMPAIGN_SPOKEN, CAMPAIGN_TEXT, send_campaign, who_to_write_to
 
 
 class Waha:
-    def __init__(self, people, admins=(), team=(), allowed=99):
+    def __init__(self, people, admins=(), team=(), allowed=99, behind=None):
         self.people, self.admins = people, set(admins)
         self.admin_numbers = list(team)
         self.suspended = self.paused = False
         self.sent, self.voices, self.allowed = [], [], allowed
         self.spacer = self
+        # What WhatsApp answers when asked who an account id belongs to.
+        self.behind, self.asked = dict(behind or {}), []
+
+    async def number_behind(self, account_id):
+        digits = re.sub(r"\D", "", str(account_id).split("@")[0].split(":")[0])
+        self.asked.append(digits)
+        if str(account_id).endswith("@c.us"):
+            return digits
+        return self.behind.get(digits, "")
 
     async def wait_turn(self):
         return None
@@ -148,9 +158,44 @@ def test_the_team_sees_the_shape_of_it_before_pressing():
 
     card = inspect.getsource(pages._campaign_card)
     assert "still to write to" in card and "already written to" in card
-    assert "Left out of the chosen group" in card  # who will not receive it, and why
+    assert "Left out of this group" in card  # who will not receive it, and why
     assert 'name="how_many"' in card  # the team says how many go now
     assert "Nothing is sent on its own" in card
     assert "confirm=" in card  # pressing it asks once more
     # The group is chosen, never guessed: Jeli is in several and the cohort is not always first.
-    assert 'name="group"' in card and "to write to</option>" in card
+    assert 'name="group"' in card and "people</option>" in card
+    # Only the chosen group is counted: asking WhatsApp for every id of every group on each page
+    # load would be a thousand questions nobody asked for.
+    assert "Only the chosen group is counted" in card
+
+
+def test_a_number_whatsapp_has_not_volunteered_is_asked_for():
+    """Measured 26 September: the card offered nobody at all — six people in a group, six numbers
+    unknown. A group's people arrive as account ids, and the pairs WhatsApp volunteers at startup
+    do not cover them. WAHA answers for one id at a time, so Jeli asks."""
+    waha = Waha([{"id": "77770001@lid"}, {"id": "77770002@lid"}],
+                behind={"77770001": "22370000009"})
+    numbers, why = asyncio.run(who_to_write_to(waha, "g@g.us", already=set()))
+    assert numbers == ["22370000009"]          # the one WhatsApp could name
+    assert why["number unknown"] == 1          # and the one it could not, left alone
+    assert set(waha.asked) == {"77770001", "77770002"}
+
+
+def test_asking_is_bounded_so_a_big_group_is_neither_slow_nor_a_burst():
+    from app.jobs.campaign import AT_A_TIME
+
+    assert 1 < AT_A_TIME <= 16
+    import inspect
+
+    from app.jobs import campaign
+
+    asking = inspect.getsource(campaign.who_to_write_to)
+    assert "asyncio.Semaphore(AT_A_TIME)" in asking and "asyncio.gather" in asking
+
+
+def test_a_member_named_by_number_needs_no_question_at_all():
+    """WhatsApp often gives the number outright; that path must not cost a round trip."""
+    waha = Waha([{"id": "1111@lid", "pn": "22370000002@c.us"}, {"id": "22370000001@c.us"}])
+    numbers, _ = asyncio.run(who_to_write_to(waha, "g@g.us", already=set()))
+    assert numbers == ["22370000002", "22370000001"]
+    assert "1111" not in waha.asked  # its number was written on the tin

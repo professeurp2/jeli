@@ -1382,6 +1382,34 @@ class Waha:
         self._people[chat_id] = (time.monotonic(), people)
         return people
 
+    async def number_behind(self, account_id: str) -> str:
+        """The phone number behind one account id, asked of WhatsApp when we do not already know it.
+
+        A group's people arrive as LIDs, and `learn_numbers` only fills in the pairs WhatsApp
+        volunteers — measured 26 September, none of a group's six members could be reached because
+        of it. WAHA answers for a single id, and on the GOWS engine it queries the server for one it
+        has never seen. What it says is kept, so each id is asked about once and never again.
+        """
+        digits = re.sub(r"\D", "", (account_id or "").split("@")[0].split(":")[0])
+        if not digits:
+            return ""
+        if account_id.endswith("@c.us"):
+            return digits
+        known = NUMBER_OF_LID.get(digits)
+        if known:
+            return known
+        try:
+            response = await self._http.get(f"/api/{self.session}/lids/{digits}")
+            if not response.is_success:
+                return ""
+            body = response.json() or {}
+        except (httpx.HTTPError, ValueError):
+            return ""
+        number = re.sub(r"\D", "", str(body.get("pn") or "").split("@")[0])
+        if number:
+            NUMBER_OF_LID[digits] = number
+        return number
+
     async def people_in(self, chat_id: str) -> list[dict]:
         """Everyone in a group, as WhatsApp lists them. Public because the vote campaign needs to
         know who is in the cohort before writing to them one by one (app/jobs/campaign.py)."""
