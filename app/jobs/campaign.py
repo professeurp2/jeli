@@ -68,11 +68,13 @@ Thank you ❤️
 # What the voice note says. The written message stays whole; this is what a person will actually
 # listen to — the same words, in the time someone gives a voice note from a bot.
 CAMPAIGN_SPOKEN = (
-    "Hello, it's Jeli. This message isn't mine — it's from the team who built me, and they asked "
-    "me to bring it to you. They say: building Jeli took sleepless nights, and our own money when "
-    "the credits ran out, because we wanted you to have something you could really rely on. An "
-    "assistant that talks back with its voice, remembers your deadlines, catches you up on what "
-    "you missed, and speaks your language. We would be truly grateful for your vote. Thank you."
+    "Hey. It's Jeli. Quick one — and it isn't mine to say. It's from the team who built me, and "
+    "they asked me to bring it to you in my own voice. "
+    "They gave me their nights. When the credits ran out, they paid for more out of their own "
+    "pockets. Not to win a prize — so that you would have something that actually works. An "
+    "assistant that talks back out loud, that remembers your deadlines before you do, that catches "
+    "you up on everything you missed, and that speaks your language. "
+    "Voting takes a moment. To them, it would mean everything. Thank you."
 )
 
 
